@@ -3,7 +3,7 @@
 > Auto-generated tier list for Warhammer 40,000 units based on mathematical analysis and Monte Carlo simulations.
 
 ![Build Status](https://img.shields.io/badge/build-passing-brightgreen)
-![Edition](https://img.shields.io/badge/edition-10th-orange)
+![Edition](https://img.shields.io/badge/edition-11th-orange)
 ![License](https://img.shields.io/badge/license-MIT-blue)
 ![Units](https://img.shields.io/badge/units-500+-purple)
 
