@@ -78,6 +78,20 @@ function containsWeapon(item: BsWargear): boolean {
 }
 
 /**
+ * У одной записи может быть несколько профилей режима (Standard/Supercharge,
+ * Frag/Krak). Это не несколько оружий: модель атакует одним выбранным режимом.
+ * Для базовой оценки выбираем Standard/обычный режим, чтобы не завышать урон
+ * заряженным вариантом. Если обычного режима нет, берём первый профиль.
+ */
+function selectWeaponProfile(item: BsWargear): BsWeaponProfile | null {
+  if (item.profiles.length === 0) return null;
+  const ordinary = item.profiles.find((profile) =>
+    /standard|uncharged|normal|кредит/i.test(`${profile.name} ${profile.keywords.join(' ')}`)
+  );
+  return ordinary ?? item.profiles[0];
+}
+
+/**
  * Оружие одной записи снаряжения: её профили + вложенные записи.
  *
  * Главная тонкость — группа выбора (`kind: 'choice'`). Её записи взаимно
@@ -94,7 +108,8 @@ function containsWeapon(item: BsWargear): boolean {
  */
 function weaponsOf(item: BsWargear, ownerId: string): CombatWeapon[] {
   if (item.kind === 'roster') return [];
-  const weapons = item.profiles.map((profile) => toCombatWeapon(profile, ownerId));
+  const selected = selectWeaponProfile(item);
+  const weapons = selected === null ? [] : [toCombatWeapon(selected, ownerId)];
 
   if (item.kind !== 'choice') {
     for (const child of item.nested) {
@@ -169,8 +184,31 @@ function allocateVariants(
 ): Map<string, number> {
   const counts = new Map<string, number>();
   if (size === 'min') {
+    // У группы может быть min=5, а у каждого варианта min=0 (например,
+    // Deathwatch Veterans). Сначала берём явные минимумы, затем добираем
+    // оставшиеся модели до group.min в порядке вариантов.
     for (const variant of variants) {
       if (variant.min > 0) counts.set(variant.id, variant.min);
+    }
+    let remaining = 0;
+    const explicitTotal = [...counts.values()].reduce((sum, value) => sum + value, 0);
+    // Если варианты имеют явные минимумы, они уже описывают минимальный
+    // состав (например Boyz: 6 Boy + 1 Nob, хотя группа называется 9-18).
+    // Добирать до group.min в таком случае нельзя. Для наборов вроде
+    // Deathwatch Veterans, где у всех вариантов min=0, group.min наоборот
+    // является единственным источником размера.
+    if (explicitTotal === 0) {
+      remaining = Math.max(0, group.min);
+    }
+    for (const variant of variants) {
+      if (remaining <= 0) break;
+      const current = counts.get(variant.id) ?? 0;
+      const capacity = variant.max === null ? remaining : Math.max(0, variant.max - current);
+      const take = Math.min(remaining, capacity);
+      if (take > 0) {
+        counts.set(variant.id, current + take);
+        remaining -= take;
+      }
     }
     return counts;
   }

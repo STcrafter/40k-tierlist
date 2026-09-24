@@ -32,6 +32,7 @@ import type {
   BsAbility,
   BsChoiceGroup,
   BsModelGroup,
+  BsModelProfile,
   BsModelVariant,
   BsWargear,
   BsWargearKind,
@@ -301,6 +302,10 @@ function addVariant(out: Map<string, BsModelVariant>, variant: BsModelVariant): 
     variant.max === null || existing.max === null
       ? null
       : Math.max(existing.max, variant.max);
+  // Одна модель может встречаться в нескольких контейнерах. Если первое
+  // вхождение не унаследовало Unit-профиль, а более глубокий контейнер его
+  // содержит, сохраняем найденный профиль вместо null.
+  if (existing.profile === null && variant.profile !== null) existing.profile = variant.profile;
 }
 
 /**
@@ -322,6 +327,7 @@ function collectVariants(
   visited: Visited,
   depth: number,
   out: Map<string, BsModelVariant>,
+  inheritedProfile: BsModelProfile | null = null,
   skipIds: Set<string> | null = null
 ): void {
   if (depth > MAX_COMPOSITION_DEPTH) return;
@@ -336,19 +342,26 @@ function collectVariants(
   }
   const inner: Visited =
     depth > 0 && node.type !== 'model' && nodeId !== null ? new Set(visited).add(nodeId) : visited;
+  // Профиль контейнера наследуют все модели внутри него. Это нормальная
+  // схема каталогов Space Marines/Agents: Unit-профиль лежит на группе, а
+  // отдельные модели переиспользуют его без собственного infoLink.
+  const nestedProfile = modelProfileOf(node, db) ?? inheritedProfile;
 
   for (const child of asArray(node.selectionEntries)) {
     if (isHidden(child)) continue;
     if (child.type === 'model') {
-      addVariant(out, buildVariant(child, selectionLimits(child), db, new Set(inner)));
+      addVariant(
+        out,
+        buildVariant(child, selectionLimits(child), db, new Set(inner), nestedProfile)
+      );
       continue;
     }
-    collectVariants(child, db, inner, depth + 1, out, skipIds);
+    collectVariants(child, db, inner, depth + 1, out, nestedProfile, skipIds);
   }
 
   for (const group of asArray(node.selectionEntryGroups)) {
     if (isHidden(group)) continue;
-    collectVariants(group, db, inner, depth + 1, out, skipIds);
+    collectVariants(group, db, inner, depth + 1, out, nestedProfile, skipIds);
   }
 
   for (const link of asArray(node.entryLinks)) {
@@ -359,17 +372,22 @@ function collectVariants(
       const limits = mergedLimits(link, target);
       addVariant(
         out,
-        buildVariant(target, { min: limits.min, max: limits.max }, db, new Set(inner))
+        buildVariant(target, { min: limits.min, max: limits.max }, db, new Set(inner), nestedProfile)
       );
       continue;
     }
-    collectVariants(target, db, inner, depth + 1, out, skipIds);
+    collectVariants(target, db, inner, depth + 1, out, nestedProfile, skipIds);
   }
 }
 
-function variantsOf(group: BsSelectionNodeRaw, db: BsDatabase, visited: Visited): BsModelVariant[] {
+function variantsOf(
+  group: BsSelectionNodeRaw,
+  db: BsDatabase,
+  visited: Visited,
+  inheritedProfile: BsModelProfile | null = null
+): BsModelVariant[] {
   const out = new Map<string, BsModelVariant>();
-  collectVariants(group, db, visited, 0, out);
+  collectVariants(group, db, visited, 0, out, inheritedProfile);
   return [...out.values()];
 }
 
@@ -383,7 +401,12 @@ export function modelGroupsOf(node: BsSelectionNodeRaw, db: BsDatabase): BsModel
 
   for (const group of asArray(node.selectionEntryGroups)) {
     if (isHidden(group)) continue;
-    const variants = variantsOf(group, db, new Set(visited));
+    const variants = variantsOf(
+      group,
+      db,
+      new Set(visited),
+      modelProfileOf(node, db) ?? modelProfileOf(group, db)
+    );
     if (variants.length === 0) continue;
 
     // В данных ограничения группы часто пустые ('1-2 Nobz' без constraints):
@@ -403,7 +426,12 @@ export function modelGroupsOf(node: BsSelectionNodeRaw, db: BsDatabase): BsModel
   // Прямые модели юнита (мимо групп). Рекурсия из корня находит и модели из
   // групп выше — их нужно исключить по id, иначе каждая модель попадёт
   // и в именованную группу, и в «прямую» (двойной учёт в размере отряда).
-  const direct = variantsOf(node, db, new Set(visited));
+  const direct = variantsOf(
+    node,
+    db,
+    new Set(visited),
+    modelProfileOf(node, db)
+  );
   const claimed = new Set(
     groups.flatMap((group) => group.variants.map((variant) => variant.id))
   );
@@ -445,7 +473,8 @@ function buildVariant(
   node: BsSelectionNodeRaw,
   limits: { min: number; max: number | null },
   db: BsDatabase,
-  visited: Visited = new Set()
+  visited: Visited = new Set(),
+  inheritedProfile: BsModelProfile | null = null
 ): BsModelVariant {
   const wargear = wargearOf(node, db, new Set(visited));
   return {
@@ -453,7 +482,10 @@ function buildVariant(
     name: String(node.name ?? ''),
     min: limits.min,
     max: limits.max,
-    profile: modelProfileOf(node, db),
+    // В каталогах Astartes Unit-профиль часто лежит не на модели, а на
+    // контейнере/самом даташите: модели наследуют его через вложенность.
+    // Сначала ищем собственный профиль модели, затем наследуемый.
+    profile: modelProfileOf(node, db) ?? inheritedProfile,
     defaultWargear: wargear.filter((item) => item.min >= 1),
     optionalWargear: wargear.filter((item) => item.min === 0),
     choiceGroups: wargear.filter((item) => item.kind === 'choice').map(asChoiceGroup),

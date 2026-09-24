@@ -113,11 +113,46 @@ describe('пригодность к бою', () => {
     }
   });
 
-  it('вариант без профиля модели пропускается, а не ломает адаптер', () => {
-    // У Necron Warriors в базе BSData у вариантов нет профиля Unit (T/W),
-    // поэтому боеспособных моделей не получается — это ожидаемо и тихо.
+  it('один профиль оружия выбирается, а не превращается в два ствола', () => {
+    const hellblaster = adaptUnit(find('Hellblaster Squad'), { size: 'min' });
+    const oneModel = hellblaster.unit.models.find((model) => /Hellblaster Sergeant/.test(model.name));
+    expect(oneModel).toBeDefined();
+    expect(
+      oneModel?.weapons.filter((weapon) => /Plasma Incinerator/i.test(weapon.name)).length
+    ).toBe(1);
+    expect(oneModel?.weapons.some((weapon) => /Standard/i.test(weapon.name))).toBe(true);
+    expect(oneModel?.weapons.some((weapon) => /Supercharge/i.test(weapon.name))).toBe(false);
+  });
+
+  it('группа с min=5 и вариантами min=0 всё равно собирает отряд', () => {
+    const veterans = adaptUnit(find('Deathwatch Veterans'), { size: 'min' });
+    expect(veterans.unit.models.length).toBeGreaterThanOrEqual(5);
+    expect(veterans.unit.models.every((model) => model.weapons.length > 0)).toBe(true);
+  });
+
+  it('модель без собственного Unit-профиля наследует профиль контейнера', () => {
+    // В каталогах Space Marines/Agents of the Imperium профиль лежит на
+    // родительском юните, а отдельные модели не дублируют его infoLink.
+    const cases = [
+      { name: 'Blood Claws', toughness: 4 },
+      { name: 'Death Company Intercessors', toughness: 4 },
+      { name: 'Grey Knights Terminator Squad', toughness: 5 },
+    ];
+    for (const { name, toughness } of cases) {
+      const adapted = adaptUnit(find(name), { size: 'min' });
+      expect(adapted.unit.models.length, name).toBeGreaterThan(0);
+      for (const model of adapted.unit.models) {
+        expect(model.toughness, `${name}/${model.name}`).toBe(toughness);
+        expect(model.wounds, `${name}/${model.name}`).toBeGreaterThan(0);
+      }
+    }
+  });
+
+  it('наследование профиля также чинит общие модели каталога', () => {
+    // У Necron Warriors отдельные варианты не дублируют Unit-профиль, но он
+    // есть на родительском узле. После наследования отряд снова боеспособен.
     const warriors = adaptUnit(find('Necron Warriors'), { size: 'max' });
-    expect(warriors.counts.size).toBeGreaterThan(0); // состав посчитан
-    expect(warriors.unit.models).toHaveLength(0); // моделей для боя нет
+    expect(warriors.unit.models.length).toBeGreaterThan(0);
+    expect(warriors.unit.models.every((model) => model.toughness > 0 && model.wounds > 0)).toBe(true);
   });
 });
