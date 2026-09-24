@@ -35,6 +35,17 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          # BSData — git submodule; без рекурсивного checkout тесты и сборщик
+          # данных не видят исходные даташиты.
+          submodules: recursive
+          fetch-depth: 1
+
+      - name: Verify BSData checkout
+        shell: bash
+        run: |
+          test -f 'public/BSData/wh40k-11e/Warhammer 40,000.json'
+          echo "BSData submodule is available"
 
       - name: Setup Node.js
         uses: actions/setup-node@v4

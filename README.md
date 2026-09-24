@@ -25,7 +25,20 @@
 
 - Node.js **22 или новее**;
 - npm;
-- исходные BSData в `public/BSData/wh40k-11e`.
+- исходные BSData в `public/BSData/wh40k-11e` (это git submodule).
+
+При первом клонировании репозитория BSData нужно инициализировать:
+
+```bash
+git clone --recurse-submodules https://github.com/<user>/40k-tierlist.git
+cd 40k-tierlist
+```
+
+Если репозиторий уже скачан без submodule:
+
+```bash
+git submodule update --init --recursive
+```
 
 Проверить версию:
 
