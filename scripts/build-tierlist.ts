@@ -15,6 +15,7 @@ import { dirname, resolve } from 'node:path';
 import { bsFilesFromDir } from '../src/bsdata/node-source.ts';
 import { loadBsData, parseBsDatabase } from '../src/bsdata/index.ts';
 import { adaptUnit } from '../src/combat/adapter.ts';
+import { withinCalculationBudget } from '../src/combat/budget.ts';
 import { archetypeOf } from '../src/combat/archetypes.ts';
 import { tierList, type CombatMode, type TierRow } from '../src/tier/scoring.ts';
 import type { BsDatasheet } from '../src/bsdata/types.ts';
@@ -38,7 +39,10 @@ console.log(`Даташитов: ${datasheets.length}, прогонов: ${trial
 const prepared: Array<{ datasheet: BsDatasheet; unit: CombatUnit; points: number }> = [];
 for (const datasheet of datasheets) {
   const adapted = adaptUnit(datasheet, { size: 'min' });
-  if (adapted.unit.models.length === 0 || adapted.points <= 0) continue;
+  if (
+    adapted.unit.models.length === 0 ||
+    !withinCalculationBudget(adapted.points)
+  ) continue;
   prepared.push({ datasheet, unit: adapted.unit, points: adapted.points });
 }
 console.log(`Пригодных юнитов: ${prepared.length} (${Date.now() - started} мс на адаптацию)`);

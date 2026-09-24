@@ -291,6 +291,23 @@ describe('режим боя', () => {
   });
 });
 
+  it('тирлист исключает модели дороже 2000 очков', () => {
+    const expensive = find('Manta');
+    const expensiveUnit = adaptUnit(expensive, { size: 'min' });
+    expect(expensiveUnit.points).toBeGreaterThan(2000);
+
+    const entries = ['Intercessor Squad', 'Boyz'].map((name) => {
+      const datasheet = find(name);
+      const adapted = adaptUnit(datasheet, { size: 'min' });
+      return { datasheet, unit: adapted.unit, points: adapted.points };
+    });
+    entries.push({ datasheet: expensive, unit: expensiveUnit.unit, points: expensiveUnit.points });
+
+    const rows = tierList(entries, fast);
+    expect(rows).toHaveLength(2);
+    expect(rows.some((row) => row.id === expensive.id)).toBe(false);
+  });
+
 describe('тирлист', () => {
   const names = ['Intercessor Squad', 'Boyz', 'Deff Dread', 'Leman Russ Battle Tank', 'Hormagaunts', 'Killa Kans', 'Warboss', 'Crisis Battlesuits [Legends]'];
   const entries = names

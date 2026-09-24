@@ -9,6 +9,7 @@
 
 import { damagePerRound } from '../../src/combat/perRound.ts';
 import { survivabilityAgainstUnit } from '../../src/combat/survival.ts';
+import { CALCULATION_POINTS_LIMIT, withinCalculationBudget } from '../../src/combat/budget.ts';
 import type { CombatUnit, CombatWeapon } from '../../src/combat/types.ts';
 import {
   rebuildTierlist,
@@ -215,6 +216,11 @@ function recomputeMetrics(
 }
 
 
+/** Текущая стоимость юнита с учётом правок редактора. */
+function pointsOf(unit: UnitEntry): number {
+  return (state.edited.get(unit.id) ?? unit.unit).points;
+}
+
 /** Метрики юнита: отредактированные — из кэша, иначе из собранных данных. */
 function metricsOf(unit: UnitEntry): UnitMetricsLocal {
   const override = state.overrides.get(`${unit.id}:${state.mode}`);
@@ -230,7 +236,9 @@ function metricsOf(unit: UnitEntry): UnitMetricsLocal {
 function rebuildRows(): void {
   if (!state.data) return;
   state.rows = rebuildTierlist(
-    state.data.units.map((unit) => ({ id: unit.id, raw: metricsOf(unit) }))
+    state.data.units
+      .filter((unit) => withinCalculationBudget(pointsOf(unit)))
+      .map((unit) => ({ id: unit.id, raw: metricsOf(unit) }))
   );
 }
 
@@ -239,6 +247,7 @@ function visibleUnits(): UnitEntry[] {
   if (!state.data) return [];
   const needle = state.search.trim().toLowerCase();
   const rows = state.data.units.filter((unit) => {
+    if (!withinCalculationBudget(pointsOf(unit))) return false;
     if (state.faction && unit.faction !== state.faction) return false;
     if (state.tierFilter.size > 0 && !state.tierFilter.has(state.rows.get(unit.id)?.tier ?? 'D')) {
       return false;
@@ -301,7 +310,7 @@ const MODE_LABELS: Record<CombatMode, string> = {
 /** Колонки таблицы: ключ сортировки → заголовок и форматтер. */
 const COLUMNS: Array<{ key: string; title: string; numeric: boolean; hint?: string }> = [
   { key: 'name', title: 'Юнит', numeric: false },
-  { key: 'points', title: 'Очки', numeric: true },
+  { key: 'points', title: 'Очки', numeric: true, hint: 'Максимум 2000 для расчётов' },
   { key: 'models', title: 'Мод.', numeric: true },
   { key: 'unitType', title: 'Тип', numeric: false },
   { key: 'rawMaxDamage', title: 'Урон/100', numeric: true, hint: 'Лучший слот: урон на 100 очков' },
@@ -528,7 +537,7 @@ function renderEditor(unit: UnitEntry): string {
 
   const model = profile.models[0];
   const modelFields = [
-    numberField('Очки', profile.points, 'points', 1, 10000),
+    numberField('Очки', profile.points, 'points', 1, CALCULATION_POINTS_LIMIT),
     numberField('T', model.toughness, 'models.0.toughness', 1, 20),
     numberField('W', model.wounds, 'models.0.wounds', 1, 40),
     numberField('Sv', model.save, 'models.0.save', 2, 7),

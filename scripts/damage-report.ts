@@ -18,6 +18,7 @@ import { bsFilesFromDir } from '../src/bsdata/node-source.ts';
 import { loadBsData, parseBsDatabase } from '../src/bsdata/index.ts';
 import { adaptUnit } from '../src/combat/adapter.ts';
 import { ARCHETYPES, archetypeOf } from '../src/combat/archetypes.ts';
+import { withinCalculationBudget } from '../src/combat/budget.ts';
 import { damagePerRound, damagePerRoundByType, per100Points } from '../src/combat/perRound.ts';
 import type { BsDatasheet } from '../src/bsdata/types.ts';
 import type { CombatUnit } from '../src/combat/types.ts';
@@ -47,7 +48,9 @@ const fmt = (value: number): string => value.toFixed(2).padStart(7);
 /** Адаптированный отряд: пропускаем даташиты без профиля модели. */
 function toUnit(datasheet: BsDatasheet): CombatUnit | null {
   const adapted = adaptUnit(datasheet, { size });
-  return adapted.unit.models.length > 0 ? adapted.unit : null;
+  return adapted.unit.models.length > 0 && withinCalculationBudget(adapted.points)
+    ? adapted.unit
+    : null;
 }
 
 const rows: Array<{

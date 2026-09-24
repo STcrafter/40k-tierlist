@@ -23,6 +23,7 @@ import { damagePerRound, type PerRoundOptions } from '../combat/perRound.ts';
 import { survivabilityAgainstUnit, type SurvivalOptions } from '../combat/survival.ts';
 import { archetypeOf, type ArchetypeId } from '../combat/archetypes.ts';
 import type { CombatUnit } from '../combat/types.ts';
+import { withinCalculationBudget } from '../combat/budget.ts';
 import type { BsDatasheet } from '../bsdata/types.ts';
 import { detectUtilityFlags, utilityScoreOf, type UtilityFlag } from './utility.ts';
 
@@ -295,7 +296,8 @@ export function tierList(
   entries: Array<{ datasheet: BsDatasheet; unit: CombatUnit; points: number }>,
   options: TieringOptions = {}
 ): TierRow[] {
-  const drafts: DraftRow[] = entries.map(({ datasheet, unit, points }) => ({
+  const eligibleEntries = entries.filter(({ points }) => withinCalculationBudget(points));
+  const drafts: DraftRow[] = eligibleEntries.map(({ datasheet, unit, points }) => ({
     ...rawScoreOf(datasheet, unit, points, options),
     id: datasheet.id,
     name: datasheet.name,

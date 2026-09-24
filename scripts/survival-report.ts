@@ -17,6 +17,7 @@ import { bsFilesFromDir } from '../src/bsdata/node-source.ts';
 import { loadBsData, parseBsDatabase } from '../src/bsdata/index.ts';
 import { adaptUnit } from '../src/combat/adapter.ts';
 import { archetypeById, archetypeOf } from '../src/combat/archetypes.ts';
+import { withinCalculationBudget } from '../src/combat/budget.ts';
 import { WEAPON_GROUPS, WEAPON_GROUP_NAMES, type WeaponGroupId } from '../src/combat/weapons.ts';
 import {
   survivabilityAgainstArchetype,
@@ -129,7 +130,7 @@ if (factionFlag !== null) {
   for (const datasheet of datasheets) {
     if (!datasheet.faction.toLowerCase().includes(factionFlag.toLowerCase())) continue;
     const adapted = adaptUnit(datasheet, { size: 'min' });
-    if (adapted.unit.models.length === 0) continue;
+    if (adapted.unit.models.length === 0 || !withinCalculationBudget(adapted.points)) continue;
     const type = archetypeOf(adapted.unit)?.id ?? 'unknown';
     const result = survivabilityAgainstUnit(adapted.unit, adapted.points, {
       ...options,
