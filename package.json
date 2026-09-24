@@ -1,0 +1,35 @@
+{
+  "name": "40k-tierlist",
+  "version": "0.1.0",
+  "description": "Auto-generated tier list for Warhammer 40,000 units based on mathematical analysis",
+  "type": "module",
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "build:data": "node scripts/build-tierlist.ts --out=web/public/data/tierlist.json",
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "report:wahapedia": "node scripts/parse-report.ts",
+    "report:bsdata": "node scripts/bsdata-report.ts"
+  },
+  "devDependencies": {
+    "prettier": "^3.3.3",
+    "typescript": "^5.9.3",
+    "vite": "^6.4.3",
+    "vitest": "^2.1.9"
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "keywords": [
+    "warhammer",
+    "warhammer-40k",
+    "tierlist",
+    "mathhammer",
+    "wahapedia",
+    "bsdata"
+  ],
+  "license": "MIT"
+}

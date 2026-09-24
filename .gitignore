@@ -1,1 +1,11 @@
 node_modules
+dist
+
+# Артефакты локальной проверки/сборки
+v-*.txt
+*.log
+bs.json
+parse-report.json
+audit-out.json
+audit-summary.json
+
