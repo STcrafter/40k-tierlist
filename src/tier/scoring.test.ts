@@ -346,6 +346,17 @@ describe('тирлист', () => {
     expect(attached.models.length).toBe(adapted.unit.models.length + (ancient?.unit.models.length ?? 0));
   });
 
+  it('находит поддержку без кейворда Leader/Support и сохраняет чаптерные пары', () => {
+    const definitions = leaderDefinitionsOf(datasheets);
+    const techPriest = definitions.find((leader) => leader.name === 'Tech-Priest Dominus');
+    expect(techPriest?.faction).toBe('Adeptus Mechanicus');
+    expect(techPriest?.allowedUnitIds.length).toBeGreaterThan(0);
+
+    const lysander = definitions.find((leader) => leader.name === 'Darnath Lysander');
+    expect(lysander?.faction).toBe('Imperial Fists');
+    expect(lysander?.allowedUnitIds.length).toBeGreaterThan(0);
+  });
+
   it('строка содержит нормированные величины и тир', () => {
     const rows = tierList(entries, fast);
     expect(rows).toHaveLength(entries.length);

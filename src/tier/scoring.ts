@@ -327,19 +327,19 @@ interface DraftRow extends RawScore {
  * Порядок строк — по убыванию Total (готовый вид тирлиста).
  */
 export function tierList(
-  entries: Array<{ datasheet: BsDatasheet; unit: CombatUnit; points: number; leader?: LeaderDefinition; rowId?: string }>,
+  entries: Array<{ datasheet: BsDatasheet; unit: CombatUnit; points: number; leader?: LeaderDefinition; rowId?: string; faction?: string }>,
   options: TieringOptions = {}
 ): TierRow[] {
   const eligibleEntries = entries.filter(({ datasheet, points, leader }) =>
     isEligibleForCalculations(datasheet.name, points + (leader?.points ?? 0))
   );
-  const drafts: DraftRow[] = eligibleEntries.map(({ datasheet, unit, points, leader, rowId }) => {
+  const drafts: DraftRow[] = eligibleEntries.map(({ datasheet, unit, points, leader, rowId, faction }) => {
     const totalPoints = points + (leader?.points ?? 0);
     return {
     ...rawScoreOf(datasheet, unit, totalPoints, { ...options, leader }),
     id: rowId ?? datasheet.id,
     name: leader ? `${datasheet.name} + ${leader.name}` : datasheet.name,
-    faction: datasheet.faction,
+    faction: faction ?? datasheet.faction,
     points: totalPoints,
     models: (leader ? attachLeaderToUnit(unit, leader) : unit).models.length,
     archetype: archetypeOf(unit)?.id ?? 'unknown',

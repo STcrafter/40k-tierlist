@@ -64,8 +64,17 @@ export function categoriesOf(
   }
 
   const keywords = [...names];
-  const faction = keywords.find((keyword) => keyword.startsWith('Faction: ')) ?? null;
-  return { keywords, faction: faction ? faction.slice('Faction: '.length) : null };
+  // В BSData многие ордены Space Marines имеют сразу два фракционных кейворда:
+  // 'Faction: Adeptus Astartes' и конкретный чаптер ('Faction: Space Wolves',
+  // 'Faction: Blood Angels', 'Faction: Black Templars', 'Faction: Dark Angels' и т.д.).
+  // Если есть более узкий орден, отдаём предпочтение ему, чтобы юниты орденов
+  // не растворялись в общем Adeptus Astartes.
+  const factions = keywords
+    .filter((keyword) => keyword.startsWith('Faction: '))
+    .map((keyword) => keyword.slice('Faction: '.length));
+  const chapterFaction = factions.find((f) => f !== 'Adeptus Astartes');
+  const faction = chapterFaction ?? factions[0] ?? null;
+  return { keywords, faction };
 }
 
 export interface DatasheetBuildResult {

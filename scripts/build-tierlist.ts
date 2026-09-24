@@ -51,6 +51,7 @@ for (const datasheet of datasheets) {
 console.log(`Пригодных юнитов: ${prepared.length} (${Date.now() - started} мс на адаптацию)`);
 
 const leaders = leaderDefinitionsOf(datasheets);
+if (leaders.length === 0) throw new Error('BSData: не найдено ни одного Leader/Support с допустимыми отрядами');
 
 interface AttachedPayload {
   unitId: string;
@@ -72,6 +73,21 @@ const byParadigm: Record<string, Record<string, TierRow[]>> = {};
 // Сразу сохраняем только компактные поля. Хранить 12 000 полных TierRow
 // одновременно не нужно и на практике расходовало всю heap-память процесса.
 const attachedByParadigm: Record<string, Record<string, AttachedPayload[]>> = {};
+const chapterFactions = new Set([
+  'Black Templars', 'Blood Angels', 'Dark Angels', 'Deathwatch', 'Emperor\'s Children',
+  'Imperial Fists', 'Iron Hands', 'Raven Guard', 'Salamanders', 'Space Wolves',
+  'Ultramarines', 'White Scars',
+]);
+
+/** BSData хранит общие Astartes-даташиты в каталоге Space Marines, даже когда
+ * они используются в конкретном чаптере. Поэтому для лидера чаптера такая
+ * пара валидна, но фракцию строки нужно показывать как фракцию чаптера. */
+function attachedFaction(leaderFaction: string, unitFaction: string): string | null {
+  if (leaderFaction === unitFaction) return leaderFaction;
+  if (unitFaction === 'Adeptus Astartes' && chapterFactions.has(leaderFaction)) return leaderFaction;
+  return null;
+}
+
 for (const paradigm of paradigms) {
   byParadigm[paradigm] = {};
   attachedByParadigm[paradigm] = {};
@@ -83,22 +99,17 @@ for (const paradigm of paradigms) {
   // выбирается более дешёвый вариант.
   const attachedEntries = prepared.flatMap(({ datasheet, unit, points }) => {
     const candidates = leaders
+      .filter((leader) => attachedFaction(leader.faction, datasheet.faction) !== null)
       .filter((leader) => leader.allowedUnitIds.includes(datasheet.id))
       .filter((leader) => points + leader.points <= 2000);
-    const leader = candidates.sort((a, b) => {
-      const strength = (value: typeof a): number => {
-        const bonus = value.bonuses;
-        return bonus.toughness + bonus.wounds + bonus.save + bonus.invuln +
-          bonus.leadership + bonus.objectiveControl + bonus.weaponAttacks +
-          bonus.weaponSkill + bonus.weaponStrength + bonus.weaponDamage +
-          bonus.weaponKeywords.length * 2 + bonus.rerollHitOn.length * 2 +
-          bonus.rerollWoundOn.length * 2 + bonus.rerollSaveOn.length * 2;
-      };
-      return strength(b) - strength(a) || a.points - b.points;
-    })[0];
-    return leader === undefined
-      ? []
-      : [{ datasheet, unit, points, leader, rowId: `${datasheet.id}+${leader.id}` }];
+    return candidates.map((leader) => ({
+      datasheet,
+      unit,
+      points,
+      leader,
+      rowId: `${datasheet.id}+${leader.id}`,
+      faction: attachedFaction(leader.faction, datasheet.faction) ?? datasheet.faction,
+    }));
   });
   for (const mode of modes) {
     const modeStarted = Date.now();

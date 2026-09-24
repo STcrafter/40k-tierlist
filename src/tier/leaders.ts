@@ -53,7 +53,13 @@ function numberAfter(text: string, expression: RegExp): number {
   return match ? Number(match[1]) : 0;
 }
 function clean(text: string): string {
-  return text.replace(/\*\*/g, '').replace(/\\u[0-9a-f]{4}/gi, '').replace(/\s+/g, ' ').trim();
+  return text
+    .replace(/\*\*/g, '')
+    .replace(/\^\^/g, '')
+    .replace(/[•■]/g, ' ')
+    .replace(/\\u[0-9a-f]{4}/gi, '')
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 function isAttachmentAbility(ability: BsAbility): boolean {
   return /^(leader|support)$/i.test(ability.name) && /attach|following unit|following units/i.test(ability.description);
@@ -73,10 +79,10 @@ function allowedUnitsOf(ability: BsAbility, allDatasheets: BsDatasheet[]): strin
 export function leaderDefinitionsOf(datasheets: BsDatasheet[]): LeaderDefinition[] {
   const leaders: LeaderDefinition[] = [];
   for (const datasheet of datasheets) {
-    if (!datasheet.keywords.some((keyword) => /^(leader|support)$/i.test(keyword))) continue;
+    const attachmentAbilities = datasheet.abilities.filter(isAttachmentAbility);
+    if (!datasheet.keywords.some((keyword) => /^(leader|support)$/i.test(keyword)) && attachmentAbilities.length === 0) continue;
     const adapted = adaptUnit(datasheet, { size: 'min' });
     if (adapted.unit.models.length === 0 || !isEligibleForCalculations(datasheet.name, adapted.points)) continue;
-    const attachmentAbilities = datasheet.abilities.filter(isAttachmentAbility);
     const allowedUnitIds = unique(attachmentAbilities.flatMap((ability) => allowedUnitsOf(ability, datasheets)));
     if (allowedUnitIds.length === 0) continue;
     leaders.push({
