@@ -115,6 +115,7 @@ export interface AttachedRow {
   unitId: string;
   leaderId: string | null;
   name: string;
+  faction: string;
   points: number;
   tier: Tier;
   totalScore: number;

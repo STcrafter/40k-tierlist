@@ -21,6 +21,7 @@ import {
   tierOf,
 } from './scoring.ts';
 import { detectUtilityFlags, utilityScoreOf, UTILITY_MAX } from './utility.ts';
+import { attachLeaderToUnit, leaderDefinitionsOf } from './leaders.ts';
 import type { BsDatasheet } from '../bsdata/types.ts';
 
 const { datasheets } = parseBsDatabase(loadBsData(bsFilesFromDir('public/BSData/wh40k-11e')));
@@ -331,6 +332,19 @@ describe('тирлист', () => {
       return { datasheet, unit, points };
     })
     .filter((entry) => entry.unit.models.length > 0);
+
+  it('Ancient образует сочетания с отрядами Astartes', () => {
+    const ancient = leaderDefinitionsOf(datasheets).find((leader) => leader.name === 'Ancient');
+    expect(ancient).toBeDefined();
+    const allowed = new Set(ancient?.allowedUnitIds ?? []);
+    const intercessors = find('Intercessor Squad');
+    expect(allowed.has(intercessors.id)).toBe(true);
+
+    const adapted = adaptUnit(intercessors, { size: 'min' });
+    const attached = attachLeaderToUnit(adapted.unit, ancient!);
+    expect(attached.name).toBe('Intercessor Squad + Ancient');
+    expect(attached.models.length).toBe(adapted.unit.models.length + (ancient?.unit.models.length ?? 0));
+  });
 
   it('строка содержит нормированные величины и тир', () => {
     const rows = tierList(entries, fast);

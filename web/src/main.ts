@@ -284,7 +284,7 @@ function visibleUnits(): UnitEntry[] {
 function visibleAttachedRows(): import('./model.ts').AttachedRow[] {
   const needle = state.search.trim().toLowerCase();
   return state.attachedRows.filter((row) => {
-    if (state.faction && !row.name.toLowerCase().includes(state.faction.toLowerCase())) return false;
+    if (state.faction && row.faction !== state.faction) return false;
     if (state.tierFilter.size > 0 && !state.tierFilter.has(row.tier)) return false;
     return needle === '' || row.name.toLowerCase().includes(needle);
   });
@@ -488,14 +488,18 @@ function renderTable(): string {
 
 /** Сводка по тирам для строки состояния. */
 function renderStatus(): string {
-  const units = visibleUnits();
+  const attached = state.view === 'attached';
+  const units = attached ? visibleAttachedRows() : visibleUnits();
   const counts: Record<string, number> = { S: 0, A: 0, B: 0, C: 0, D: 0 };
   for (const unit of units) {
-    const tier = state.rows.get(unit.id)?.tier;
+    const tier = attached
+      ? (unit as import('./model.ts').AttachedRow).tier
+      : state.rows.get((unit as UnitEntry).id)?.tier;
     if (tier) counts[tier] += 1;
   }
   const parts = TIERS.map((tier) => `${tier}:${counts[tier]}`).join('  ');
-  return `${MODE_LABELS[state.mode]} · ${parts} · всего ${units.length}`;
+  const section = attached ? 'Отряды с лидерами' : 'Юниты';
+  return `${section} · ${MODE_LABELS[state.mode]} · ${parts} · всего ${units.length}`;
 }
 
 
@@ -699,13 +703,14 @@ function renderAttachedTable(): string {
   const body = rows.map((row) => `<tr>
     <td><span class="tier-badge" data-tier="${row.tier}">${row.tier}</span><span class="unit-name">${row.name}</span></td>
     <td class="num">${row.points}</td>
+    <td>${row.faction}</td>
     <td class="num">${num(row.rawMaxDamage, 1)}</td>
     <td>${row.bestTargetName}</td>
     <td class="num">${num(row.effectiveSurvivability, 1)}</td>
     <td class="num">${row.utilityScore}</td>
     <td class="num">${num(row.totalScore, 1)}</td>
   </tr>`).join('');
-  return `<div class="table-wrap"><table><thead><tr><th>Отряд + лидер</th><th class="num">Очки</th><th class="num">Уничт. очки/100</th><th>Лучшая цель</th><th class="num">Живучесть</th><th class="num">Полезность</th><th class="num">TOTAL</th></tr></thead><tbody>${body}</tbody></table></div>`;
+  return `<div class="table-wrap"><table><thead><tr><th>Отряд + лидер</th><th class="num">Очки</th><th>Фракция</th><th class="num">Уничт. очки/100</th><th>Лучшая цель</th><th class="num">Живучесть</th><th class="num">Полезность</th><th class="num">TOTAL</th></tr></thead><tbody>${body}</tbody></table></div>`;
 }
 
 /** Главная функция отрисовки: панель + таблица + редактор. */

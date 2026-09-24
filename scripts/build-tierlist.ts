@@ -18,7 +18,7 @@ import { adaptUnit, loadoutVariantsOf, type LoadoutCandidate } from '../src/comb
 import { isEligibleForCalculations } from '../src/combat/budget.ts';
 import { leaderDefinitionsOf } from '../src/tier/leaders.ts';
 import { archetypeOf } from '../src/combat/archetypes.ts';
-import { tierList, rawScoreOf, type CombatMode, type RawScore, type TargetParadigm, type TierRow } from '../src/tier/scoring.ts';
+import { tierList, type CombatMode, type TargetParadigm, type TierRow } from '../src/tier/scoring.ts';
 import type { BsDatasheet } from '../src/bsdata/types.ts';
 import type { CombatUnit } from '../src/combat/types.ts';
 
@@ -50,18 +50,56 @@ for (const datasheet of datasheets) {
 }
 console.log(`Пригодных юнитов: ${prepared.length} (${Date.now() - started} мс на адаптацию)`);
 
-const byMode: Record<string, TierRow[]> = {};
 const leaders = leaderDefinitionsOf(datasheets);
+
+interface AttachedPayload {
+  unitId: string;
+  leaderId: string | null;
+  name: string;
+  faction: string;
+  points: number;
+  tier: TierRow['tier'];
+  totalScore: number;
+  rawMaxDamage: number;
+  bestTarget: string;
+  bestTargetName: string;
+  effectiveSurvivability: number;
+  utilityScore: number;
+  utilityFlags: TierRow['utilityFlags'];
+}
+
 const byParadigm: Record<string, Record<string, TierRow[]>> = {};
-const attachedByParadigm: Record<string, Record<string, TierRow[]>> = {};
+// Сразу сохраняем только компактные поля. Хранить 12 000 полных TierRow
+// одновременно не нужно и на практике расходовало всю heap-память процесса.
+const attachedByParadigm: Record<string, Record<string, AttachedPayload[]>> = {};
 for (const paradigm of paradigms) {
   byParadigm[paradigm] = {};
   attachedByParadigm[paradigm] = {};
-  const attachedEntries = prepared.flatMap(({ datasheet, unit, points }) =>
-    leaders
+  // В BSData один отряд может принимать до 29 лидеров. Для отдельной вкладки
+  // оставляем одного наиболее сильного кандидата на каждый отряд: полный
+  // декартов набор даёт 1000 пар и 12 000 дорогих Монте-Карло прогонов, из-за
+  // чего процесс сборки данных нестабилен. Сила лидера оценивается по сумме
+  // числовых бонусов, reroll-правил и оружейных кейвордов; при равенстве
+  // выбирается более дешёвый вариант.
+  const attachedEntries = prepared.flatMap(({ datasheet, unit, points }) => {
+    const candidates = leaders
       .filter((leader) => leader.allowedUnitIds.includes(datasheet.id))
-      .map((leader) => ({ datasheet, unit, points, leader, rowId: `${datasheet.id}+${leader.id}` }))
-  );
+      .filter((leader) => points + leader.points <= 2000);
+    const leader = candidates.sort((a, b) => {
+      const strength = (value: typeof a): number => {
+        const bonus = value.bonuses;
+        return bonus.toughness + bonus.wounds + bonus.save + bonus.invuln +
+          bonus.leadership + bonus.objectiveControl + bonus.weaponAttacks +
+          bonus.weaponSkill + bonus.weaponStrength + bonus.weaponDamage +
+          bonus.weaponKeywords.length * 2 + bonus.rerollHitOn.length * 2 +
+          bonus.rerollWoundOn.length * 2 + bonus.rerollSaveOn.length * 2;
+      };
+      return strength(b) - strength(a) || a.points - b.points;
+    })[0];
+    return leader === undefined
+      ? []
+      : [{ datasheet, unit, points, leader, rowId: `${datasheet.id}+${leader.id}` }];
+  });
   for (const mode of modes) {
     const modeStarted = Date.now();
     byParadigm[paradigm][mode] = tierList(prepared, {
@@ -70,14 +108,28 @@ for (const paradigm of paradigms) {
       combat: { trials, distance },
       survival: { trials, maxRounds: 15, distance },
     });
-    if (paradigm === 'all') byMode[mode] = byParadigm[paradigm][mode];
-    attachedByParadigm[paradigm][mode] = tierList(attachedEntries, {
+    const attachedRows = tierList(attachedEntries, {
       mode,
       targetParadigm: paradigm,
-      combat: { trials: Math.min(trials, 8), distance },
-      survival: { trials: Math.min(trials, 6), maxRounds: 10, distance },
+      combat: { trials: Math.min(trials, 4), distance },
+      survival: { trials: Math.min(trials, 3), maxRounds: 8, distance },
     });
-    console.log(`Парадигма ${paradigm}/${mode}: ${byParadigm[paradigm][mode].length} юнитов, ${attachedByParadigm[paradigm][mode].length} с лидерами (${Date.now() - modeStarted} мс)`);
+    attachedByParadigm[paradigm][mode] = attachedRows.map((row) => ({
+      unitId: row.id.split('+')[0],
+      leaderId: row.id.split('+')[1] ?? null,
+      name: row.name,
+      faction: row.faction,
+      points: row.points,
+      tier: row.tier,
+      totalScore: row.totalScore,
+      rawMaxDamage: row.rawMaxDamage,
+      bestTarget: row.bestTarget,
+      bestTargetName: row.bestTargetName,
+      effectiveSurvivability: row.effectiveSurvivability,
+      utilityScore: row.utilityScore,
+      utilityFlags: row.utilityFlags,
+    }));
+    console.log(`Парадигма ${paradigm}/${mode}: ${byParadigm[paradigm][mode].length} юнитов, ${attachedRows.length} с лидерами (${Date.now() - modeStarted} мс)`);
   }
 }
 
@@ -122,23 +174,7 @@ const payload = {
   modes,
   paradigms,
   attached: Object.fromEntries(
-    paradigms.map((paradigm) => [
-      paradigm,
-      Object.fromEntries(modes.map((mode) => [mode, attachedByParadigm[paradigm][mode].map((row) => ({
-        unitId: row.id.split('+')[0],
-        leaderId: row.id.split('+')[1] ?? null,
-        name: row.name,
-        points: row.points,
-        tier: row.tier,
-        totalScore: row.totalScore,
-        rawMaxDamage: row.rawMaxDamage,
-        bestTarget: row.bestTarget,
-        bestTargetName: row.bestTargetName,
-        effectiveSurvivability: row.effectiveSurvivability,
-        utilityScore: row.utilityScore,
-        utilityFlags: row.utilityFlags,
-      }))]))
-    ])
+    paradigms.map((paradigm) => [paradigm, attachedByParadigm[paradigm]])
   ),
   leaders: leaders.map((leader) => ({
     id: leader.id,
@@ -153,7 +189,7 @@ const payload = {
   })),
   factions: [...new Set(prepared.map((item) => item.datasheet.faction))].sort(),
   units: prepared.map(({ datasheet, unit, points, loadouts }) => {
-    const base = byMode.combined.find((row) => row.id === datasheet.id);
+    const base = byParadigm.all.combined.find((row) => row.id === datasheet.id);
     const metricsFor = (paradigm: TargetParadigm, mode: CombatMode) => {
       const row = byParadigm[paradigm][mode].find((candidate) => candidate.id === datasheet.id);
       return {
@@ -183,15 +219,14 @@ const payload = {
     const metricsByParadigm = Object.fromEntries(
       paradigms.map((paradigm) => [paradigm, Object.fromEntries(modes.map((mode) => [mode, metricsFor(paradigm, mode)]))])
     ) as Record<TargetParadigm, Record<CombatMode, ReturnType<typeof metricsFor>>>;
-    const loadoutMetrics = loadouts.map((loadout) => {
-      const raw: RawScore = rawScoreOf(datasheet, loadout.unit, loadout.points, {
-        mode: 'combined',
-        targetParadigm: 'all',
-        combat: { trials: Math.min(trials, 8), distance },
-        survival: { trials: Math.min(trials, 6), maxRounds: 6, distance },
-      });
-      return { id: loadout.id, name: loadout.name, points: loadout.points, rawMaxDamage: raw.rawMaxDamage, bestTarget: raw.bestTarget, bestTargetName: raw.bestTargetName, unit: unitProfileOf(loadout.unit, loadout.points) };
-    });
+    // Профили loadout остаются в JSON, а числовые метрики пересчитываются в
+    // браузере при выборе варианта. Считать их здесь для тысяч юнитов не нужно.
+    const loadoutMetrics = loadouts.map((loadout) => ({
+      id: loadout.id,
+      name: loadout.name,
+      points: loadout.points,
+      unit: unitProfileOf(loadout.unit, loadout.points),
+    }));
     return {
       id: datasheet.id,
       name: datasheet.name,
@@ -204,18 +239,7 @@ const payload = {
       unit: unitProfileOf(unit, points),
       metrics: metricsByParadigm.all as unknown as Record<CombatMode, ReturnType<typeof metricsFor>>,
       metricsByParadigm,
-      loadouts: loadoutMetrics.map((loadout) => ({
-        id: loadout.id,
-        name: loadout.name,
-        points: loadout.points,
-        unit: loadout.unit,
-        metrics: {
-          ...metricsFor('all', 'combined'),
-          rawMaxDamage: loadout.rawMaxDamage,
-          bestTarget: loadout.bestTarget,
-          bestTargetName: loadout.bestTargetName,
-        },
-      })),
+      loadouts: loadoutMetrics,
     };
   }),
 };
