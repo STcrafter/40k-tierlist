@@ -308,7 +308,15 @@ describe('выбор оружия и стратегии', () => {
     expect(meleeWeaponsOf(fighter, 'primary').map((w) => w.id)).toEqual(['sword', 'extra']);
   });
 
-  it('фаза melee считает только рукопашное оружие', () => {
+  it('лидерские reroll попаданий увеличивают шанс попадания', () => {
+    const attacker = gunner(weapon({ skill: 5, attacks: { count: 1, sides: 1, plus: 0 } }));
+    const defender = unit([model({ toughness: 4, wounds: 99, save: 6 })]);
+    // Первый бросок — промах 1, reroll — попадание 6.
+    const result = simulateTrial(attacker, defender, { rng: sequence([0, 1]), rerollHitOn: [1] });
+    expect(result.weapons[0].hits).toBe(1);
+  });
+
+  it('фазa melee считает только рукопашное оружие', () => {
     const attacker = unit([
       model({
         weapons: [weapon({ id: 'gun', name: 'Gun' }), weapon({ id: 'blade', name: 'Blade', kind: 'melee' })],

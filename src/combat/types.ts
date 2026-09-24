@@ -101,6 +101,10 @@ export interface CombatContext {
   cover: boolean;
   /** Атакующий в зоне боя: стрелять могут только [PISTOL]/[CLOSE-QUARTERS]. */
   engaged: boolean;
+  /** Дополнительные reroll-пороги от leader/support. */
+  rerollHitOn?: number[];
+  rerollWoundOn?: number[];
+  rerollSaveOn?: number[];
   rng: Rng;
 }
 

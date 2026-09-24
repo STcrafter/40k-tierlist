@@ -66,6 +66,9 @@ export interface CombatOptions {
   /** Свои правила: extendRules(standardRules(), ...). */
   rules?: CombatRules;
   rng?: Rng;
+  rerollHitOn?: number[];
+  rerollWoundOn?: number[];
+  rerollSaveOn?: number[];
   melee?: MeleeStrategy;
   closeQuarters?: CloseQuartersStrategy;
   allocation?: AllocationStrategy;
@@ -80,6 +83,9 @@ export interface ResolvedCombatOptions {
   indirect: boolean;
   cover: boolean;
   engaged: boolean;
+  rerollHitOn: number[];
+  rerollWoundOn: number[];
+  rerollSaveOn: number[];
   rules: CombatRules;
   rng: Rng;
   melee: MeleeStrategy;
@@ -97,6 +103,9 @@ export function resolveCombatOptions(options: CombatOptions = {}): ResolvedComba
     indirect: options.indirect ?? false,
     cover: options.cover ?? false,
     engaged: options.engaged ?? false,
+    rerollHitOn: options.rerollHitOn ?? [],
+    rerollWoundOn: options.rerollWoundOn ?? [],
+    rerollSaveOn: options.rerollSaveOn ?? [],
     rules: options.rules ?? standardRules(),
     rng: options.rng ?? mulberry32(0x40_4b),
     // Смешанный режим считает рукопашную фалу по правилам: одно основное
@@ -315,6 +324,9 @@ export function resolveWeapon(
   rules: CombatRules,
 ): void {
   const { weapon, defender, rng } = ctx;
+  const rerollHitOn = ctx.rerollHitOn ?? [];
+  const rerollWoundOn = ctx.rerollWoundOn ?? [];
+  const rerollSaveOn = ctx.rerollSaveOn ?? [];
   usage.models += 1;
 
   // 1. Дайсы атак (Rapid Fire, Blast и т.п. добавляются сверху).
@@ -338,8 +350,9 @@ export function resolveWeapon(
     const target = clampTarget(hitTarget);
     for (let i = 0; i < attacks; i += 1) {
       const roll = rollDie(6, rng);
-      if (roll >= target) hits += 1;
-      if (roll === 6) critHits += 1;
+      const hitRoll = roll < target && rerollHitOn.includes(roll) ? rollDie(6, rng) : roll;
+      if (hitRoll >= target) hits += 1;
+      if (hitRoll === 6) critHits += 1;
     }
   }
   for (const hook of rules.extraHits) hits += hook(ctx, critHits);
@@ -373,7 +386,7 @@ export function resolveWeapon(
       if (woundTarget === null) continue;
       const targetClamped = clampTarget(woundTarget);
       woundRoll = rollDie(6, rng);
-      if (woundRoll < targetClamped && rerollWounds) woundRoll = rollDie(6, rng);
+      if (woundRoll < targetClamped && (rerollWounds || rerollWoundOn.includes(woundRoll))) woundRoll = rollDie(6, rng);
       if (woundRoll < targetClamped) continue;
     }
     usage.wounds += 1;
@@ -400,7 +413,10 @@ export function resolveWeapon(
     const saveTarget = saveTargetOf(hitCtx, rules, target);
     if (saveTarget !== null) {
       const saveRoll = rollDie(6, rng);
-      const passed = saveRoll === 6 || (saveRoll !== 1 && saveRoll >= clampTarget(saveTarget));
+      const passedRoll = saveRoll < clampTarget(saveTarget) && rerollSaveOn.includes(saveRoll)
+        ? rollDie(6, rng)
+        : saveRoll;
+      const passed = passedRoll === 6 || (passedRoll !== 1 && passedRoll >= clampTarget(saveTarget));
       if (passed) continue;
     }
     usage.unsaved += 1;
@@ -482,6 +498,9 @@ export function simulateRound(
         const ctx: CombatContext = {
           phase,
           distance: opts.distance,
+          rerollHitOn: opts.rerollHitOn,
+          rerollWoundOn: opts.rerollWoundOn,
+          rerollSaveOn: opts.rerollSaveOn,
           weapon,
           attacker,
           attackerModel: model,

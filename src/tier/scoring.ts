@@ -26,6 +26,7 @@ import type { CombatUnit } from '../combat/types.ts';
 import { isEligibleForCalculations } from '../combat/budget.ts';
 import type { BsDatasheet } from '../bsdata/types.ts';
 import { detectUtilityFlags, utilityScoreOf, type UtilityFlag } from './utility.ts';
+import { attachLeaderToUnit, leaderCombatOptionsOf, type LeaderDefinition } from './leaders.ts';
 
 /** Тип отряда по тому, что он умеет лучше. */
 export type UnitType = 'Ranged' | 'Melee';
@@ -159,6 +160,8 @@ export interface TieringOptions {
   targetParadigm?: TargetParadigm;
   /** Общие настройки Монте-Карло для выживаемости. */
   survival?: SurvivalOptions;
+  /** Присоединённый leader/support для расчёта отдельной строки. */
+  leader?: LeaderDefinition;
   /** Дополнительный признак «флай/депт-страйк» (снаружи — по данным). */
   hasFlyOrDeepStrike?: (datasheet: BsDatasheet) => boolean;
 }
@@ -187,13 +190,15 @@ export function rawScoreOf(
   points: number,
   options: TieringOptions = {}
 ): RawScore {
-  const combat = { ...(options.combat ?? {}) };
+  const baseUnit = options.leader ? attachLeaderToUnit(unit, options.leader) : unit;
+  const leaderOptions = options.leader ? leaderCombatOptionsOf(options.leader) : {};
+  const combat = { ...(options.combat ?? {}), ...leaderOptions };
   const mode = options.mode ?? 'combined';
   const targets = options.targetParadigm === undefined && options.targets === undefined
     ? [...INFANTRY_TARGETS, ...ARMOR_TARGETS]
     : options.targets ?? targetsForParadigm(options.targetParadigm);
-  const survival = { ...(options.survival ?? {}), phase: phaseOf(mode) };
-  const damage = damagePerRound(unit, { ...combat, targets });
+  const survival = { ...(options.survival ?? {}), phase: phaseOf(mode), ...leaderOptions };
+  const damage = damagePerRound(baseUnit, { ...combat, targets });
   const scale = points > 0 ? 100 / points : 0;
   // Режим боя выбирает, из какой ветки разбивки берём цифры: в «ranged»
   // рукопашная часть просто не участвует в оценке.
@@ -227,7 +232,7 @@ export function rawScoreOf(
 
   // Выживаемость: в survival «пережитый урон на 100 очков» — чем меньше, тем
   // лучше; для складывания с уроном переворачиваем в 100 / taken.
-  const surv = survivabilityAgainstUnit(unit, points, survival);
+  const surv = survivabilityAgainstUnit(baseUnit, points, survival);
   const takenPer100 = surv.overall.takenPer100Points.mean;
   const baseSurvivability = 100 / (1 + takenPer100);
 
@@ -322,21 +327,24 @@ interface DraftRow extends RawScore {
  * Порядок строк — по убыванию Total (готовый вид тирлиста).
  */
 export function tierList(
-  entries: Array<{ datasheet: BsDatasheet; unit: CombatUnit; points: number }>,
+  entries: Array<{ datasheet: BsDatasheet; unit: CombatUnit; points: number; leader?: LeaderDefinition; rowId?: string }>,
   options: TieringOptions = {}
 ): TierRow[] {
-  const eligibleEntries = entries.filter(({ datasheet, points }) =>
-    isEligibleForCalculations(datasheet.name, points)
+  const eligibleEntries = entries.filter(({ datasheet, points, leader }) =>
+    isEligibleForCalculations(datasheet.name, points + (leader?.points ?? 0))
   );
-  const drafts: DraftRow[] = eligibleEntries.map(({ datasheet, unit, points }) => ({
-    ...rawScoreOf(datasheet, unit, points, options),
-    id: datasheet.id,
-    name: datasheet.name,
+  const drafts: DraftRow[] = eligibleEntries.map(({ datasheet, unit, points, leader, rowId }) => {
+    const totalPoints = points + (leader?.points ?? 0);
+    return {
+    ...rawScoreOf(datasheet, unit, totalPoints, { ...options, leader }),
+    id: rowId ?? datasheet.id,
+    name: leader ? `${datasheet.name} + ${leader.name}` : datasheet.name,
     faction: datasheet.faction,
-    points,
-    models: unit.models.length,
+    points: totalPoints,
+    models: (leader ? attachLeaderToUnit(unit, leader) : unit).models.length,
     archetype: archetypeOf(unit)?.id ?? 'unknown',
-  }));
+    };
+  });
 
   const normDamage = minMaxNormalize(drafts.map((row) => row.effectiveDamage));
   const normSurvivability = minMaxNormalize(drafts.map((row) => row.effectiveSurvivability));

@@ -99,6 +99,33 @@ export interface UnitEntry {
   loadouts?: Array<{ id: string; name: string; points: number; unit: UnitProfile; metrics?: UnitMetrics }>;
 }
 
+export interface LeaderSummary {
+  id: string;
+  name: string;
+  faction: string;
+  points: number;
+  keywords: string[];
+  allowedUnitIds: string[];
+  bonuses: import('../../src/tier/leaders.ts').LeaderBonuses;
+  abilities: Array<{ name: string; description: string }>;
+  unit: UnitProfile;
+}
+
+export interface AttachedRow {
+  unitId: string;
+  leaderId: string | null;
+  name: string;
+  points: number;
+  tier: Tier;
+  totalScore: number;
+  rawMaxDamage: number;
+  bestTarget: string;
+  bestTargetName: string;
+  effectiveSurvivability: number;
+  utilityScore: number;
+  utilityFlags: Array<{ id: string; points: number; reason: string }>;
+}
+
 export interface TierlistData {
   generatedAt: string;
   trials: number;
@@ -107,6 +134,8 @@ export interface TierlistData {
   paradigms: TargetParadigm[];
   factions: string[];
   units: UnitEntry[];
+  leaders: LeaderSummary[];
+  attached: Record<TargetParadigm, Record<CombatMode, AttachedRow[]>>;
 }
 
 /** Минимальный набор для пересчёта нормировки и тиров на клиенте. */

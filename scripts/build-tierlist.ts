@@ -16,6 +16,7 @@ import { bsFilesFromDir } from '../src/bsdata/node-source.ts';
 import { loadBsData, parseBsDatabase } from '../src/bsdata/index.ts';
 import { adaptUnit, loadoutVariantsOf, type LoadoutCandidate } from '../src/combat/adapter.ts';
 import { isEligibleForCalculations } from '../src/combat/budget.ts';
+import { leaderDefinitionsOf } from '../src/tier/leaders.ts';
 import { archetypeOf } from '../src/combat/archetypes.ts';
 import { tierList, rawScoreOf, type CombatMode, type RawScore, type TargetParadigm, type TierRow } from '../src/tier/scoring.ts';
 import type { BsDatasheet } from '../src/bsdata/types.ts';
@@ -50,9 +51,17 @@ for (const datasheet of datasheets) {
 console.log(`Пригодных юнитов: ${prepared.length} (${Date.now() - started} мс на адаптацию)`);
 
 const byMode: Record<string, TierRow[]> = {};
+const leaders = leaderDefinitionsOf(datasheets);
 const byParadigm: Record<string, Record<string, TierRow[]>> = {};
+const attachedByParadigm: Record<string, Record<string, TierRow[]>> = {};
 for (const paradigm of paradigms) {
   byParadigm[paradigm] = {};
+  attachedByParadigm[paradigm] = {};
+  const attachedEntries = prepared.flatMap(({ datasheet, unit, points }) =>
+    leaders
+      .filter((leader) => leader.allowedUnitIds.includes(datasheet.id))
+      .map((leader) => ({ datasheet, unit, points, leader, rowId: `${datasheet.id}+${leader.id}` }))
+  );
   for (const mode of modes) {
     const modeStarted = Date.now();
     byParadigm[paradigm][mode] = tierList(prepared, {
@@ -62,7 +71,13 @@ for (const paradigm of paradigms) {
       survival: { trials, maxRounds: 15, distance },
     });
     if (paradigm === 'all') byMode[mode] = byParadigm[paradigm][mode];
-    console.log(`Парадигма ${paradigm}/${mode}: ${byParadigm[paradigm][mode].length} юнитов (${Date.now() - modeStarted} мс)`);
+    attachedByParadigm[paradigm][mode] = tierList(attachedEntries, {
+      mode,
+      targetParadigm: paradigm,
+      combat: { trials: Math.min(trials, 8), distance },
+      survival: { trials: Math.min(trials, 6), maxRounds: 10, distance },
+    });
+    console.log(`Парадигма ${paradigm}/${mode}: ${byParadigm[paradigm][mode].length} юнитов, ${attachedByParadigm[paradigm][mode].length} с лидерами (${Date.now() - modeStarted} мс)`);
   }
 }
 
@@ -106,6 +121,36 @@ const payload = {
   distance,
   modes,
   paradigms,
+  attached: Object.fromEntries(
+    paradigms.map((paradigm) => [
+      paradigm,
+      Object.fromEntries(modes.map((mode) => [mode, attachedByParadigm[paradigm][mode].map((row) => ({
+        unitId: row.id.split('+')[0],
+        leaderId: row.id.split('+')[1] ?? null,
+        name: row.name,
+        points: row.points,
+        tier: row.tier,
+        totalScore: row.totalScore,
+        rawMaxDamage: row.rawMaxDamage,
+        bestTarget: row.bestTarget,
+        bestTargetName: row.bestTargetName,
+        effectiveSurvivability: row.effectiveSurvivability,
+        utilityScore: row.utilityScore,
+        utilityFlags: row.utilityFlags,
+      }))]))
+    ])
+  ),
+  leaders: leaders.map((leader) => ({
+    id: leader.id,
+    name: leader.name,
+    faction: leader.faction,
+    points: leader.points,
+    keywords: leader.keywords,
+    allowedUnitIds: leader.allowedUnitIds,
+    bonuses: leader.bonuses,
+    abilities: leader.abilities,
+    unit: unitProfileOf(leader.unit, leader.points),
+  })),
   factions: [...new Set(prepared.map((item) => item.datasheet.faction))].sort(),
   units: prepared.map(({ datasheet, unit, points, loadouts }) => {
     const base = byMode.combined.find((row) => row.id === datasheet.id);
