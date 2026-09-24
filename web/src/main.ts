@@ -169,7 +169,7 @@ function recomputeMetrics(
     current[1] > best[1] ? current : best
   );
 
-  // Живучесть — в обратную сторону: 100 / пережитый урон на 100 очков.
+  // Живучесть — ограниченная стоимостная шкала: 100 / (1 + takenPer100).
   const surv = survivabilityAgainstUnit(combatUnit, points, {
     trials: 16,
     maxRounds: 12,
@@ -177,7 +177,7 @@ function recomputeMetrics(
     phase,
   });
   const takenPer100 = surv.overall.takenPer100Points.mean;
-  const baseSurvivability = takenPer100 > 0 ? 100 / takenPer100 : 100;
+  const baseSurvivability = 100 / (1 + takenPer100);
 
   const rangedPer100 = damage.ranged.overall.mean * scale;
   const meleePer100 = damage.melee.overall.mean * scale;

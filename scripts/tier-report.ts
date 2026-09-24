@@ -13,7 +13,7 @@ import { writeFileSync } from 'node:fs';
 import { bsFilesFromDir } from '../src/bsdata/node-source.ts';
 import { loadBsData, parseBsDatabase } from '../src/bsdata/index.ts';
 import { adaptUnit } from '../src/combat/adapter.ts';
-import { withinCalculationBudget } from '../src/combat/budget.ts';
+import { isEligibleForCalculations } from '../src/combat/budget.ts';
 import { tierList, type TierRow } from '../src/tier/scoring.ts';
 import type { BsDatasheet } from '../src/bsdata/types.ts';
 
@@ -44,7 +44,7 @@ const started = Date.now();
 const entries: Array<{ datasheet: BsDatasheet; unit: ReturnType<typeof adaptUnit>['unit']; points: number }> = [];
 for (const datasheet of selected) {
   const adapted = adaptUnit(datasheet, { size });
-  if (adapted.unit.models.length === 0 || !withinCalculationBudget(adapted.points)) continue;
+  if (adapted.unit.models.length === 0 || !isEligibleForCalculations(datasheet.name, adapted.points)) continue;
   entries.push({ datasheet, unit: adapted.unit, points: adapted.points });
 }
 

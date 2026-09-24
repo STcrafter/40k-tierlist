@@ -23,7 +23,7 @@ export interface UnitMetrics {
   vsInfantry: number;
   vsArmor: number;
   universal: number;
-  /** 100 / (пережитый урон на 100 очков); больше = живучее. */
+  /** Стоимостная выживаемость: 100 / (1 + takenPer100). */
   baseSurvivability: number;
   takenPer100: number;
   unitType: 'Ranged' | 'Melee';

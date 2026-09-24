@@ -23,7 +23,7 @@ import { damagePerRound, type PerRoundOptions } from '../combat/perRound.ts';
 import { survivabilityAgainstUnit, type SurvivalOptions } from '../combat/survival.ts';
 import { archetypeOf, type ArchetypeId } from '../combat/archetypes.ts';
 import type { CombatUnit } from '../combat/types.ts';
-import { withinCalculationBudget } from '../combat/budget.ts';
+import { isEligibleForCalculations } from '../combat/budget.ts';
 import type { BsDatasheet } from '../bsdata/types.ts';
 import { detectUtilityFlags, utilityScoreOf, type UtilityFlag } from './utility.ts';
 
@@ -96,7 +96,7 @@ export interface RawScore {
   vsInfantry: number;
   vsArmor: number;
   universal: number;
-  /** Сырая живучесть: 100 / (пережитый урон на 100 очков). */
+  /** Стоимостная выживаемость: 100 / (1 + takenPer100). */
   baseSurvivability: number;
   /** Пережитый урон на 100 очков (для справки). */
   takenPer100: number;
@@ -204,7 +204,7 @@ export function rawScoreOf(
   // лучше; для складывания с уроном переворачиваем в 100 / taken.
   const surv = survivabilityAgainstUnit(unit, points, survival);
   const takenPer100 = surv.overall.takenPer100Points.mean;
-  const baseSurvivability = takenPer100 > 0 ? 100 / takenPer100 : 100;
+  const baseSurvivability = 100 / (1 + takenPer100);
 
   const utilityFlags = detectUtilityFlags(datasheet, { meleePer100 });
   const utilityScore = utilityScoreOf(utilityFlags);
@@ -296,7 +296,9 @@ export function tierList(
   entries: Array<{ datasheet: BsDatasheet; unit: CombatUnit; points: number }>,
   options: TieringOptions = {}
 ): TierRow[] {
-  const eligibleEntries = entries.filter(({ points }) => withinCalculationBudget(points));
+  const eligibleEntries = entries.filter(({ datasheet, points }) =>
+    isEligibleForCalculations(datasheet.name, points)
+  );
   const drafts: DraftRow[] = eligibleEntries.map(({ datasheet, unit, points }) => ({
     ...rawScoreOf(datasheet, unit, points, options),
     id: datasheet.id,

@@ -291,10 +291,13 @@ describe('режим боя', () => {
   });
 });
 
-  it('тирлист исключает модели дороже 2000 очков', () => {
+  it('тирлист исключает модели дороже 2000 очков и [Legends]', () => {
     const expensive = find('Manta');
     const expensiveUnit = adaptUnit(expensive, { size: 'min' });
     expect(expensiveUnit.points).toBeGreaterThan(2000);
+
+    const legends = find('Crisis Battlesuits [Legends]');
+    const legendsUnit = adaptUnit(legends, { size: 'min' });
 
     const entries = ['Intercessor Squad', 'Boyz'].map((name) => {
       const datasheet = find(name);
@@ -302,14 +305,24 @@ describe('режим боя', () => {
       return { datasheet, unit: adapted.unit, points: adapted.points };
     });
     entries.push({ datasheet: expensive, unit: expensiveUnit.unit, points: expensiveUnit.points });
+    entries.push({ datasheet: legends, unit: legendsUnit.unit, points: legendsUnit.points });
 
     const rows = tierList(entries, fast);
     expect(rows).toHaveLength(2);
     expect(rows.some((row) => row.id === expensive.id)).toBe(false);
+    expect(rows.some((row) => row.id === legends.id)).toBe(false);
   });
 
 describe('тирлист', () => {
-  const names = ['Intercessor Squad', 'Boyz', 'Deff Dread', 'Leman Russ Battle Tank', 'Hormagaunts', 'Killa Kans', 'Warboss', 'Crisis Battlesuits [Legends]'];
+    const names = [
+      'Intercessor Squad',
+      'Boyz',
+      'Deff Dread',
+      'Leman Russ Battle Tank',
+      'Hormagaunts',
+      'Killa Kans',
+      'Warboss',
+    ];
   const entries = names
     .map((name) => {
       const datasheet = find(name);
