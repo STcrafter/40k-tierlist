@@ -99,9 +99,9 @@ export function resolveCombatOptions(options: CombatOptions = {}): ResolvedComba
     engaged: options.engaged ?? false,
     rules: options.rules ?? standardRules(),
     rng: options.rng ?? mulberry32(0x40_4b),
-    // По требованию задачи в рукопашной считаем все профили (верхняя оценка);
-    // 'primary' включает строгое правило «одно оружие + [EXTRA ATTACKS]».
-    melee: options.melee ?? 'all',
+    // Смешанный режим считает рукопашную фалу по правилам: одно основное
+    // оружие плюс [EXTRA ATTACKS], а не все профили одновременно.
+    melee: options.melee ?? 'primary',
     closeQuarters: options.closeQuarters ?? 'auto',
     allocation: options.allocation ?? 'first',
   };
@@ -144,24 +144,37 @@ export function meleeWeaponsOf(model: CombatModel, strategy: MeleeStrategy): Com
   return best === null ? extras : [best, ...extras];
 }
 
-/**
- * Оружие модели для дальнобойной фазы.
- *  - в зоне боя ('engaged') доступны только [PISTOL]/[CLOSE-QUARTERS];
- *  - если у модели есть такие стволы, стреляет либо группа [PISTOL]/[CLOSE-QUARTERS],
- *    либо все остальные ('auto' — та группа, у которой больше ожидаемый урон).
- */
+/** Оружие с [PISTOL]/[CLOSE-QUARTERS], доступное и в ближней фазе. */
+export function closeQuartersWeaponsOf(model: CombatModel): CombatWeapon[] {
+  return model.weapons.filter(
+    (weapon) => weapon.kind === 'ranged' && (hasKeyword(weapon, 'pistol') || hasKeyword(weapon, 'close-quarters'))
+  );
+}
+
+/** Оружие модели в рукопашной, включая пистолеты и [CLOSE-QUARTERS]. */
+export function meleePhaseWeaponsOf(
+  model: CombatModel,
+  strategy: MeleeStrategy,
+  includeCloseQuarters = true
+): CombatWeapon[] {
+  const weapons = [...meleeWeaponsOf(model, strategy)];
+  if (includeCloseQuarters) weapons.push(...closeQuartersWeaponsOf(model));
+  return weapons;
+}
+
+/** Оружие модели для дальнобойной фазы. */
 export function rangedWeaponsOf(
   model: CombatModel,
   strategy: CloseQuartersStrategy,
-  engaged: boolean
+  engaged: boolean,
+  includeCloseQuarters = true
 ): CombatWeapon[] {
   const ranged = model.weapons.filter((weapon) => weapon.kind === 'ranged');
-  const close = ranged.filter(
-    (weapon) => hasKeyword(weapon, 'pistol') || hasKeyword(weapon, 'close-quarters')
-  );
+  const close = closeQuartersWeaponsOf(model);
   const other = ranged.filter((weapon) => !close.includes(weapon));
 
   if (engaged) return close;
+  if (!includeCloseQuarters) return other;
   if (strategy === 'close-quarters') return close.length > 0 ? close : other;
   if (strategy === 'other') return other.length > 0 ? other : ranged;
   if (close.length === 0 || other.length === 0) return ranged;
@@ -449,10 +462,13 @@ export function simulateRound(
   for (const phase of phasesOf(opts.phase)) {
     for (const model of attacker.models) {
       if (state.aliveCount === 0) break;
+      // В фазе 'all' пистолеты и [CLOSE-QUARTERS] уже включены в melee:
+      // их повторный вызов в ranged дал бы двойной урон. Для отдельной
+      // стрельбы они, наоборот, доступны как обычное дальнобойное оружие.
       const weapons =
         phase === 'melee'
-          ? meleeWeaponsOf(model, opts.melee)
-          : rangedWeaponsOf(model, opts.closeQuarters, opts.engaged);
+          ? meleePhaseWeaponsOf(model, opts.melee)
+          : rangedWeaponsOf(model, opts.closeQuarters, opts.engaged, opts.phase !== 'all');
 
       for (const weapon of weapons) {
         if (state.aliveCount === 0) break;

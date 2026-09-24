@@ -135,20 +135,22 @@ describe('шаблоны оружия', () => {
 
 describe('нормировка «урон на 100 очков»', () => {
   it('сырой урон приводится к 100 очкам', () => {
+    const empty = { byArchetype: {}, overall: { mean: 0, stdev: 0 } };
     const damage = {
-      ranged: { byArchetype: {}, overall: { mean: 4, stdev: 1 } },
-      melee: { byArchetype: {}, overall: { mean: 2, stdev: 1 } },
-      total: { byArchetype: {}, overall: { mean: 6, stdev: 1 } },
+      ranged: { ...empty, overall: { mean: 4, stdev: 1 }, destroyedPoints: { ...empty } },
+      melee: { ...empty, overall: { mean: 2, stdev: 1 }, destroyedPoints: { ...empty } },
+      total: { ...empty, overall: { mean: 6, stdev: 1 }, destroyedPoints: { ...empty } },
     };
     expect(per100Points(damage, 50)).toEqual({ ranged: 8, melee: 4, total: 12 });
     expect(per100Points(damage, 100)).toEqual({ ranged: 4, melee: 2, total: 6 });
   });
 
   it('при нулевых очках нормировка не делит на ноль', () => {
+    const empty = { byArchetype: {}, overall: { mean: 0, stdev: 0 } };
     const damage = {
-      ranged: { byArchetype: {}, overall: { mean: 4, stdev: 1 } },
-      melee: { byArchetype: {}, overall: { mean: 2, stdev: 1 } },
-      total: { byArchetype: {}, overall: { mean: 6, stdev: 1 } },
+      ranged: { ...empty, overall: { mean: 4, stdev: 1 }, destroyedPoints: { ...empty } },
+      melee: { ...empty, overall: { mean: 2, stdev: 1 }, destroyedPoints: { ...empty } },
+      total: { ...empty, overall: { mean: 6, stdev: 1 }, destroyedPoints: { ...empty } },
     };
     expect(per100Points(damage, 0)).toEqual({ ranged: 0, melee: 0, total: 0 });
   });

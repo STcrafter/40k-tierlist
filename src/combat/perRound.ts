@@ -41,6 +41,11 @@ export interface DamageBreakdown {
   byArchetype: Record<string, DamageStat>;
   /** Взвешенное среднее по типам целей. */
   overall: DamageStat;
+  /** Уничтоженные очки цели за раунд; swarm/дешёвая цель даёт меньше. */
+  destroyedPoints: {
+    byArchetype: Record<string, DamageStat>;
+    overall: DamageStat;
+  };
 }
 
 /** Урон в раунд: отдельно дальнобойный, рукопашный и общий. */
@@ -117,9 +122,19 @@ function measureAgainst(
   archetype: UnitArchetype,
   options: PerRoundOptions,
   seed: number
-): { ranged: DamageStat; melee: DamageStat; total: DamageStat } {
+): {
+  ranged: DamageStat;
+  melee: DamageStat;
+  total: DamageStat;
+  destroyed: { ranged: DamageStat; melee: DamageStat; total: DamageStat };
+} {
   const trials = options.trials ?? 200;
   const target = targetUnitOf(archetype);
+  const pointPerModel = archetype.points / Math.max(1, target.models.length);
+  const destroyedFromKills = (value: { mean: number; stdev: number }): DamageStat => ({
+    mean: value.mean * pointPerModel,
+    stdev: value.stdev * pointPerModel,
+  });
   // Отдельный поток бросков на каждую фазу: иначе сумма фаз систематически
   // занижала бы разброс, а «руки» и «ноги» отряда зависели бы друг от друга.
   const phaseRng = (offset: number): Rng => mulberry32((seed + offset) >>> 0);
@@ -140,7 +155,16 @@ function measureAgainst(
     rng: options.rng ?? phaseRng(0x517c_c1b7),
   });
 
-  return { ranged: ranged.damage, melee: melee.damage, total: total.damage };
+  return {
+    ranged: ranged.damage,
+    melee: melee.damage,
+    total: total.damage,
+    destroyed: {
+      ranged: destroyedFromKills(ranged.kills),
+      melee: destroyedFromKills(melee.kills),
+      total: destroyedFromKills(total.kills),
+    },
+  };
 }
 
 /** Замер по одному набору целей: собирает разбивку по архетипам и среднее. */
@@ -153,26 +177,38 @@ function measure(
   const byArchetypeRanged: Record<string, DamageStat> = {};
   const byArchetypeMelee: Record<string, DamageStat> = {};
   const byArchetypeTotal: Record<string, DamageStat> = {};
+  const destroyedRanged: Record<string, DamageStat> = {};
+  const destroyedMelee: Record<string, DamageStat> = {};
+  const destroyedTotal: Record<string, DamageStat> = {};
   const weights: number[] = [];
   const rangedValues: DamageStat[] = [];
   const meleeValues: DamageStat[] = [];
   const totalValues: DamageStat[] = [];
+  const destroyedRangedValues: DamageStat[] = [];
+  const destroyedMeleeValues: DamageStat[] = [];
+  const destroyedTotalValues: DamageStat[] = [];
 
   archetypes.forEach((archetype, index) => {
     const measured = measureAgainst(attacker, archetype, options, (seed + index * 7919) >>> 0);
     byArchetypeRanged[archetype.id] = measured.ranged;
     byArchetypeMelee[archetype.id] = measured.melee;
     byArchetypeTotal[archetype.id] = measured.total;
+    destroyedRanged[archetype.id] = measured.destroyed.ranged;
+    destroyedMelee[archetype.id] = measured.destroyed.melee;
+    destroyedTotal[archetype.id] = measured.destroyed.total;
     rangedValues.push(measured.ranged);
     meleeValues.push(measured.melee);
     totalValues.push(measured.total);
+    destroyedRangedValues.push(measured.destroyed.ranged);
+    destroyedMeleeValues.push(measured.destroyed.melee);
+    destroyedTotalValues.push(measured.destroyed.total);
     weights.push(options.weights?.[archetype.id] ?? 1);
   });
 
   return {
-    ranged: { byArchetype: byArchetypeRanged, overall: weightedMean(rangedValues, weights) },
-    melee: { byArchetype: byArchetypeMelee, overall: weightedMean(meleeValues, weights) },
-    total: { byArchetype: byArchetypeTotal, overall: weightedMean(totalValues, weights) },
+    ranged: { byArchetype: byArchetypeRanged, overall: weightedMean(rangedValues, weights), destroyedPoints: { byArchetype: destroyedRanged, overall: weightedMean(destroyedRangedValues, weights) } },
+    melee: { byArchetype: byArchetypeMelee, overall: weightedMean(meleeValues, weights), destroyedPoints: { byArchetype: destroyedMelee, overall: weightedMean(destroyedMeleeValues, weights) } },
+    total: { byArchetype: byArchetypeTotal, overall: weightedMean(totalValues, weights), destroyedPoints: { byArchetype: destroyedTotal, overall: weightedMean(destroyedTotalValues, weights) } },
   };
 }
 
@@ -249,7 +285,18 @@ function averageDamage(measurements: DamagePerRound[]): DamagePerRound {
     for (const id of ids) {
       byArchetype[id] = stat(parts.map((part) => part.byArchetype[id]?.mean ?? 0));
     }
-    return { byArchetype, overall: stat(parts.map((part) => part.overall.mean)) };
+    const destroyedByArchetype: Record<string, DamageStat> = {};
+    for (const id of ids) {
+      destroyedByArchetype[id] = stat(parts.map((part) => part.destroyedPoints.byArchetype[id]?.mean ?? 0));
+    }
+    return {
+      byArchetype,
+      overall: stat(parts.map((part) => part.overall.mean)),
+      destroyedPoints: {
+        byArchetype: destroyedByArchetype,
+        overall: stat(parts.map((part) => part.destroyedPoints.overall.mean)),
+      },
+    };
   };
   return {
     ranged: averageBreakdown((value) => value.ranged),

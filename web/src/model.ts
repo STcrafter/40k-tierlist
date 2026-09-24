@@ -11,17 +11,19 @@
  * ровно как при полной пересборке с нуля.
  */
 
-import type { CombatMode, Tier } from '../../src/tier/scoring.ts';
+import type { CombatMode, TargetParadigm, Tier } from '../../src/tier/scoring.ts';
 
-export type { CombatMode, Tier };
+export type { CombatMode, TargetParadigm, Tier };
 
 /** Сырая метрика юнита в одном режиме боя. */
 export interface UnitMetrics {
-  /** Лучший из трёх срезов урона на 100 очков (Best in Slot). */
+  /** Лучшая уничтоженная стоимость на 100 очков атакующего. */
   rawMaxDamage: number;
-  bestSlot: 'infantry' | 'armor' | 'universal';
-  vsInfantry: number;
-  vsArmor: number;
+  bestTarget: string;
+  bestTargetName: string;
+  destroyedPointsByTarget: Record<string, number>;
+  damagePer100: number;
+  /** Универсальное среднее destroyed points по выбранной парадигме. */
   universal: number;
   /** Стоимостная выживаемость: 100 / (1 + takenPer100). */
   baseSurvivability: number;
@@ -39,6 +41,17 @@ export interface UnitMetrics {
   totalScore: number;
   percentile: number;
   tier: Tier;
+  /** Опциональные варианты снаряжения, посчитанные на сервере. */
+  loadouts?: Array<{
+    id: string;
+    name: string;
+    points: number;
+    rawMaxDamage: number;
+    bestTarget: string;
+    bestTargetName: string;
+    tier: Tier;
+    totalScore: number;
+  }>;
 }
 
 export interface UnitProfile {
@@ -81,6 +94,9 @@ export interface UnitEntry {
   utilityScore: number;
   unit: UnitProfile;
   metrics: Record<CombatMode, UnitMetrics>;
+  /** Метрики по каждой парадигме цели: all, infantry, elite, armor. */
+  metricsByParadigm?: Record<TargetParadigm, Record<CombatMode, UnitMetrics>>;
+  loadouts?: Array<{ id: string; name: string; points: number; unit: UnitProfile; metrics?: UnitMetrics }>;
 }
 
 export interface TierlistData {
@@ -88,6 +104,7 @@ export interface TierlistData {
   trials: number;
   distance: number;
   modes: CombatMode[];
+  paradigms: TargetParadigm[];
   factions: string[];
   units: UnitEntry[];
 }

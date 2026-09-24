@@ -39,6 +39,8 @@ export interface AdaptOptions {
   size?: 'min' | 'max';
   /** Добавить необязательное снаряжение моделей (min = 0). */
   includeOptional?: boolean;
+  /** Заменить одну запись choice-группы на указанный индекс. */
+  choices?: Record<string, number>;
 }
 
 export interface AdaptedUnit {
@@ -46,6 +48,14 @@ export interface AdaptedUnit {
   /** Сколько моделей каждого варианта (id варианта → количество). */
   counts: Map<string, number>;
   /** Очки за полученный состав (по ценовой формуле BSData). */
+  points: number;
+}
+
+/** Один вариант снаряжения, пригодный для сравнения и показа в UI. */
+export interface LoadoutCandidate {
+  id: string;
+  name: string;
+  unit: CombatUnit;
   points: number;
 }
 
@@ -106,21 +116,25 @@ function selectWeaponProfile(item: BsWargear): BsWeaponProfile | null {
  * запись выбрана игроком, из данных не узнать, поэтому это приближение
  * (для отчёта оно даёт осмысленный порядок величин, но не точную цифру).
  */
-function weaponsOf(item: BsWargear, ownerId: string): CombatWeapon[] {
+function weaponsOf(item: BsWargear, ownerId: string, choices: Record<string, number> = {}): CombatWeapon[] {
   if (item.kind === 'roster') return [];
-  const selected = selectWeaponProfile(item);
-  const weapons = selected === null ? [] : [toCombatWeapon(selected, ownerId)];
+  const profile = selectWeaponProfile(item);
+  const weapons = profile === null ? [] : [toCombatWeapon(profile, ownerId)];
 
   if (item.kind !== 'choice') {
     for (const child of item.nested) {
-      weapons.push(...weaponsOf(child, ownerId));
+      weapons.push(...weaponsOf(child, ownerId, choices));
     }
     return weapons;
   }
 
   const armed = item.nested.filter((nested) => containsWeapon(nested));
-  for (const choice of armed.slice(0, Math.max(1, item.min))) {
-    weapons.push(...weaponsOf(choice, ownerId));
+  const selectedIndex = choices[item.id];
+  const chosen = selectedIndex === undefined
+    ? armed.slice(0, Math.max(1, item.min))
+    : [armed[selectedIndex] ?? armed[0]].filter((value): value is BsWargear => value !== undefined);
+  for (const choice of chosen) {
+    weapons.push(...weaponsOf(choice, ownerId, choices));
   }
   return weapons;
 }
@@ -132,20 +146,24 @@ function weaponsOf(item: BsWargear, ownerId: string): CombatWeapon[] {
  * поэтому здесь берутся только опциональные группы (min = 0) — их состав
  * зависит от выбора игрока, и по умолчанию они не добавляются.
  */
-function weaponsOfVariant(variant: BsModelVariant, includeOptional: boolean): CombatWeapon[] {
+function weaponsOfVariant(
+  variant: BsModelVariant,
+  includeOptional: boolean,
+  choices: Record<string, number> = {}
+): CombatWeapon[] {
   const weapons: CombatWeapon[] = [];
   for (const item of variant.defaultWargear) {
-    weapons.push(...weaponsOf(item, variant.id));
+    weapons.push(...weaponsOf(item, variant.id, choices));
   }
   if (includeOptional) {
     for (const group of variant.choiceGroups) {
       if (group.min > 0) continue;
       for (const choice of group.choices.slice(0, 1)) {
-        weapons.push(...weaponsOf(choice, variant.id));
+        weapons.push(...weaponsOf(choice, variant.id, choices));
       }
     }
     for (const item of variant.optionalWargear) {
-      weapons.push(...weaponsOf(item, variant.id));
+      weapons.push(...weaponsOf(item, variant.id, choices));
     }
   }
   return weapons;
@@ -264,7 +282,8 @@ function expandVariant(
   variant: BsModelVariant,
   count: number,
   unitKeywords: string[],
-  includeOptional: boolean
+  includeOptional: boolean,
+  choices: Record<string, number> = {}
 ): CombatModel[] {
   const profile = variant.profile;
   // Без профиля модели (или без T/W) в бою участвовать нечем — пропускаем.
@@ -273,7 +292,7 @@ function expandVariant(
   const wounds = parseCharacteristic(profile.wounds);
   if (toughness === null || wounds === null) return [];
 
-  const weapons = weaponsOfVariant(variant, includeOptional);
+  const weapons = weaponsOfVariant(variant, includeOptional, choices);
   const models: CombatModel[] = [];
   for (let i = 0; i < count; i += 1) {
     models.push({
@@ -300,25 +319,89 @@ function expandVariant(
 export function adaptUnit(datasheet: BsDatasheet, options: AdaptOptions = {}): AdaptedUnit {
   const size = options.size ?? 'min';
   const includeOptional = options.includeOptional ?? false;
+  const choices = options.choices ?? {};
   const unitKeywords = datasheet.keywords.map((keyword) => keyword.toUpperCase());
   const models: CombatModel[] = [];
   const counts = new Map<string, number>();
-
   for (const group of datasheet.modelGroups) {
     const allocation = allocateVariants(group.variants, group, size);
     for (const variant of group.variants) {
       const count = allocation.get(variant.id) ?? 0;
       if (count <= 0) continue;
-      // Один вариант может попасть в несколько групп — накапливаем состав.
       counts.set(variant.id, (counts.get(variant.id) ?? 0) + count);
-      models.push(...expandVariant(variant, count, unitKeywords, includeOptional));
+      models.push(...expandVariant(variant, count, unitKeywords, includeOptional, choices));
     }
   }
-
   return {
     unit: { id: datasheet.id, name: datasheet.name, keywords: unitKeywords, models },
     counts,
     points: pointsFor(datasheet, counts).points,
   };
+}
+
+/** Рекурсивная стоимость выбранной записи снаряжения. */
+function wargearCost(item: BsWargear): number {
+  return item.cost + item.nested.reduce((sum, nested) => sum + wargearCost(nested), 0);
+}
+
+/**
+ * Ограниченный перебор loadout-вариантов datasheet.
+ *
+ * Для каждой модели выбирается один вариант из каждой обязательной choice-группы.
+ * Комбинации разных моделей объединяются в общий набор выборов, но число
+ * вариантов ограничено: у больших отрядов иначе возникает комбинаторный взрыв.
+ * Первый вариант всегда соответствует текущему дефолтному адаптеру.
+ */
+export function loadoutVariantsOf(
+  datasheet: BsDatasheet,
+  options: AdaptOptions & { limit?: number } = {}
+): LoadoutCandidate[] {
+  const size = options.size ?? 'min';
+  const includeOptional = options.includeOptional ?? false;
+  const groups = datasheet.modelGroups.flatMap((group) => group.variants).flatMap((variant) =>
+    variant.defaultWargear
+      .filter((item) => item.kind === 'choice' && item.min > 0)
+      .map((item) => ({ variantId: variant.id, item }))
+  );
+  // Декартово произведение вариантов по всем choice-группам. Раньше здесь
+  // перебирались только альтернативы последней группы, поэтому часть loadout-ов
+  // получала неполный набор снаряжения.
+  const combinations: Record<string, number>[] = [{}];
+  for (const group of groups) {
+    const alternatives = group.item.nested.filter((item) => containsWeapon(item));
+    if (alternatives.length === 0) continue;
+    const next: Record<string, number>[] = [];
+    for (const current of combinations) {
+      alternatives.forEach((_, index) => {
+        next.push({ ...current, [group.item.id]: index });
+      });
+    }
+    combinations.splice(0, combinations.length, ...next);
+    if (combinations.length > (options.limit ?? 64)) {
+      combinations.length = options.limit ?? 64;
+      break;
+    }
+  }
+  const candidates: LoadoutCandidate[] = [];
+  for (const [index, choices] of combinations.entries()) {
+    const adapted = adaptUnit(datasheet, { size, includeOptional, choices });
+    if (adapted.unit.models.length === 0) continue;
+    const extra = groups.reduce((sum, group) => {
+    const selected = group.item.nested.filter((item) => containsWeapon(item))[choices[group.item.id] ?? 0];
+    return sum + (selected ? wargearCost(selected) : 0);
+  }, 0);
+  const name = groups.length === 0
+    ? 'Базовый'
+    : groups
+        .map((group) => group.item.nested.filter((item) => containsWeapon(item))[choices[group.item.id] ?? 0]?.name ?? '?')
+        .join(' / ');
+    candidates.push({
+      id: `${datasheet.id}:loadout:${index}`,
+      name,
+      unit: adapted.unit,
+      points: adapted.points + extra,
+    });
+  }
+  return candidates;
 }
 

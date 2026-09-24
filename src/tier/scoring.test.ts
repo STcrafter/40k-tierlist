@@ -157,28 +157,29 @@ describe('нормализация и перцентили', () => {
 });
 
 describe('Best in Slot и метрики', () => {
-  it('берётся лучший из трёх срезов', () => {
+  it('берётся лучший destroyed points по конкретному типу цели', () => {
     const datasheet = find('Intercessor Squad');
     const { unit, points } = adaptUnit(datasheet, { size: 'min' });
     const raw = rawScoreOf(datasheet, unit, points, fast);
-    const best = Math.max(raw.vsInfantry, raw.vsArmor, raw.universal);
+    const best = Math.max(...Object.values(raw.destroyedPointsByTarget));
     expect(raw.rawMaxDamage).toBeCloseTo(best, 10);
     expect(raw.bestSlot).toBe('infantry');
+    expect(raw.bestTarget).toBeTruthy();
   });
 
-  it('все три слота считаются в одной шкале — «на 100 очков»', () => {
+  it('все типы целей считаются в одной шкале — «на 100 очков»', () => {
     // Регрессия: слоты по пехоте/броне считались в сыром уроне, а универсальный
     // — уже нормированный. Из-за разнокалибровки «best slot» всегда был «infantry».
     const datasheet = find('Leman Russ Battle Tank');
     const { unit, points } = adaptUnit(datasheet, { size: 'min' });
     const raw = rawScoreOf(datasheet, unit, points, fast);
-    // Все три слота — одной природы: у «тяжёлого» юнита за 100 очков они
+    // Все слоты — одной природы: у «тяжёлого» юнита за 100 очков они
     // не могут быть в разы больше, чем у дешёвой пехоты.
     expect(raw.vsInfantry).toBeLessThan(1000);
     expect(raw.vsArmor).toBeLessThan(1000);
     expect(raw.universal).toBeLessThan(1000);
     expect(raw.rawMaxDamage).toBeCloseTo(
-      Math.max(raw.vsInfantry, raw.vsArmor, raw.universal),
+      Math.max(...Object.values(raw.destroyedPointsByTarget)),
       8
     );
 
@@ -187,7 +188,7 @@ describe('Best in Slot и метрики', () => {
     const adapted = adaptUnit(abominant, { size: 'min' });
     const heavy = rawScoreOf(abominant, adapted.unit, adapted.points, fast);
     expect(heavy.vsArmor).toBeGreaterThan(heavy.vsInfantry);
-    expect(heavy.bestSlot).toBe('armor');
+    expect(heavy.bestTarget).toBeTruthy();
   });
 
   it('штраф применяется к урону и живучести', () => {

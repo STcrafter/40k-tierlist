@@ -21,7 +21,7 @@
 
 import { damagePerRound, type PerRoundOptions } from '../combat/perRound.ts';
 import { survivabilityAgainstUnit, type SurvivalOptions } from '../combat/survival.ts';
-import { archetypeOf, type ArchetypeId } from '../combat/archetypes.ts';
+import { archetypeById, archetypeOf, type ArchetypeId } from '../combat/archetypes.ts';
 import type { CombatUnit } from '../combat/types.ts';
 import { isEligibleForCalculations } from '../combat/budget.ts';
 import type { BsDatasheet } from '../bsdata/types.ts';
@@ -32,6 +32,9 @@ export type UnitType = 'Ranged' | 'Melee';
 
 /** Тир в тирлисте. */
 export type Tier = 'S' | 'A' | 'B' | 'C' | 'D';
+
+/** Парадигма цели, относительно которой строится тирлист. */
+export type TargetParadigm = 'all' | 'infantry' | 'elite' | 'armor';
 
 /**
  * Что именно оцениваем: только стрельбу, только рукопашную или обе фазы.
@@ -69,6 +72,14 @@ const ARMOR_TARGETS: ArchetypeId[] = [
   'fortification',
 ];
 
+/** Цели для выбранной парадигмы. */
+export function targetsForParadigm(paradigm: TargetParadigm = 'all'): ArchetypeId[] {
+  if (paradigm === 'infantry') return [...INFANTRY_TARGETS];
+  if (paradigm === 'elite') return ['infantry-veteran', 'terminator', 'jetpack', 'monster'];
+  if (paradigm === 'armor') return [...ARMOR_TARGETS];
+  return [...INFANTRY_TARGETS, ...ARMOR_TARGETS];
+}
+
 /** Веса итогового скора. */
 export const SCORE_WEIGHTS = { damage: 0.4, survivability: 0.35, utility: 0.25 } as const;
 
@@ -89,13 +100,22 @@ export function meleeTax(unitType: UnitType, hasFlyOrDeepStrike: boolean): Melee
 
 /** Сырые метрики юнита — до нормировки (нормировка общая для набора). */
 export interface RawScore {
-  /** Лучшая из трёх величин урона на 100 очков. */
+  /** Лучшее количество уничтоженных очков цели на 100 очков атакующего. */
   rawMaxDamage: number;
   /** Что именно оказалось лучшим — для отчёта. */
   bestSlot: 'infantry' | 'armor' | 'universal';
+  /** Конкретный архетип-противник с максимальным destroyed points. */
+  bestTarget: ArchetypeId;
+  bestTargetName: string;
+  /** Уничтоженные очки по каждому типу цели, на 100 очков атакующего. */
+  destroyedPointsByTarget: Record<string, number>;
+  /** Средние destroyed points по пехоте/броне — оставлены для совместимости с отчётами. */
   vsInfantry: number;
   vsArmor: number;
+  /** Средние destroyed points по всем выбранным целям. */
   universal: number;
+  /** Оставлено для совместимости с отчётами: урон, а не уничтоженные очки. */
+  damagePer100: number;
   /** Стоимостная выживаемость: 100 / (1 + takenPer100). */
   baseSurvivability: number;
   /** Пережитый урон на 100 очков (для справки). */
@@ -133,6 +153,10 @@ export interface TieringOptions {
   mode?: CombatMode;
   /** Общие настройки Монте-Карло для урона. */
   combat?: PerRoundOptions;
+  /** Целевые архетипы для режима «против X»: all — все, armor — броня. */
+  targets?: ArchetypeId[] | null;
+  /** Парадигма цели для сайта; all — все типы. */
+  targetParadigm?: TargetParadigm;
   /** Общие настройки Монте-Карло для выживаемости. */
   survival?: SurvivalOptions;
   /** Дополнительный признак «флай/депт-страйк» (снаружи — по данным). */
@@ -165,33 +189,34 @@ export function rawScoreOf(
 ): RawScore {
   const combat = { ...(options.combat ?? {}) };
   const mode = options.mode ?? 'combined';
+  const targets = options.targetParadigm === undefined && options.targets === undefined
+    ? [...INFANTRY_TARGETS, ...ARMOR_TARGETS]
+    : options.targets ?? targetsForParadigm(options.targetParadigm);
   const survival = { ...(options.survival ?? {}), phase: phaseOf(mode) };
-
-  // Урон по трём срезам целей: пехота, броня и все архетипы сразу.
-  // ВАЖНО: все три величины приводятся к одной шкале — «урон на 100 очков».
-  // Иначе сравнение бессмысленно: универсальная уже нормирована, а срезы по
-  // пехоте/броне остались бы сырыми, и «best slot» всегда выигрывал бы у
-  // дешёвых юнитов с большим абсолютным уроном.
-  const damage = damagePerRound(unit, { ...combat, targets: [...INFANTRY_TARGETS, ...ARMOR_TARGETS] });
+  const damage = damagePerRound(unit, { ...combat, targets });
   const scale = points > 0 ? 100 / points : 0;
   // Режим боя выбирает, из какой ветки разбивки берём цифры: в «ranged»
   // рукопашная часть просто не участвует в оценке.
   const slice = mode === 'ranged' ? damage.ranged : mode === 'melee' ? damage.melee : damage.total;
-  const per100 = (ids: ArchetypeId[]): number =>
-    mean(ids.map((id) => slice.byArchetype[id]?.mean ?? 0)) * scale;
-  const vsInfantry = per100(INFANTRY_TARGETS);
-  const vsArmor = per100(ARMOR_TARGETS);
-  const universal = slice.overall.mean * scale;
-
-  // Best in Slot: лучшая из трёх величин.
-  const candidates: Array<[RawScore['bestSlot'], number]> = [
-    ['infantry', vsInfantry],
-    ['armor', vsArmor],
-    ['universal', universal],
-  ];
-  const [bestSlot, rawMaxDamage] = candidates.reduce((best, current) =>
-    current[1] > best[1] ? current : best
+  const destroyedPer100 = (id: ArchetypeId): number =>
+    (slice.destroyedPoints.byArchetype[id]?.mean ?? 0) * scale;
+  const destroyedPointsByTarget: Record<string, number> = Object.fromEntries(
+    targets.map((id) => [id, destroyedPer100(id)])
   );
+  const vsInfantry = mean(INFANTRY_TARGETS.map(destroyedPer100));
+  const vsArmor = mean(ARMOR_TARGETS.map(destroyedPer100));
+  const universal = slice.destroyedPoints.overall.mean * scale;
+  const damagePer100 = slice.overall.mean * scale;
+  const [bestTarget, rawMaxDamage] = targets.reduce<[ArchetypeId, number]>(
+    (best, id) => (destroyedPer100(id) > best[1] ? [id, destroyedPer100(id)] : best),
+    [targets[0] ?? 'infantry', 0]
+  );
+  const bestTargetName = archetypeById(bestTarget).name;
+  const bestSlot: RawScore['bestSlot'] = INFANTRY_TARGETS.includes(bestTarget)
+    ? 'infantry'
+    : ARMOR_TARGETS.includes(bestTarget)
+      ? 'armor'
+      : 'universal';
 
   // Тип отряда — по тому, что фактически наносит больше урона на 100 очков.
   const rangedPer100 = damage.ranged.overall.mean * scale;
@@ -212,9 +237,13 @@ export function rawScoreOf(
   return {
     rawMaxDamage,
     bestSlot,
+    bestTarget,
+    bestTargetName,
+    destroyedPointsByTarget,
     vsInfantry,
     vsArmor,
     universal,
+    damagePer100,
     baseSurvivability,
     takenPer100,
     unitType,
