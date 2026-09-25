@@ -170,6 +170,44 @@ describe('сейвы, AP и укрытие', () => {
 
 
 describe('кейворды 11-й редакции', () => {
+  it('условный [LETHAL HITS: non-MONSTER/VEHICLE] не работает по технике', () => {
+    // Регрессия: правило проверяло только имя кейворда и не смотрело на
+    // условие, поэтому «Lethal Hits: non-MONSTER/VEHICLE» автоматически
+    // ранил бы и MONSTER, и VEHICLE. В BSData так оформлено 81 оружие.
+    const gun = weapon({ skill: 2, strength: 2, keywords: parseKeywords(['Lethal Hits: non-MONSTER/VEHICLE']) });
+    // S2 против T11 — порог 6+, бросок 3 промахивается. Если бы Lethal
+    // применялся, было бы авторанение.
+    const vehicle = unit([model({ toughness: 11, wounds: 20, save: 6, keywords: ['VEHICLE'] })], ['VEHICLE']);
+    const vsVehicle = simulateTrial(gunner(gun), vehicle, { rng: die(3) });
+    expect(vsVehicle.weapons[0].wounds).toBe(0);
+
+    // Та же ствола против пехоты: крит. попадание (натуральная 6) ранит.
+    const infantry = unit([model({ toughness: 11, wounds: 20, save: 6, keywords: ['INFANTRY'] })], ['INFANTRY']);
+    const vsInfantry = simulateTrial(gunner(gun), infantry, { rng: die(6) });
+    expect(vsInfantry.weapons[0].wounds).toBe(1);
+  });
+
+  it('условный [DEVASTATING WOUNDS] тоже уважает условие', () => {
+    const gun = weapon({
+      skill: 2,
+      strength: 20,
+      keywords: parseKeywords(['Devastating Wounds: non-MONSTER/VEHICLE']),
+    });
+    // Критическое ранение (натуральная 6) по VEHICLE: D не применяется.
+    const vehicle = unit([model({ toughness: 11, wounds: 20, save: 3, keywords: ['VEHICLE'] })], ['VEHICLE']);
+    const vsVehicle = simulateTrial(gunner(gun), vehicle, { rng: sequence([6, 6, 1]) });
+    expect(vsVehicle.weapons[0].mortals).toBe(0);
+  });
+
+  it('[IGNORES COVER] снимает укрытие, а обычный болтер — нет', () => {
+    // Цель в укрытии: без [IGNORES COVER] болтер получает +1 к сейву.
+    const cover = true;
+    const plain = weapon({ ap: 0 });
+    const vsCover = simulateTrial(gunner(plain), unit([model({ save: 3, wounds: 9 })]), { rng: die(3), cover });
+    // 3+ с укрытием → 4+, бросок 3 не проходит; без укрытия прошёл бы.
+    expect(vsCover.weapons[0].unsaved).toBe(0);
+  });
+
   it('[TORRENT] даёт автопопадание независимо от броска', () => {
     const attacker = gunner(
       weapon({ skill: null, strength: 5, keywords: parseKeywords(['Torrent']) })

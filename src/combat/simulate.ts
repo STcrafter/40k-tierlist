@@ -20,6 +20,7 @@
  */
 
 import { diceMean, mulberry32, rollDie, rollDice } from './dice.ts';
+import { keywordOf } from './keywords.ts';
 import { clampTarget, standardRules, woundThresholdByStrength } from './rules.ts';
 import type {
   CombatContext,
@@ -116,7 +117,18 @@ export function resolveCombatOptions(options: CombatOptions = {}): ResolvedComba
   };
 }
 
-/** Есть ли у оружия кейворд с данным каноническим именем. */
+/** Кейворды цели (отряд + модель) — для условий вида 'non-MONSTER/VEHICLE'. */
+function targetKeywordsOf(ctx: CombatContext): string[] {
+  return [...ctx.defender.keywords, ...ctx.target.keywords];
+}
+
+/**
+ * Есть ли у оружия кейворд с данным каноническим именем.
+ *
+ * Без учёта условий — для кейвордов, которые от цели не зависят
+ * ([EXTRA ATTACKS], [PISTOL], [CLOSE-QUARTERS]). Условные вроде
+ * 'Lethal Hits: non-MONSTER/VEHICLE' проверяются через `keywordOf`.
+ */
 function hasKeyword(weapon: CombatWeapon, name: string): boolean {
   return weapon.keywords.some((keyword) => keyword.name === name);
 }
@@ -296,7 +308,11 @@ function saveTargetOf(
     // AP отрицательный, но чем он больше по модулю, тем ХУЖЕ сейв:
     // 3+ с AP-2 → 5+, поэтому к порогу прибавляется модуль AP.
     armor = target.save - weapon.ap;
-    if (ctx.cover && ctx.phase === 'ranged' && !hasKeyword(weapon, 'ignores-cover')) {
+    if (
+      ctx.cover &&
+      ctx.phase === 'ranged' &&
+      keywordOf(weapon.keywords, 'ignores-cover', targetKeywordsOf(ctx)) === null
+    ) {
       armor -= 1;
     }
     armor = Math.max(2, armor);

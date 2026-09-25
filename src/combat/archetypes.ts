@@ -7,9 +7,19 @@
  * считается по каждому архетипу отдельно, а затем усредняется по весам —
  * так в оценке юнита участвуют и пехота, и техника, и монстры.
  *
- * Характеристики взяты из правил 11-й редакции и проверены по даташитам
- * BSData (например, Intercessor T4/W2/Sv3+, Deff Dread T9/W8/Sv2+,
- * Leman Russ T11/W13/Sv2+, Valkyrie T10/W14/Sv2+).
+ * Характеристики взяты из правил 11-й редакции и сверены с медианами по
+ * реальным даташитам BSData (n — число профилей в базе). Расхождения, найденные
+ * такой сверкой и исправленные:
+ *   walker  9/8/2  → 10/12/3  (n=147)
+ *   vehicle 11/13/2 → 10/11/3  (n=130)
+ *   transport 9/10/3 → 11/16/3 (n=74)
+ *   flyer   10/14/2 →  9/12/3  (n=139)
+ *   fortification 10/12/4 → 12/12/3 (n=36)
+ * terminator (5/3/2, n=139) и jetpack (4/2/3, n=90) совпали с медианами.
+ *
+ * Важнее прочих было Sv: у walker/vehicle/flyer стояло 2+, тогда как медиана
+ * BSData — 3+. Sv 2+ существенно живучее, поэтому техника в тирлисте была
+ * систематически завышена, а infantry не могла набрать процентов.
  *
  * Это допущения модели, а не точная копия кодекса: у конкретных отрядов
  * характеристики отличаются (Cadian Shock Troops Sv2+, Hormagaunts W1).
@@ -156,9 +166,9 @@ export const ARCHETYPES: readonly UnitArchetype[] = [
     name: 'Шагоход',
     description: 'Дроид-шагоход: Deff Dread, Dreadnought, Knight-подобные.',
     models: 1,
-    toughness: 9,
-    wounds: 8,
-    save: 2,
+    toughness: 10,
+    wounds: 12,
+    save: 3,
     invuln: null,
     keywords: ['VEHICLE', 'WALKER'],
     points: 135,
@@ -168,9 +178,9 @@ export const ARCHETYPES: readonly UnitArchetype[] = [
     name: 'Техника',
     description: 'Бронированная машина: Leman Russ, Land Raider, аналоги.',
     models: 1,
-    toughness: 11,
-    wounds: 13,
-    save: 2,
+    toughness: 10,
+    wounds: 11,
+    save: 3,
     invuln: null,
     keywords: ['VEHICLE'],
     points: 160,
@@ -180,8 +190,8 @@ export const ARCHETYPES: readonly UnitArchetype[] = [
     name: 'Транспорт',
     description: 'Машина для перевозки: Rhino,_TRANSPORT_, Drop Pod.',
     models: 1,
-    toughness: 9,
-    wounds: 10,
+    toughness: 11,
+    wounds: 16,
     save: 3,
     invuln: null,
     keywords: ['VEHICLE', 'TRANSPORT'],
@@ -192,9 +202,9 @@ export const ARCHETYPES: readonly UnitArchetype[] = [
     name: 'Летающая техника',
     description: 'Авиация и «летуны»: Valkyrie, Stormwings, крейсеры.',
     models: 1,
-    toughness: 10,
-    wounds: 14,
-    save: 2,
+    toughness: 9,
+    wounds: 12,
+    save: 3,
     invuln: null,
     keywords: ['VEHICLE', 'FLY'],
     points: 170,
@@ -216,9 +226,9 @@ export const ARCHETYPES: readonly UnitArchetype[] = [
     name: 'Укрепление',
     description: 'Стационарная цель: Bastion, блокпост, храм.',
     models: 1,
-    toughness: 10,
+    toughness: 12,
     wounds: 12,
-    save: 4,
+    save: 3,
     invuln: null,
     keywords: ['FORTIFICATION'],
     points: 145,

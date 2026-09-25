@@ -7,7 +7,16 @@
  */
 
 import { rollDice } from './dice.ts';
+import { keywordOf } from './keywords.ts';
 import type { CombatRules, RuleFragment } from './types.ts';
+
+/** Кейворды цели (весь отряд + модель) — для условий вида 'non-MONSTER/VEHICLE'. */
+function targetKeywordsOf(ctx: {
+  defender: { keywords: string[] };
+  target: { keywords: string[] };
+}): string[] {
+  return [...ctx.defender.keywords, ...ctx.target.keywords];
+}
 
 /** Целевые пороги нельзя модифицировать лучше 2+ и хуже 6+. */
 export function clampTarget(target: number): number {
@@ -63,16 +72,21 @@ export function standardRules(): CombatRules {
 
     extraHits: [
       // [SUSTAINED HITS X]: каждый крит. попадание добавляет X попаданий.
+      // Условие ('non-MONSTER/VEHICLE') проверяется по кейвордам цели.
       (ctx, critHits) => {
-        const sustained = ctx.weapon.keywords.find((k) => k.name === 'sustained');
-        if (!sustained?.value || critHits === 0) return 0;
+        if (critHits === 0) return 0;
+        const sustained = keywordOf(ctx.weapon.keywords, 'sustained', targetKeywordsOf(ctx));
+        if (!sustained?.value) return 0;
         return critHits * rollDice(sustained.value, ctx.rng);
       },
     ],
 
     lethalCritHits: [
       // [LETHAL HITS]: крит. попадание автоматически ранит (в 11-й редакции).
-      (ctx) => ctx.weapon.keywords.some((k) => k.name === 'lethal'),
+      // Важно учитывать условие: в BSData 81 оружие имеют
+      // 'Lethal Hits: non-MONSTER/VEHICLE' — без проверки такие стволы
+      // автоматически ранили бы и технику, что ломает всю ось урона.
+      (ctx) => keywordOf(ctx.weapon.keywords, 'lethal', targetKeywordsOf(ctx)) !== null,
     ],
 
     criticalWoundTarget: [
@@ -95,7 +109,7 @@ export function standardRules(): CombatRules {
 
     devastatingCritWounds: [
       // [DEVASTATING WOUNDS]: крит. ранение → мортиды = D характеристики.
-      (ctx) => ctx.weapon.keywords.some((k) => k.name === 'devastating'),
+      (ctx) => keywordOf(ctx.weapon.keywords, 'devastating', targetKeywordsOf(ctx)) !== null,
     ],
 
     saveTarget: [],
