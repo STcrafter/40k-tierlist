@@ -564,9 +564,9 @@ function weaponCard(
   weapon: UnitProfile['models'][number]['weapons'][number],
   weaponIndex: number,
   modelIndex: number,
-  onlyKind: 'ranged' | 'melee'
+  onlyKind: 'ranged' | 'melee' | 'both'
 ): string {
-  const active = weapon.kind === onlyKind;
+  const active = onlyKind === 'both' || weapon.kind === onlyKind;
   const base = `models.${modelIndex}.weapons.${weaponIndex}`;
   const fields = [
     numberField('A', weapon.attacks?.count ?? null, `${base}.attacks.count`, 0, 20),
@@ -581,6 +581,7 @@ function weaponCard(
       <span class="name">${weapon.name}</span>
       <span class="profile">${weaponProfileText(weapon)}</span>
     </div>
+    ${weapon.keywords.length > 0 ? `<div class="weapon-keywords">${weapon.keywords.map((keyword) => `<span class="weapon-keyword" title="${keyword.name}">${keyword.raw}</span>`).join('')}</div>` : ''}
     <div class="field-grid" style="opacity:${active ? 1 : 0.4}">
       ${active ? fields : '<span class="profile">Не участвует в выбранном режиме боя</span>'}
     </div>
@@ -594,7 +595,7 @@ function renderEditor(unit: UnitEntry): string {
   const metrics = metricsOf(unit);
   const row = state.rows.get(unit.id);
   // В комбинированном режиме показываем оба типа оружия, иначе — только рабочие.
-  const onlyKind: 'ranged' | 'melee' = state.mode === 'ranged' ? 'ranged' : 'melee';
+  const onlyKind: 'ranged' | 'melee' | 'both' = state.mode === 'ranged' ? 'ranged' : state.mode === 'melee' ? 'melee' : 'both';
   const showBoth = state.mode === 'combined';
 
   const model = profile.models[0];
