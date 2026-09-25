@@ -58,6 +58,7 @@ interface AttachedPayload {
   leaderId: string | null;
   name: string;
   faction: string;
+  factions: string[];
   points: number;
   tier: TierRow['tier'];
   totalScore: number;
@@ -73,33 +74,27 @@ const byParadigm: Record<string, Record<string, TierRow[]>> = {};
 // Сразу сохраняем только компактные поля. Хранить 12 000 полных TierRow
 // одновременно не нужно и на практике расходовало всю heap-память процесса.
 const attachedByParadigm: Record<string, Record<string, AttachedPayload[]>> = {};
-const chapterFactions = new Set([
-  'Black Templars', 'Blood Angels', 'Dark Angels', 'Deathwatch', 'Emperor\'s Children',
-  'Imperial Fists', 'Iron Hands', 'Raven Guard', 'Salamanders', 'Space Wolves',
-  'Ultramarines', 'White Scars',
-]);
+/** Общий Astartes-юнит принадлежит каждому чаптеру через factions, а не через одну строку faction. */
+function sharesFaction(unit: BsDatasheet, leader: { factions: string[] }): boolean {
+  return leader.factions.some((faction) => unit.factions.includes(faction));
+}
 
-/** BSData хранит общие Astartes-даташиты в каталоге Space Marines, даже когда
- * они используются в конкретном чаптере. Поэтому для лидера чаптера такая
- * пара валидна, но фракцию строки нужно показывать как фракцию чаптера. */
-function attachedFaction(leaderFaction: string, unitFaction: string): string | null {
-  if (leaderFaction === unitFaction) return leaderFaction;
-  if (unitFaction === 'Adeptus Astartes' && chapterFactions.has(leaderFaction)) return leaderFaction;
-  return null;
+function pairFactions(id: string): string[] {
+  const [unitId, leaderId] = id.split('+');
+  const unit = prepared.find((item) => item.datasheet.id === unitId)?.datasheet;
+  const leader = leaders.find((item) => item.id === leaderId);
+  return [...new Set([...(unit?.factions ?? []), ...(leader?.factions ?? [])])];
 }
 
 for (const paradigm of paradigms) {
   byParadigm[paradigm] = {};
   attachedByParadigm[paradigm] = {};
-  // В BSData один отряд может принимать до 29 лидеров. Для отдельной вкладки
-  // оставляем одного наиболее сильного кандидата на каждый отряд: полный
-  // декартов набор даёт 1000 пар и 12 000 дорогих Монте-Карло прогонов, из-за
-  // чего процесс сборки данных нестабилен. Сила лидера оценивается по сумме
-  // числовых бонусов, reroll-правил и оружейных кейвордов; при равенстве
-  // выбирается более дешёвый вариант.
+  // В BSData один отряд может принимать несколько Leader/Support. Сохраняем
+  // каждую пару, которую явно разрешает локальная база BSData; это отдельная
+  // вкладка, поэтому здесь не нужно искусственно выбирать одного лидера.
   const attachedEntries = prepared.flatMap(({ datasheet, unit, points }) => {
     const candidates = leaders
-      .filter((leader) => attachedFaction(leader.faction, datasheet.faction) !== null)
+      .filter((leader) => sharesFaction(datasheet, leader))
       .filter((leader) => leader.allowedUnitIds.includes(datasheet.id))
       .filter((leader) => points + leader.points <= 2000);
     return candidates.map((leader) => ({
@@ -108,7 +103,8 @@ for (const paradigm of paradigms) {
       points,
       leader,
       rowId: `${datasheet.id}+${leader.id}`,
-      faction: attachedFaction(leader.faction, datasheet.faction) ?? datasheet.faction,
+      faction: leader.faction,
+      factions: [...new Set([...datasheet.factions, ...leader.factions])],
     }));
   });
   for (const mode of modes) {
@@ -130,6 +126,7 @@ for (const paradigm of paradigms) {
       leaderId: row.id.split('+')[1] ?? null,
       name: row.name,
       faction: row.faction,
+      factions: pairFactions(row.id),
       points: row.points,
       tier: row.tier,
       totalScore: row.totalScore,
@@ -191,6 +188,7 @@ const payload = {
     id: leader.id,
     name: leader.name,
     faction: leader.faction,
+    factions: leader.factions,
     points: leader.points,
     keywords: leader.keywords,
     allowedUnitIds: leader.allowedUnitIds,
@@ -198,7 +196,7 @@ const payload = {
     abilities: leader.abilities,
     unit: unitProfileOf(leader.unit, leader.points),
   })),
-  factions: [...new Set(prepared.map((item) => item.datasheet.faction))].sort(),
+  factions: [...new Set(prepared.flatMap((item) => item.datasheet.factions))].sort(),
   units: prepared.map(({ datasheet, unit, points, loadouts }) => {
     const base = byParadigm.all.combined.find((row) => row.id === datasheet.id);
     const metricsFor = (paradigm: TargetParadigm, mode: CombatMode) => {
@@ -242,6 +240,7 @@ const payload = {
       id: datasheet.id,
       name: datasheet.name,
       faction: datasheet.faction,
+      factions: datasheet.factions,
       points,
       models: unit.models.length,
       archetype: archetypeOf(unit)?.id ?? 'unknown',

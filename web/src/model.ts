@@ -86,7 +86,10 @@ export interface UnitProfile {
 export interface UnitEntry {
   id: string;
   name: string;
+  /** Основная фракция для отображения. */
   faction: string;
+  /** Все фракции из BSData categoryLinks, включая Astartes и чаптер. */
+  factions: string[];
   points: number;
   models: number;
   archetype: string;
@@ -103,6 +106,7 @@ export interface LeaderSummary {
   id: string;
   name: string;
   faction: string;
+  factions: string[];
   points: number;
   keywords: string[];
   allowedUnitIds: string[];
@@ -115,7 +119,9 @@ export interface AttachedRow {
   unitId: string;
   leaderId: string | null;
   name: string;
+  /** Все фракции пары: основная faction отряда и faction лидера. */
   faction: string;
+  factions: string[];
   points: number;
   tier: Tier;
   totalScore: number;

@@ -121,6 +121,17 @@ describe('parseBsDatabase', () => {
     expect(report.datasheetsWithoutModels.length).toBeLessThan(50);
   });
 
+  it('сохраняет Astartes как гиперфракцию и добавляет чаптеры к общим юнитам', () => {
+    const intercessors = findByName('Intercessor Squad');
+    expect(intercessors.faction).toBe('Adeptus Astartes');
+    expect(intercessors.factions).toEqual(expect.arrayContaining([
+      'Adeptus Astartes', 'Space Wolves', 'Blood Angels', 'Black Templars', 'Ultramarines',
+    ]));
+    const lysander = findByName('Darnath Lysander');
+    expect(lysander.faction).toBe('Adeptus Astartes');
+    expect(lysander.factions).toContain('Imperial Fists');
+  });
+
   it('дедуплицирует даташиты библиотечных каталогов', () => {
     const ids = new Set(datasheets.map((datasheet) => datasheet.id));
     expect(ids.size).toBe(datasheets.length);

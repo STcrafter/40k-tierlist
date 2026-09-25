@@ -353,7 +353,8 @@ describe('тирлист', () => {
     expect(techPriest?.allowedUnitIds.length).toBeGreaterThan(0);
 
     const lysander = definitions.find((leader) => leader.name === 'Darnath Lysander');
-    expect(lysander?.faction).toBe('Imperial Fists');
+    expect(lysander?.faction).toBe('Adeptus Astartes');
+    expect(lysander?.factions).toContain('Imperial Fists');
     expect(lysander?.allowedUnitIds.length).toBeGreaterThan(0);
   });
 

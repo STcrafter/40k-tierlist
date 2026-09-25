@@ -141,7 +141,10 @@ export interface BsDatasheet {
   name: string;
   /** 'unit' — отряд, 'model' — одиночный даташит (техника, персонаж). */
   kind: 'unit' | 'model';
+  /** Основная фракция для обратной совместимости; для Astartes — Adeptus Astartes. */
   faction: string;
+  /** Все фракционные categoryLinks, включая Adeptus Astartes и конкретный чаптер. */
+  factions: string[];
   catalogue: string;
   sourceFile: string;
   keywords: string[];

@@ -123,7 +123,7 @@ export function parseBsDatabase(db: BsDatabase, options: BsParseOptions = {}): B
       const result = buildDatasheet(link, db, {
         catalogueName: String(document.node.name ?? document.fileName),
         sourceFile: document.fileName,
-        catalogueFaction: null,
+        catalogueFaction: factionFromCatalogueName(String(document.node.name ?? document.fileName)),
       });
 
       if (result.reason === 'no-cost') {
@@ -147,16 +147,21 @@ export function parseBsDatabase(db: BsDatabase, options: BsParseOptions = {}): B
     for (const built of collected) {
       const datasheet = options.roster === 'drop' ? withoutRosterDatasheet(built) : built;
       const resolved: BsDatasheet =
-        datasheet.faction === 'Unknown' ? { ...datasheet, faction } : datasheet;
+        datasheet.faction === 'Unknown'
+          ? { ...datasheet, faction, factions: datasheet.factions.includes(faction) ? datasheet.factions : [...datasheet.factions, faction] }
+          : datasheet;
 
       // Дедупликация: одно и то же определение может быть связано из нескольких
       // каталогов (например, из «- Library» и из фракционного файла).
       const existing = byId.get(resolved.id);
       if (existing) {
+        const mergedFactions = [...new Set([...existing.factions, ...resolved.factions])];
+        const merged: BsDatasheet = { ...existing, factions: mergedFactions };
         const better =
           (existing.faction === 'Unknown' && resolved.faction !== 'Unknown') ||
           resolved.variants.length > existing.variants.length;
-        if (better) byId.set(resolved.id, resolved);
+        if (better) byId.set(resolved.id, { ...resolved, factions: mergedFactions });
+        else if (mergedFactions.length > existing.factions.length) byId.set(resolved.id, merged);
         continue;
       }
 

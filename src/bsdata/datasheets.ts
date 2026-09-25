@@ -49,11 +49,21 @@ export function knownIdsOf(groups: BsModelGroup[], datasheetId: string): Set<str
   return ids;
 }
 
+/** Чаптеры, для которых BSData использует общие Astartes-даташиты. */
+export const ASTARTES_CHAPTERS = [
+  'Black Templars', 'Blood Angels', 'Dark Angels', 'Deathwatch', "Emperor's Children",
+  'Imperial Fists', 'Iron Hands', 'Raven Guard', 'Salamanders', 'Space Wolves',
+  'Ultramarines', 'White Scars',
+] as const;
+
+export const ASTARTES_CHAPTER_SET = new Set<string>(ASTARTES_CHAPTERS);
+
 /** Ключевые слова и фракция из categoryLinks ('Faction: Orks'). */
 export function categoriesOf(
   link: BsEntryLinkRaw,
-  target: BsSelectionNodeRaw
-): { keywords: string[]; faction: string | null } {
+  target: BsSelectionNodeRaw,
+  catalogueFaction: string | null = null
+): { keywords: string[]; faction: string | null; factions: string[] } {
   const names = new Set<string>();
 
   for (const category of asArray(target.categoryLinks)) {
@@ -64,17 +74,30 @@ export function categoriesOf(
   }
 
   const keywords = [...names];
-  // В BSData многие ордены Space Marines имеют сразу два фракционных кейворда:
-  // 'Faction: Adeptus Astartes' и конкретный чаптер ('Faction: Space Wolves',
-  // 'Faction: Blood Angels', 'Faction: Black Templars', 'Faction: Dark Angels' и т.д.).
-  // Если есть более узкий орден, отдаём предпочтение ему, чтобы юниты орденов
-  // не растворялись в общем Adeptus Astartes.
-  const factions = keywords
-    .filter((keyword) => keyword.startsWith('Faction: '))
-    .map((keyword) => keyword.slice('Faction: '.length));
-  const chapterFaction = factions.find((f) => f !== 'Adeptus Astartes');
-  const faction = chapterFaction ?? factions[0] ?? null;
-  return { keywords, faction };
+  // В BSData общий Astartes-даташит и конкретный чаптер — это две categoryLinks,
+  // а не альтернативные значения одного поля. Основная faction всегда
+  // Adeptus Astartes, а factions сохраняет оба значения для фильтра чаптера.
+  const rawFactions = [...new Set(
+    keywords
+      .filter((keyword) => keyword.startsWith('Faction: '))
+      .map((keyword) => keyword.slice('Faction: '.length))
+  )];
+  const factions = [...new Set(
+    catalogueFaction && ASTARTES_CHAPTER_SET.has(catalogueFaction) && rawFactions.includes('Adeptus Astartes')
+      ? [...rawFactions, catalogueFaction]
+      : rawFactions
+  )];
+  const explicitChapter = factions.find((value) => ASTARTES_CHAPTER_SET.has(value));
+  // Общий Astartes-даташит (только Adeptus Astartes) входит в ростер каждого
+  // чаптера. Даташит с собственным Faction: Chapter остаётся только в своём
+  // чаптере и в гиперфракции Adeptus Astartes.
+  const expandedFactions = factions.includes('Adeptus Astartes') && explicitChapter === undefined
+    ? [...factions, ...ASTARTES_CHAPTERS]
+    : factions;
+  const faction = factions.includes('Adeptus Astartes')
+    ? 'Adeptus Astartes'
+    : factions[0] ?? null;
+  return { keywords, faction, factions: expandedFactions };
 }
 
 export interface DatasheetBuildResult {
@@ -116,7 +139,7 @@ export function buildDatasheet(
 
   const groups = modelGroupsOf(entry, db);
   const id = String(entry.id ?? link.targetId ?? '');
-  const categories = categoriesOf(link, entry);
+  const categories = categoriesOf(link, entry, context.catalogueFaction);
   const cost = costFormula(entry, knownIdsOf(groups, id), db);
 
   if (cost.base === 0) return { datasheet: null, reason: 'no-cost' };
@@ -141,6 +164,9 @@ export function buildDatasheet(
       name: String(entry.name ?? link.name ?? ''),
       kind: entry.type,
       faction: categories.faction ?? context.catalogueFaction ?? 'Unknown',
+      factions: categories.factions.length > 0
+        ? categories.factions
+        : [categories.faction ?? context.catalogueFaction ?? 'Unknown'],
       catalogue: context.catalogueName,
       sourceFile: context.sourceFile,
       keywords: categories.keywords,

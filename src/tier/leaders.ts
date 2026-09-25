@@ -33,6 +33,7 @@ export interface LeaderDefinition {
   id: string;
   name: string;
   faction: string;
+  factions: string[];
   points: number;
   keywords: string[];
   allowedUnitIds: string[];
@@ -89,6 +90,7 @@ export function leaderDefinitionsOf(datasheets: BsDatasheet[]): LeaderDefinition
       id: datasheet.id,
       name: datasheet.name,
       faction: datasheet.faction,
+      factions: datasheet.factions,
       points: adapted.points,
       keywords: datasheet.keywords,
       allowedUnitIds,

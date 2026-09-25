@@ -262,7 +262,7 @@ function visibleUnits(): UnitEntry[] {
   const rows = state.data.units.filter((unit) => {
     if (state.view === 'attached') return false;
     if (!withinCalculationBudget(pointsOf(unit))) return false;
-    if (state.faction && unit.faction !== state.faction) return false;
+    if (state.faction && !unit.factions.includes(state.faction)) return false;
     if (state.tierFilter.size > 0 && !state.tierFilter.has(state.rows.get(unit.id)?.tier ?? 'D')) {
       return false;
     }
@@ -284,7 +284,7 @@ function visibleUnits(): UnitEntry[] {
 function visibleAttachedRows(): import('./model.ts').AttachedRow[] {
   const needle = state.search.trim().toLowerCase();
   return state.attachedRows.filter((row) => {
-    if (state.faction && row.faction !== state.faction) return false;
+    if (state.faction && !row.factions.includes(state.faction)) return false;
     if (state.tierFilter.size > 0 && !state.tierFilter.has(row.tier)) return false;
     return needle === '' || row.name.toLowerCase().includes(needle);
   });
@@ -703,7 +703,7 @@ function renderAttachedTable(): string {
   const body = rows.map((row) => `<tr>
     <td><span class="tier-badge" data-tier="${row.tier}">${row.tier}</span><span class="unit-name">${row.name}</span></td>
     <td class="num">${row.points}</td>
-    <td>${row.faction}</td>
+    <td>${row.factions.join(' / ')}</td>
     <td class="num">${num(row.rawMaxDamage, 1)}</td>
     <td>${row.bestTargetName}</td>
     <td class="num">${num(row.effectiveSurvivability, 1)}</td>
