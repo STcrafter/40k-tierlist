@@ -17,17 +17,19 @@ import type { BsDatasheet, BsModelVariant } from '../bsdata/types.ts';
 export type UtilityFlagId =
   | 'Deep_Strike'
   | 'Reserves'
+  | 'Scouts'
+  | 'Infiltrator'
   | 'Fly'
   | 'High_Speed'
   | 'FNP_5+'
   | 'FNP_6+'
   | 'Stealth'
   | 'Lurkers'
+  | 'Smoke'
   | 'OC_3+'
   | 'Aura_Re_roll_1s'
   | 'Aura_Ward'
-  | 'Screening'
-  | 'Tie_up';
+  | 'Screening';
 
 /** Сработавший флаг и его цена в баллах. */
 export interface UtilityFlag {
@@ -37,21 +39,34 @@ export interface UtilityFlag {
   reason: string;
 }
 
-/** Баллы за флаги — ровно по ТЗ тирлиста. */
+/**
+ * Баллы за флаги.
+ *
+ * Ориентир — не «сколько правил это даёт», а насколько флаг РЕДОК и насколько
+ * сильно меняет игру. Замер по 1093 юнитам (доля флага в наборе → доля в S):
+ *   Tie_up   60.7% → 84.5%  — срабатывал у 2/3 набора, то есть измерял не
+ *     редкость, а наличие рукопашного оружия; как «полезность» бесполезен.
+ *   OC_3+    27.6% → 82.7%  — самый высокий подъём при цене 2 очка: способность
+ *     почти не влияет на бой, поэтому и оценена ниже.
+ *   Deep_Strike 29.3% → 58.2% — реально решает партию, поднято до 3.
+ *   Stealth/Lurkers 1.0% — очень редки и решают исход, подняты до 2.
+ */
 export const UTILITY_POINTS: Record<UtilityFlagId, number> = {
-  Deep_Strike: 2,
+  Deep_Strike: 3,
   Reserves: 2,
+  Scouts: 3,
+  Infiltrator: 3,
   Fly: 1,
   High_Speed: 1,
   'FNP_5+': 2,
   'FNP_6+': 2,
-  Stealth: 1,
-  Lurkers: 1,
-  'OC_3+': 2,
+  Stealth: 2,
+  Lurkers: 2,
+  Smoke: 2,
+  'OC_3+': 1,
   Aura_Re_roll_1s: 2,
   Aura_Ward: 2,
   Screening: 3,
-  Tie_up: 3,
 };
 
 /** Потолок utility_score. */
@@ -87,24 +102,29 @@ function hasFnpAtLeast(texts: string[], value: 5 | 6): boolean {
 }
 
 /**
- * Разбор даташита в список utility-флагов.
+ * Убирает из текста отрицания, прежде чем искать способность.
  *
- * `meleeOutput` — рукопашный урон на 100 очков. Нужен только для флага
- * связывания: в базе нет однозначного признака «этот отряд удерживает врага»,
- * поэтому используется запасной вариант — рукопашный отряд с реальной
- * угрозой в ближнем бою. Порог настраивается (`tieUpThreshold`).
+ * В BSData много апгрейдов вида «it loses the Scouts 9" ability» или
+ * «remove the Infiltrators». Без этого отряды, которые способность ПОТЕРЯЛИ,
+ * считались бы обладающими ею: на 1093 даташитах ложных срабатываний было 6.
  */
-export interface UtilityContext {
-  /** Рукопашный урон на 100 очков — для флага связывания. */
-  meleePer100?: number | null;
-  /** Порог «руки работают» для флага Tie_up (по умолчанию 1.0). */
-  tieUpThreshold?: number;
+function withoutNegations(text: string): string {
+  return text.replace(/[^.]*\b(loses?|lost|remove[sd]?|no longer has|without)\b[^.]*/gi, ' ');
 }
 
-export function detectUtilityFlags(
-  datasheet: BsDatasheet,
-  context: UtilityContext = {}
-): UtilityFlag[] {
+/**
+ * Разбор даташита в список utility-флагов.
+ *
+ * Все флаги выводятся из данных BSData, а не задаются руками, и у каждого
+ * сохраняется `reason` — что именно в данных его дало, чтобы список можно
+ * было проверить глазами.
+ *
+ * Раньше набор принимал `UtilityContext` с рукопашным уроном: по нему
+ * выдавался Tie_up, но тот срабатывал у 60.7% юнитов и лишь дублировал ось
+ * ближнего боя, поэтому и был убран вместе с контекстом.
+ */
+
+export function detectUtilityFlags(datasheet: BsDatasheet): UtilityFlag[] {
   const flags: UtilityFlag[] = [];
   const add = (id: UtilityFlagId, reason: string): void => {
     if (flags.some((flag) => flag.id === id)) return;
@@ -112,20 +132,32 @@ export function detectUtilityFlags(
   };
 
   const abilities = datasheet.abilities;
-  const texts = [...datasheetsTexts(datasheet)].map((text) => text.toLowerCase());
+  const rawTexts = datasheetsTexts(datasheet).map((text) => text.toLowerCase());
+  // Для поиска самой способности отрицания вырезаются: «loses the Scouts 9"»
+  // не должно превращать отряд в обладателя Scouts.
+  const texts = rawTexts.map((text) => withoutNegations(text));
   const names = abilities.map((ability) => ability.name.toLowerCase());
-  const keywords = datasheet.keywords.map((keyword) => keyword.toLowerCase());
+  const keywords = datasheet.keywords.map((keyword) => keyword.trim().toLowerCase());
+  const all = texts.join(' ');
 
   // --- Небоевые вводные: атака с фланга/сверху, резервы. ---
   if (names.includes('deep strike') || texts.some((t) => t.includes('deep strike'))) {
     add('Deep_Strike', 'способность Deep Strike');
   }
   if (
-    names.includes('scouts') ||
     names.includes('cult ambush') ||
     texts.some((t) => t.includes('reserves') || t.includes('tunnelling') || t.includes('tunneling'))
   ) {
-    add('Reserves', 'ввод в бой из резерва (Scouts/Cult Ambush/Reserves)');
+    add('Reserves', 'ввод в бой из резерва (Cult Ambush/Reserves)');
+  }
+
+  // --- Скауты и инфильтраторы: ввод в бой вне фазы развёртывания. ---
+  // В BSData это не кейворды, а именованные способности «Scouts 7"» и
+  // «Infiltrators», поэтому ищем их по тексту. Слово «Scout» само по себе
+  // пропускаем: «Scout Squad» встречается в списках присоединения лидеров.
+  if (/\bscouts\s+\d/i.test(all)) add('Scouts', 'способность Scouts (ввод до первой фазы)');
+  if (/\binfiltrators\b/i.test(all) || /\binfiltrator\s+squad\b/i.test(datasheet.name)) {
+    add('Infiltrator', 'способность Infiltrators (ввод в любой момент)');
   }
 
   // --- Скорость: полёт или быстрый бег. ---
@@ -143,6 +175,12 @@ export function detectUtilityFlags(
   }
   if (names.some((name) => name.includes('lurker') || name.includes('shadowsight'))) {
     add('Lurkers', 'умение засадчика (lurker/shadowsight)');
+  }
+
+  // --- Дым. У 188 юнитов это кейворд даташита, но у части (например у
+  // Achilles Ridgerunners) его выдаёт способность «has the SMOKE keyword».
+  if (keywords.includes('smoke') || texts.some((t) => /\bsmoke keyword\b/.test(t))) {
+    add('Smoke', 'кейворд SMOKE (дым накрывает цель)');
   }
 
   // --- Objective Control 3+ (берём максимум по моделям отряда). ---
@@ -163,15 +201,12 @@ export function detectUtilityFlags(
     }
   }
 
-  // --- Связывание: мешают врагу вступить в ближний бой. ---
+  // --- Связывание: мешают врагу вступить в ближний бой рядом. ---
+  // Раньше Tie_up выдавался любому отряду с meleePer100 ≥ 1.0, то есть
+  // срабатывал у 60.7% набора и просто дублировал ось ближнего боя. Теперь
+  // флаг означает только настоящее «нельзя вступить в бой».
   if (texts.some((t) => t.includes('cannot be engaged') || t.includes('cannot engage'))) {
     add('Screening', 'не даёт врагу вступить в ближний бой рядом');
-  } else {
-    const threshold = context.tieUpThreshold ?? 1.0;
-    const melee = context.meleePer100 ?? 0;
-    if (melee >= threshold) {
-      add('Tie_up', `рукопашная угроза ${melee.toFixed(2)} на 100 очков`);
-    }
   }
 
   return flags;

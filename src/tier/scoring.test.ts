@@ -20,7 +20,7 @@ import {
   tierList,
   tierOf,
 } from './scoring.ts';
-import { detectUtilityFlags, utilityScoreOf, UTILITY_MAX } from './utility.ts';
+import { detectUtilityFlags, utilityScoreOf, UTILITY_MAX, UTILITY_POINTS } from './utility.ts';
 import { attachLeaderToUnit, leaderDefinitionsOf } from './leaders.ts';
 import type { BsDatasheet } from '../bsdata/types.ts';
 
@@ -66,10 +66,40 @@ describe('utility-флаги', () => {
     expect(flags.some((flag) => flag.id === 'FNP_5+')).toBe(false);
   });
 
-  it('OC 3+ даёт 2 балла', () => {
-    // У Intercessors OC = 2, поэтому берём юнита с OC 4.
+  it('OC 3+ даёт 1 балл', () => {
+    // Замер на 1093 юнитах: OC 3+ встречался у 27.6% набора, но в S-тир
+    // попадал в 82.7% — самый высокий подъём среди флагов. Способность почти
+    // не влияет на исход боя, поэтому и стоит 1 балл, а не 2.
     const flags = detectUtilityFlags(find('Abaddon the Despoiler'));
-    expect(flags.find((flag) => flag.id === 'OC_3+')?.points).toBe(2);
+    expect(flags.find((flag) => flag.id === 'OC_3+')?.points).toBe(1);
+  });
+
+  it('Infiltrator и Scouts стоят дороже OC', () => {
+    // Оба решают ввод в бой вне фазы развёртывания — редкие и решающие.
+    expect(UTILITY_POINTS.Infiltrator).toBeGreaterThan(UTILITY_POINTS['OC_3+']);
+    expect(UTILITY_POINTS.Scouts).toBeGreaterThan(UTILITY_POINTS['OC_3+']);
+  });
+
+  it('способность, которую отряд ПОТЕРЯЛ, не засчитывается', () => {
+    // Регрессия: в BSData есть апгрейды «it loses the Scouts 9" ability».
+    // Без вырезания отрицаний такие отряды считались бы обладателями Scouts.
+    const lost = detectUtilityFlags(find('Front-line Commander [Crucible]'));
+    expect(lost.some((flag) => flag.id === 'Scouts')).toBe(false);
+  });
+
+  it('дым определяется по кейворду SMOKE', () => {
+    // 188 юнитов BSData несут кейворд SMOKE — это структурное поле, а не текст.
+    const flags = detectUtilityFlags(find('Baneblade'));
+    expect(flags.some((flag) => flag.id === 'Smoke')).toBe(true);
+  });
+
+  it('дым даётся и способностью, выдающей кейворд', () => {
+    // Не у всех носителей SMOKE это кейворд даташита: у Achilles Ridgerunners
+    // его даёт способность «Flare launcher» («has the SMOKE keyword»).
+    const byAbility = detectUtilityFlags(find('Achilles Ridgerunners'));
+    const byKeyword = detectUtilityFlags(find('Baneblade'));
+    expect(byKeyword.find((flag) => flag.id === 'Smoke')?.points).toBe(UTILITY_POINTS.Smoke);
+    expect(byAbility.find((flag) => flag.id === 'Smoke')?.points).toBe(UTILITY_POINTS.Smoke);
   });
 
   it('юнит с OC 2 флага OC_3+ не получает', () => {
@@ -79,19 +109,18 @@ describe('utility-флаги', () => {
   });
 
   it('сумма ограничена потолком 20', () => {
-    // Баллы намеренно копим выше потолка: 2+2+2+2+1+1+3+3+2+2+2 = 22 → обрезается до 20.
+    // Баллы намеренно копим выше потолка, чтобы проверить обрезку.
     const flags = [
-      { id: 'Deep_Strike' as const, points: 2, reason: '' },
+      { id: 'Deep_Strike' as const, points: 3, reason: '' },
+      { id: 'Infiltrator' as const, points: 3, reason: '' },
+      { id: 'Scouts' as const, points: 3, reason: '' },
       { id: 'Reserves' as const, points: 2, reason: '' },
       { id: 'FNP_6+' as const, points: 2, reason: '' },
       { id: 'FNP_5+' as const, points: 2, reason: '' },
-      { id: 'Fly' as const, points: 1, reason: '' },
-      { id: 'Stealth' as const, points: 1, reason: '' },
+      { id: 'Stealth' as const, points: 2, reason: '' },
+      { id: 'Smoke' as const, points: 2, reason: '' },
       { id: 'Screening' as const, points: 3, reason: '' },
-      { id: 'Tie_up' as const, points: 3, reason: '' },
-      { id: 'OC_3+' as const, points: 2, reason: '' },
-      { id: 'Aura_Ward' as const, points: 2, reason: '' },
-      { id: 'Aura_Re_roll_1s' as const, points: 2, reason: '' },
+      { id: 'OC_3+' as const, points: 1, reason: '' },
     ];
     const sum = flags.reduce((total, flag) => total + flag.points, 0);
     expect(sum).toBeGreaterThan(UTILITY_MAX);
