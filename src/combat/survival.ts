@@ -80,7 +80,12 @@ export interface SurvivalResult {
   /** По каждому шаблону оружия. */
   weapons: WeaponThreat[];
   /** По группам оружия (стрелковое / рукопашное / тяжёлое / …). */
-  byGroup: Record<string, { damagePerRound: SurvivalStat; roundsToKill: SurvivalStat }>;
+  byGroup: Record<string, {
+    damagePerRound: SurvivalStat;
+    roundsToKill: SurvivalStat;
+    /** Пережитый урон на 100 очков цели; меньше = живучее. */
+    takenPer100Points: SurvivalStat;
+  }>;
   /** Усреднение по всем шаблонам оружия — итоговая живучесть. */
   overall: {
     damagePerRound: SurvivalStat;
@@ -238,6 +243,7 @@ export function survivabilityAgainstUnit(
     byGroup[group] = {
       damagePerRound: stat(inGroup.map((threat) => threat.damagePerRound.mean)),
       roundsToKill: stat(inGroup.map((threat) => threat.roundsToKill.mean)),
+      takenPer100Points: stat(inGroup.map((threat) => threat.takenPer100Points.mean)),
     };
   }
 

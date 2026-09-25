@@ -397,11 +397,69 @@ describe('тирлист', () => {
     }
   });
 
-  it('нормализация одинакова для всех юнитов набора', () => {
+  it('векторная шкала сжата в диапазон и не прилипает к краям', () => {
+    // Регрессия min-max: раньше metrics[0] всегда равнялась ровно 100, и
+    // одного удачного матчапа хватало для верха шкалы. Теперь 100 и 0
+    // недостижимы для набора, где никто не доминирует по всем целям сразу,
+    // но разброс по юнитам сохраняется.
     const rows = tierList(entries, fast);
     const damages = rows.map((row) => row.normDamage);
-    expect(Math.max(...damages)).toBeCloseTo(100, 6);
-    expect(Math.min(...damages)).toBeCloseTo(0, 6);
+    for (const value of damages) {
+      expect(value, 'значение на шкале 0–100').toBeGreaterThanOrEqual(0);
+      expect(value, 'значение на шкале 0–100').toBeLessThanOrEqual(100);
+    }
+    const min = Math.min(...damages);
+    const max = Math.max(...damages);
+    // Ширина шкалы: верх и низ заметно разделены, иначе все юниты слиплись бы.
+    expect(max - min).toBeGreaterThan(20);
+    // Никто не забирает весь верх шкалы: это и есть смысл векторной модели.
+    expect(max).toBeLessThan(100);
+    expect(min).toBeGreaterThan(0);
+  });
+
+  it('один удачный матчап не поднимает юнита до верха шкалы', () => {
+    // Ключевое свойство векторной модели: узкий специалист (силён против
+    // одной цели, слаб против остальных) не должен получать максимум.
+    const rows = tierList(entries, fast);
+    for (const row of rows) {
+      const components = Object.values(row.effectiveOffenseVector);
+      if (components.length < 2) continue;
+      const best = Math.max(...components);
+      const worst = Math.min(...components);
+      if (best === worst) continue;
+      // Специалист обязан быть заметно ниже юнита, равномерно сильного.
+      expect(row.vectorDamageFloor).toBeLessThanOrEqual(row.normDamage + 1e-9);
+      expect(row.normDamage).toBeLessThan(100);
+    }
+  });
+
+  it('векторы урона и защиты заполнены по всем компонентам', () => {
+    const rows = tierList(entries, fast);
+    for (const row of rows) {
+      expect(Object.keys(row.effectiveOffenseVector).length, row.name).toBeGreaterThan(0);
+      expect(Object.keys(row.defenseVector).length, row.name).toBeGreaterThan(0);
+      for (const [group, value] of Object.entries(row.defenseVector)) {
+        expect(Number.isFinite(value), `${row.name}/${group}`).toBe(true);
+        expect(value, `${row.name}/${group}`).toBeGreaterThan(0);
+      }
+      // Нижний квартиль не может превышать среднее по рангам.
+      expect(row.vectorDamageFloor).toBeLessThanOrEqual(row.vectorDamageScore + 1e-9);
+      expect(row.vectorSurvivabilityFloor).toBeLessThanOrEqual(row.vectorSurvivabilityScore + 1e-9);
+    }
+  });
+
+  it('в режиме стрельбы melee-штраф не применяется', () => {
+    // Рукопашная фаза в 'ranged' не участвует — штраф за неё был бы двойным.
+    const meleeFirst = entries.find((entry) => entry.datasheet.name === 'Boyz');
+    if (meleeFirst === undefined) return;
+    const ranged = rawScoreOf(
+      meleeFirst.datasheet,
+      meleeFirst.unit,
+      meleeFirst.points,
+      { ...fast, mode: 'ranged' }
+    );
+    expect(ranged.tax.damage).toBe(1);
+    expect(ranged.tax.survivability).toBe(1);
   });
 
   it('перцентили покрывают весь диапазон, а не прилипают к нулю', () => {

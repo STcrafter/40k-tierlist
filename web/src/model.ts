@@ -22,6 +22,10 @@ export interface UnitMetrics {
   bestTarget: string;
   bestTargetName: string;
   destroyedPointsByTarget: Record<string, number>;
+  /** Вектор защиты по группам оружия (сырой, до общей нормировки). */
+  defenseVector: Record<string, number>;
+  /** Вектор атаки после Melee Tax, по типам целей. */
+  effectiveOffenseVector: Record<string, number>;
   damagePer100: number;
   /** Универсальное среднее destroyed points по выбранной парадигме. */
   universal: number;
@@ -36,6 +40,10 @@ export interface UnitMetrics {
   normDamage: number;
   normSurvivability: number;
   normUtility: number;
+  vectorDamageScore: number;
+  vectorSurvivabilityScore: number;
+  vectorDamageFloor: number;
+  vectorSurvivabilityFloor: number;
   utilityFlags: Array<{ id: string; points: number; reason: string }>;
   utilityScore: number;
   totalScore: number;
@@ -154,6 +162,10 @@ export interface ScoredRow {
   normDamage: number;
   normSurvivability: number;
   normUtility: number;
+  vectorDamageScore: number;
+  vectorSurvivabilityScore: number;
+  vectorDamageFloor: number;
+  vectorSurvivabilityFloor: number;
   totalScore: number;
   percentile: number;
   tier: Tier;
@@ -203,10 +215,30 @@ export function tierOf(percentile: number): Tier {
   return 'D';
 }
 
+/** Среднее по списку. */
+function mean(values: number[]): number {
+  return values.length === 0 ? 0 : values.reduce((sum, value) => sum + value, 0) / values.length;
+}
+
+/**
+ * Перцентиль по отсортированному набору (доля элементов не выше значения).
+ * 0.25 — нижний квартиль: он показывает, насколько юнит слаб там, где слаб.
+ */
+function percentileAt(sorted: number[], fraction: number): number {
+  if (sorted.length === 0) return 50;
+  const index = (sorted.length - 1) * fraction;
+  const low = Math.floor(index);
+  const high = Math.ceil(index);
+  if (low === high) return sorted[low];
+  return sorted[low] + (sorted[high] - sorted[low]) * (index - low);
+}
+
 /** «Сырые» величины юнита — всё, что нужно для нормировки и тиров. */
 export interface RawRow {
   effectiveDamage: number;
   effectiveSurvivability: number;
+  defenseVector: Record<string, number>;
+  effectiveOffenseVector: Record<string, number>;
   utilityScore: number;
   /** Остальные поля метрики (для показа) — не участвуют в скоре. */
   [key: string]: unknown;
@@ -220,19 +252,54 @@ export interface RawRow {
  * как если бы пересобрать тирлист с нуля.
  */
 export function rebuildTierlist<T extends {
-  effectiveDamage: number;
-  effectiveSurvivability: number;
+  defenseVector: Record<string, number>;
+  effectiveOffenseVector: Record<string, number>;
   utilityScore: number;
 }>(units: Array<{ id: string; raw: T }>): Map<string, T & {
   normDamage: number;
   normSurvivability: number;
   normUtility: number;
+  vectorDamageScore: number;
+  vectorSurvivabilityScore: number;
+  vectorDamageFloor: number;
+  vectorSurvivabilityFloor: number;
   totalScore: number;
   percentile: number;
   tier: Tier;
 }> {
-  const normDamage = minMaxNormalize(units.map((unit) => unit.raw.effectiveDamage));
-  const normSurvivability = minMaxNormalize(units.map((unit) => unit.raw.effectiveSurvivability));
+  const rankVector = (
+    keys: string[],
+    pick: (raw: T, key: string) => number
+  ): { scores: number[]; floors: number[] } => {
+    if (keys.length === 0) {
+      return { scores: units.map(() => 50), floors: units.map(() => 50) };
+    }
+    const ranks = keys.map((key) => {
+      const sorted = units
+        .map((unit) => pick(unit.raw, key))
+        .sort((a, b) => a - b);
+      return units.map((unit) => percentileOf(sorted, pick(unit.raw, key)));
+    });
+    return {
+      scores: units.map((_, index) => {
+        const components = ranks.map((component) => component[index]).sort((a, b) => a - b);
+        // Свёртка та же, что на сервере: универсальность + нижний квартиль
+        // + собственная лучшая компонента юнита (не лучшая по всему набору).
+        return (
+          mean(components) * 0.6 +
+          percentileAt(components, 0.25) * 0.25 +
+          (components[components.length - 1] ?? 0) * 0.15
+        );
+      }),
+      floors: units.map((_, index) => percentileAt(ranks.map((component) => component[index]), 0.25)),
+    };
+  };
+  const offenseKeys = Object.keys(units[0]?.raw.effectiveOffenseVector ?? {});
+  const defenseKeys = Object.keys(units[0]?.raw.defenseVector ?? {});
+  const offense = rankVector(offenseKeys, (raw, key) => raw.effectiveOffenseVector[key] ?? 0);
+  const defense = rankVector(defenseKeys, (raw, key) => raw.defenseVector[key] ?? 0);
+  const normDamage = offense.scores;
+  const normSurvivability = defense.scores;
   const normUtility = minMaxNormalize(units.map((unit) => unit.raw.utilityScore));
 
   const totals = units.map((unit, index) => ({
@@ -244,32 +311,29 @@ export function rebuildTierlist<T extends {
     normDamage: normDamage[index],
     normSurvivability: normSurvivability[index],
     normUtility: normUtility[index],
+    vectorDamageScore: offense.scores[index],
+    vectorSurvivabilityScore: defense.scores[index],
+    vectorDamageFloor: offense.floors[index],
+    vectorSurvivabilityFloor: defense.floors[index],
   }));
 
   const sorted = totals.map((row) => row.totalScore).sort((a, b) => a - b);
-  const result = new Map<string, T & {
+  type Scored = T & {
     normDamage: number;
     normSurvivability: number;
     normUtility: number;
+    vectorDamageScore: number;
+    vectorSurvivabilityScore: number;
+    vectorDamageFloor: number;
+    vectorSurvivabilityFloor: number;
     totalScore: number;
     percentile: number;
     tier: Tier;
-  }>();
+  };
+  const result = new Map<string, Scored>();
   totals.forEach((row, index) => {
     const percentile = percentileOf(sorted, row.totalScore);
-    result.set(row.id, {
-      ...units[index].raw,
-      ...row,
-      percentile,
-      tier: tierOf(percentile),
-    } as T & {
-      normDamage: number;
-      normSurvivability: number;
-      normUtility: number;
-      totalScore: number;
-      percentile: number;
-      tier: Tier;
-    });
+    result.set(row.id, { ...units[index].raw, ...row, percentile, tier: tierOf(percentile) } as Scored);
   });
   return result;
 }

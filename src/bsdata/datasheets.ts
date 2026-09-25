@@ -58,6 +58,14 @@ export const ASTARTES_CHAPTERS = [
 
 export const ASTARTES_CHAPTER_SET = new Set<string>(ASTARTES_CHAPTERS);
 
+/** Гиперфракция и подфракции Chaos Daemons. */
+export const CHAOS_DAEMONS_FACTION = 'Legiones Daemonica';
+export const CHAOS_DAEMONS_LEGIONS = [
+  'Blood Legions', 'Plague Legions', 'Scintillating Legions', 'Legions of Excess',
+] as const;
+
+export const CHAOS_DAEMONS_LEGION_SET = new Set<string>(CHAOS_DAEMONS_LEGIONS);
+
 /** Ключевые слова и фракция из categoryLinks ('Faction: Orks'). */
 export function categoriesOf(
   link: BsEntryLinkRaw,
@@ -82,22 +90,32 @@ export function categoriesOf(
       .filter((keyword) => keyword.startsWith('Faction: '))
       .map((keyword) => keyword.slice('Faction: '.length))
   )];
+  // null-каталог (например, служебные файлы) не должен проходить в Set<string>.
+  const catalogue = catalogueFaction ?? '';
+  const isHyperFactionChild = catalogue !== '' &&
+    (ASTARTES_CHAPTER_SET.has(catalogue) || CHAOS_DAEMONS_LEGION_SET.has(catalogue));
   const factions = [...new Set(
-    catalogueFaction && ASTARTES_CHAPTER_SET.has(catalogueFaction) && rawFactions.includes('Adeptus Astartes')
-      ? [...rawFactions, catalogueFaction]
-      : rawFactions
+    isHyperFactionChild && rawFactions.includes('Adeptus Astartes')
+      ? [...rawFactions, catalogue]
+      : CHAOS_DAEMONS_LEGION_SET.has(catalogue)
+        ? [CHAOS_DAEMONS_FACTION, catalogue]
+        : rawFactions
   )];
   const explicitChapter = factions.find((value) => ASTARTES_CHAPTER_SET.has(value));
-  // Общий Astartes-даташит (только Adeptus Astartes) входит в ростер каждого
-  // чаптера. Даташит с собственным Faction: Chapter остаётся только в своём
-  // чаптере и в гиперфракции Adeptus Astartes.
-  const expandedFactions = factions.includes('Adeptus Astartes') && explicitChapter === undefined
-    ? [...factions, ...ASTARTES_CHAPTERS]
-    : factions;
-  const faction = factions.includes('Adeptus Astartes')
-    ? 'Adeptus Astartes'
+  const explicitChaosLegion = factions.find((value) => CHAOS_DAEMONS_LEGION_SET.has(value));
+  // Общий Astartes-даташит и общий Chaos Daemon-даташит входят в ростер каждого
+  // подразделения своей гиперфракции. Специфичные даташиты остаются только в
+  // своём подразделении и в гиперфракции.
+  const expandedFactions = [
+    ...factions,
+    ...(factions.includes('Adeptus Astartes') && explicitChapter === undefined ? ASTARTES_CHAPTERS : []),
+    ...(factions.includes(CHAOS_DAEMONS_FACTION) && explicitChaosLegion === undefined ? CHAOS_DAEMONS_LEGIONS : []),
+    ...(explicitChaosLegion !== undefined ? [CHAOS_DAEMONS_FACTION] : []),
+  ];
+  const faction = factions.includes('Adeptus Astartes') || factions.includes(CHAOS_DAEMONS_FACTION)
+    ? factions.includes('Adeptus Astartes') ? 'Adeptus Astartes' : CHAOS_DAEMONS_FACTION
     : factions[0] ?? null;
-  return { keywords, faction, factions: expandedFactions };
+  return { keywords, faction, factions: [...new Set(expandedFactions)] };
 }
 
 export interface DatasheetBuildResult {

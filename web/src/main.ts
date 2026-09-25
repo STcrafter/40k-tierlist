@@ -30,6 +30,10 @@ interface UnitMetricsLocal {
   bestTarget: string;
   bestTargetName: string;
   destroyedPointsByTarget: Record<string, number>;
+  /** Вектор атаки после Melee Tax, по типам целей. */
+  effectiveOffenseVector: Record<string, number>;
+  /** Вектор защиты по группам оружия. */
+  defenseVector: Record<string, number>;
   damagePer100: number;
   universal: number;
   baseSurvivability: number;
@@ -44,6 +48,10 @@ interface UnitMetricsLocal {
   normDamage: number;
   normSurvivability: number;
   normUtility: number;
+  vectorDamageScore: number;
+  vectorSurvivabilityScore: number;
+  vectorDamageFloor: number;
+  vectorSurvivabilityFloor: number;
   totalScore: number;
   percentile: number;
   tier: Tier;
@@ -194,18 +202,33 @@ function recomputeMetrics(
   const meleePer100 = damage.melee.overall.mean * scale;
   const unitType: 'Ranged' | 'Melee' = meleePer100 > rangedPer100 ? 'Melee' : 'Ranged';
   const hasFlyOrDeepStrike = combatUnit.keywords.includes('FLY');
+  // В режиме стрельбы рукопашная фаза не участвует — melee-штраф не применяем.
   const tax =
-    unitType === 'Ranged'
+    mode === 'ranged' || unitType === 'Ranged'
       ? { damage: 1, survivability: 1 }
       : hasFlyOrDeepStrike
         ? { damage: 0.85, survivability: 0.85 }
         : { damage: 0.7, survivability: 0.6 };
+
+  // Вектор атаки: destroyed points по каждой цели с учётом melee-штрафа.
+  const effectiveOffenseVector = Object.fromEntries(
+    Object.entries(destroyedPointsByTarget).map(([id, value]) => [id, value * tax.damage])
+  );
+  // Вектор защиты: живучесть против каждой группы входящего оружия.
+  const defenseVector = Object.fromEntries(
+    Object.entries(surv.byGroup).map(([group, value]) => [
+      group,
+      100 / (1 + value.takenPer100Points.mean) * tax.survivability,
+    ])
+  );
 
   return {
     rawMaxDamage,
     bestTarget,
     bestTargetName: TARGET_LABELS[bestTarget] ?? bestTarget,
     destroyedPointsByTarget,
+    effectiveOffenseVector,
+    defenseVector,
     universal,
     damagePer100,
     baseSurvivability,
@@ -221,6 +244,10 @@ function recomputeMetrics(
     normDamage: 0,
     normSurvivability: 0,
     normUtility: 0,
+    vectorDamageScore: 0,
+    vectorSurvivabilityScore: 0,
+    vectorDamageFloor: 0,
+    vectorSurvivabilityFloor: 0,
     totalScore: 0,
     percentile: 50,
     tier: 'D',

@@ -132,6 +132,16 @@ describe('parseBsDatabase', () => {
     expect(lysander.factions).toContain('Imperial Fists');
   });
 
+  it('раскрывает Chaos Daemons как гиперфракцию с четырьмя легионами', () => {
+    const common = findByName('Be\'lakor');
+    expect(common.faction).toBe('Legiones Daemonica');
+    expect(common.factions).toEqual(expect.arrayContaining([
+      'Legiones Daemonica', 'Blood Legions', 'Plague Legions', 'Scintillating Legions', 'Legions of Excess',
+    ]));
+    const blood = datasheets.find((datasheet) => datasheet.name === 'Bloodcrushers' && datasheet.faction === 'Blood Legions');
+    expect(blood?.factions).toEqual(expect.arrayContaining(['Legiones Daemonica', 'Blood Legions']));
+  });
+
   it('дедуплицирует даташиты библиотечных каталогов', () => {
     const ids = new Set(datasheets.map((datasheet) => datasheet.id));
     expect(ids.size).toBe(datasheets.length);

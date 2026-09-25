@@ -110,6 +110,10 @@ export interface RawScore {
   bestTargetName: string;
   /** Уничтоженные очки по каждому типу цели, на 100 очков атакующего. */
   destroyedPointsByTarget: Record<string, number>;
+  /** Вектор защиты: 100 / (1 + takenPer100) по каждой группе оружия. */
+  defenseVector: Record<string, number>;
+  /** Вектор атаки после Melee Tax, по каждой цели. */
+  effectiveOffenseVector: Record<string, number>;
   /** Средние destroyed points по пехоте/броне — оставлены для совместимости с отчётами. */
   vsInfantry: number;
   vsArmor: number;
@@ -141,6 +145,12 @@ export interface TierRow extends RawScore {
   normDamage: number;
   normSurvivability: number;
   normUtility: number;
+  /** Векторные агрегаты: среднее + нижний перцентиль + лучшая компонента. */
+  vectorDamageScore: number;
+  vectorSurvivabilityScore: number;
+  /** 25-й перцентиль нормированных компонент — защита от одного выброса. */
+  vectorDamageFloor: number;
+  vectorSurvivabilityFloor: number;
   totalScore: number;
   /** Перцентиль Total в наборе (0–100). */
   percentile: number;
@@ -169,6 +179,19 @@ export interface TieringOptions {
 /** Среднее по списку. */
 function mean(values: number[]): number {
   return values.length === 0 ? 0 : values.reduce((sum, value) => sum + value, 0) / values.length;
+}
+
+/**
+ * Перцентиль по отсортированному набору (с интерполяцией).
+ * fraction 0.25 — нижний квартиль: показывает, насколько юнит слаб ТАМ, где слаб.
+ */
+function percentileAt(sorted: number[], fraction: number): number {
+  if (sorted.length === 0) return 50;
+  const index = (sorted.length - 1) * fraction;
+  const low = Math.floor(index);
+  const high = Math.ceil(index);
+  if (low === high) return sorted[low];
+  return sorted[low] + (sorted[high] - sorted[low]) * (index - low);
 }
 
 /**
@@ -228,13 +251,24 @@ export function rawScoreOf(
   const meleePer100 = damage.melee.overall.mean * scale;
   const unitType: UnitType = meleePer100 > rangedPer100 ? 'Melee' : 'Ranged';
   const hasFlyOrDeepStrike = options.hasFlyOrDeepStrike?.(datasheet) ?? detectFlyOrDeepStrike(datasheet);
-  const tax = meleeTax(unitType, hasFlyOrDeepStrike);
+  // В режиме ranged рукопашная фаза не участвует, поэтому melee-штраф
+  // за неё применять нельзя.
+  const tax = mode === 'ranged' ? { damage: 1, survivability: 1 } : meleeTax(unitType, hasFlyOrDeepStrike);
 
   // Выживаемость: в survival «пережитый урон на 100 очков» — чем меньше, тем
   // лучше; для складывания с уроном переворачиваем в 100 / taken.
   const surv = survivabilityAgainstUnit(baseUnit, points, survival);
   const takenPer100 = surv.overall.takenPer100Points.mean;
   const baseSurvivability = 100 / (1 + takenPer100);
+  const effectiveOffenseVector = Object.fromEntries(
+    Object.entries(destroyedPointsByTarget).map(([id, value]) => [id, value * tax.damage])
+  );
+  const defenseVector = Object.fromEntries(
+    Object.entries(surv.byGroup).map(([group, value]) => [
+      group,
+      100 / (1 + value.takenPer100Points.mean) * tax.survivability,
+    ])
+  );
 
   const utilityFlags = detectUtilityFlags(datasheet, { meleePer100 });
   const utilityScore = utilityScoreOf(utilityFlags);
@@ -245,6 +279,8 @@ export function rawScoreOf(
     bestTarget,
     bestTargetName,
     destroyedPointsByTarget,
+    effectiveOffenseVector,
+    defenseVector,
     vsInfantry,
     vsArmor,
     universal,
@@ -346,8 +382,30 @@ export function tierList(
     };
   });
 
-  const normDamage = minMaxNormalize(drafts.map((row) => row.effectiveDamage));
-  const normSurvivability = minMaxNormalize(drafts.map((row) => row.effectiveSurvivability));
+  const offenseKeys = Object.keys(drafts[0]?.effectiveOffenseVector ?? {});
+  const defenseKeys = Object.keys(drafts[0]?.defenseVector ?? {});
+  const rankComponent = (pick: (row: DraftRow) => number | undefined): number[] => {
+    const sorted = drafts.map((row) => pick(row) ?? 0).sort((a, b) => a - b);
+    return drafts.map((row) => percentileOf(sorted, pick(row) ?? 0));
+  };
+  const offenseRanks = offenseKeys.map((key) => rankComponent((row) => row.effectiveOffenseVector[key]));
+  const defenseRanks = defenseKeys.map((key) => rankComponent((row) => row.defenseVector[key]));
+  const aggregate = (ranks: number[][], index: number): { score: number; floor: number } => {
+    if (ranks.length === 0) return { score: 50, floor: 50 };
+    const values = ranks.map((component) => component[index]).sort((a, b) => a - b);
+    const floor = percentileAt(values, 0.25);
+    const best = values[values.length - 1] ?? 0;
+    // Взвешенная свёртка: универсальность (среднее) весит больше всего,
+    // нижний квартиль не даёт одному удачному матчапу скрыть провалы,
+    // а лучшая компонента сохраняет информацию о специализации.
+    return { score: mean(values) * 0.6 + floor * 0.25 + best * 0.15, floor };
+  };
+  const vectorRows = drafts.map((_, index) => ({
+    damageVector: aggregate(offenseRanks, index),
+    defenseVector: aggregate(defenseRanks, index),
+  }));
+  const normDamage = vectorRows.map((value) => value.damageVector.score);
+  const normSurvivability = vectorRows.map((value) => value.defenseVector.score);
   const normUtility = minMaxNormalize(drafts.map((row) => row.utilityScore));
 
   const totals = drafts.map((_, index) => {
@@ -355,7 +413,7 @@ export function tierList(
       normDamage[index] * SCORE_WEIGHTS.damage +
       normSurvivability[index] * SCORE_WEIGHTS.survivability +
       normUtility[index] * SCORE_WEIGHTS.utility;
-    return { ...drafts[index], normDamage: normDamage[index], normSurvivability: normSurvivability[index], normUtility: normUtility[index], totalScore: total };
+    return { ...drafts[index], normDamage: normDamage[index], normSurvivability: normSurvivability[index], normUtility: normUtility[index], vectorDamageScore: vectorRows[index].damageVector.score, vectorSurvivabilityScore: vectorRows[index].defenseVector.score, vectorDamageFloor: vectorRows[index].damageVector.floor, vectorSurvivabilityFloor: vectorRows[index].defenseVector.floor, totalScore: total };
   });
 
   const sorted = totals.map((row) => row.totalScore).sort((a, b) => a - b);
