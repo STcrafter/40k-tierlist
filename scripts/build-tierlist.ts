@@ -59,6 +59,7 @@ interface AttachedPayload {
   name: string;
   faction: string;
   factions: string[];
+  models: number;
   points: number;
   tier: TierRow['tier'];
   totalScore: number;
@@ -127,6 +128,7 @@ for (const paradigm of paradigms) {
       name: row.name,
       faction: row.faction,
       factions: pairFactions(row.id),
+      models: row.models,
       points: row.points,
       tier: row.tier,
       totalScore: row.totalScore,

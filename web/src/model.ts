@@ -122,6 +122,7 @@ export interface AttachedRow {
   /** Все фракции пары: основная faction отряда и faction лидера. */
   faction: string;
   factions: string[];
+  models: number;
   points: number;
   tier: Tier;
   totalScore: number;

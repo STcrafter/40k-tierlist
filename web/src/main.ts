@@ -283,11 +283,24 @@ function visibleUnits(): UnitEntry[] {
 
 function visibleAttachedRows(): import('./model.ts').AttachedRow[] {
   const needle = state.search.trim().toLowerCase();
-  return state.attachedRows.filter((row) => {
+  const rows = state.attachedRows.filter((row) => {
     if (state.faction && !row.factions.includes(state.faction)) return false;
     if (state.tierFilter.size > 0 && !state.tierFilter.has(row.tier)) return false;
     return needle === '' || row.name.toLowerCase().includes(needle);
   });
+  const key = state.sortKey;
+  const dir = state.sortDesc ? -1 : 1;
+  rows.sort((a, b) => {
+    if (key === 'name' || key === 'bestTargetName') {
+      return String(a[key] ?? '').localeCompare(String(b[key] ?? '')) * dir || a.name.localeCompare(b.name);
+    }
+    if (key === 'tier') {
+      const order: Record<string, number> = { S: 0, A: 1, B: 2, C: 3, D: 4 };
+      return ((order[a.tier] ?? 9) - (order[b.tier] ?? 9)) * dir || a.name.localeCompare(b.name);
+    }
+    return ((a[key as keyof typeof a] as number) - (b[key as keyof typeof b] as number)) * dir || a.name.localeCompare(b.name);
+  });
+  return rows;
 }
 
 async function boot(): Promise<void> {
@@ -345,7 +358,6 @@ const COLUMNS: Array<{ key: string; title: string; numeric: boolean; hint?: stri
   { key: 'name', title: 'Юнит', numeric: false },
   { key: 'points', title: 'Очки', numeric: true, hint: 'Максимум 2000 для расчётов' },
   { key: 'models', title: 'Мод.', numeric: true },
-  { key: 'unitType', title: 'Тип', numeric: false },
   { key: 'rawMaxDamage', title: 'Уничт.очки/100', numeric: true, hint: 'Максимум уничтоженных очков цели на 100 очков юнита' },
   { key: 'bestTargetName', title: 'Лучшая цель', numeric: false },
   { key: 'universal', title: 'Среднее/100', numeric: true },
@@ -700,17 +712,32 @@ function setByPath(profile: UnitProfile, path: string, raw: string): void {
 function renderAttachedTable(): string {
   const rows = visibleAttachedRows();
   if (rows.length === 0) return '<div class="empty">Нет подходящих сочетаний «отряд + лидер».</div>';
+  const head = [
+    ['name', 'Отряд + лидер'],
+    ['points', 'Очки'],
+    ['models', 'Мод.'],
+    ['rawMaxDamage', 'Уничт. очки/100'],
+    ['bestTargetName', 'Лучшая цель'],
+    ['effectiveSurvivability', 'Живучесть'],
+    ['utilityScore', 'Полезность'],
+    ['totalScore', 'TOTAL'],
+    ['tier', 'Тир'],
+  ].map(([key, title]) => {
+    const numeric = ['points', 'models', 'rawMaxDamage', 'effectiveSurvivability', 'utilityScore', 'totalScore'].includes(key);
+    return `<th class="${numeric ? 'num' : ''}" data-sort="${key}">${title}${state.sortKey === key ? (state.sortDesc ? ' ↓' : ' ↑') : ''}</th>`;
+  }).join('');
   const body = rows.map((row) => `<tr>
     <td><span class="tier-badge" data-tier="${row.tier}">${row.tier}</span><span class="unit-name">${row.name}</span></td>
     <td class="num">${row.points}</td>
-    <td>${row.factions.join(' / ')}</td>
+    <td class="num">${row.models}</td>
     <td class="num">${num(row.rawMaxDamage, 1)}</td>
     <td>${row.bestTargetName}</td>
     <td class="num">${num(row.effectiveSurvivability, 1)}</td>
     <td class="num">${row.utilityScore}</td>
     <td class="num">${num(row.totalScore, 1)}</td>
+    <td><span class="tier-badge" data-tier="${row.tier}">${row.tier}</span></td>
   </tr>`).join('');
-  return `<div class="table-wrap"><table><thead><tr><th>Отряд + лидер</th><th class="num">Очки</th><th>Фракция</th><th class="num">Уничт. очки/100</th><th>Лучшая цель</th><th class="num">Живучесть</th><th class="num">Полезность</th><th class="num">TOTAL</th></tr></thead><tbody>${body}</tbody></table></div>`;
+  return `<div class="table-wrap"><table><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></div>`;
 }
 
 /** Главная функция отрисовки: панель + таблица + редактор. */
