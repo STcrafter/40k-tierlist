@@ -107,7 +107,7 @@ export interface CombatContext {
   defender: CombatUnit;
   /** Текущая цель (экземпляр модели защитника). */
   target: CombatModel;
-  /** Живых моделей в отряде цели на момент сбора дайсов (для Blast/Cleave). */
+  /** Число моделей в отряде цели на момент выбора целей (для Blast/Cleave). */
   defenderModelCount: number;
   /** Атакующий отряд заряжал в этот ход (Lance). */
   charged: boolean;

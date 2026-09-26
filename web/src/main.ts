@@ -9,6 +9,7 @@
 
 import { damagePerRound } from '../../src/combat/perRound.ts';
 import { survivabilityAgainstUnit } from '../../src/combat/survival.ts';
+import { ARCHETYPES } from '../../src/combat/archetypes.ts';
 import { targetsForParadigm } from '../../src/tier/scoring.ts';
 import { CALCULATION_POINTS_LIMIT, withinCalculationBudget } from '../../src/combat/budget.ts';
 import type { CombatUnit, CombatWeapon } from '../../src/combat/types.ts';
@@ -127,29 +128,6 @@ function toCombatUnit(profile: UnitProfile): CombatUnit {
     })),
   };
 }
-
-/** Целевые архетипы делятся на пехоту и броню — как в src/tier/scoring.ts. */
-const INFANTRY_TARGETS = [
-  'infantry',
-  'infantry-veteran',
-  'swarm',
-  'terminator',
-  'jetpack',
-  'cavalry',
-] as const;
-
-const ARMOR_TARGETS = [
-  'monster',
-  'walker',
-  'vehicle',
-  'transport',
-  'flyer',
-  'battlesuit',
-  'fortification',
-] as const;
-
-void INFANTRY_TARGETS;
-void ARMOR_TARGETS;
 
 /**
  * Пересчитывает сырые метрики одного юнита в выбранном режиме боя.
@@ -280,7 +258,7 @@ function rebuildRows(): void {
   state.rows = rebuildTierlist(
     state.data.units
       .filter((unit) => withinCalculationBudget(pointsOf(unit)))
-      .map((unit) => ({ id: unit.id, raw: metricsOf(unit) }))
+      .map((unit) => ({ id: unit.id, raw: metricsOf(unit), points: pointsOf(unit) }))
   );
 }
 
@@ -361,21 +339,14 @@ function bar(value: number): string {
   return `<span class="bar"><i style="width:${width}%"></i></span>`;
 }
 
-const TARGET_LABELS: Record<string, string> = {
-  infantry: 'Пехота',
-  'infantry-veteran': 'Ветеранская пехота',
-  swarm: 'Рой',
-  terminator: 'Терминаторы',
-  jetpack: 'Пехота с джеппаками',
-  cavalry: 'Кавалерия',
-  monster: 'Монстр',
-  walker: 'Шагоход',
-  vehicle: 'Техника',
-  transport: 'Транспорт',
-  flyer: 'Авиация',
-  battlesuit: 'Боевой костюм',
-  fortification: 'Укрепление',
-};
+/**
+ * Названия типов целей берём из clusters.generated.ts: типы выведены из
+ * данных, поэтому и подписи не должны быть захардкожены. Раньше здесь стоял
+ * список из 13 имён, который рассыпался бы при любой смене K.
+ */
+const TARGET_LABELS: Record<string, string> = Object.fromEntries(
+  ARCHETYPES.map((archetype) => [archetype.id, archetype.name])
+);
 
 const MODE_LABELS: Record<CombatMode, string> = {
   ranged: 'Дальний',
@@ -519,6 +490,11 @@ function renderTable(): string {
           <span class="tier-badge" data-tier="${tier}">${tier}</span>
           <span class="unit-name" data-open="${unit.id}">${unit.name}</span>
           ${edited ? '<span class="tag edited-mark">изменён</span>' : ''}
+          ${
+            unit.sensitivity?.high
+              ? `<span class="tag sens-mark" title="Ранг смещается на ${unit.sensitivity.spread.toFixed(0)} перцентилей при ±20% числа моделей в эталонных целях — оценка держится на узком матчапе">Sensitivity: HIGH</span>`
+              : ''
+          }
         </td>
         ${cells}
       </tr>`;

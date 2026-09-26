@@ -131,7 +131,7 @@ if (factionFlag !== null) {
     if (!datasheet.faction.toLowerCase().includes(factionFlag.toLowerCase())) continue;
     const adapted = adaptUnit(datasheet, { size: 'min' });
     if (adapted.unit.models.length === 0 || !isEligibleForCalculations(datasheet.name, adapted.points)) continue;
-    const type = archetypeOf(adapted.unit)?.id ?? 'unknown';
+    const type = archetypeOf(adapted.unit, adapted.points)?.id ?? 'unknown';
     const result = survivabilityAgainstUnit(adapted.unit, adapted.points, {
       ...options,
       archetypeLabel: type,

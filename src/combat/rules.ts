@@ -7,7 +7,7 @@
  */
 
 import { rollDice } from './dice.ts';
-import { keywordOf } from './keywords.ts';
+import { keywordApplies, keywordOf } from './keywords.ts';
 import type { CombatRules, RuleFragment } from './types.ts';
 
 /** Кейворды цели (весь отряд + модель) — для условий вида 'non-MONSTER/VEHICLE'. */
@@ -16,6 +16,11 @@ function targetKeywordsOf(ctx: {
   target: { keywords: string[] };
 }): string[] {
   return [...ctx.defender.keywords, ...ctx.target.keywords];
+}
+
+/** Псионическая атака: [PSYCHIC] игнорирует модификаторы BS/WS и попадания. */
+function isPsychicAttack(weapon: { keywords: Array<{ name: string }> }): boolean {
+  return weapon.keywords.some((keyword) => keyword.name === 'psychic');
 }
 
 /** Целевые пороги нельзя модифицировать лучше 2+ и хуже 6+. */
@@ -64,18 +69,29 @@ export function standardRules(): CombatRules {
         const torrent = ctx.weapon.keywords.some((k) => k.name === 'torrent');
         return torrent ? null : base;
       },
+      // [PSYCHIC] по правилу 11-й редакции позволяет игнорировать «any or all
+      // modifiers» к BS/WS и к попаданию. Поэтому ни бонус [HEAVY], ни штрафы
+      // (Stealth, indirect) на псионическую атаку не действуют.
+      //
       // [HEAVY]: +1 к попаданию (модификатор порога: −1), если условия выполнены.
-      (ctx, base) => (ctx.stationary && ctx.weapon.keywords.some((k) => k.name === 'heavy')) ? base === null ? null : base - 1 : base,
-      // Stealth: −1 к попаданию дальнобойными атаками по цели с этим кейвордом.
-      // В рукопашной не действует, автопопадание ([TORRENT]) не ломает.
       (ctx, base) => {
-        if (base === null || ctx.phase !== 'ranged') return base;
+        if (isPsychicAttack(ctx.weapon) || base === null) return base;
+        return ctx.stationary && ctx.weapon.keywords.some((k) => k.name === 'heavy')
+          ? base - 1
+          : base;
+      },
+      // Stealth: −1 к попаданию дальнобойными атаками по цели с этим кейвордом.
+      // В рукопашной не действует, автопопадание ([TORRENT]) не ломает,
+      // псионическая атака ([PSYCHIC]) штраф игнорирует.
+      (ctx, base) => {
+        if (base === null || ctx.phase !== 'ranged' || isPsychicAttack(ctx.weapon)) return base;
         const stealth =
           ctx.target.keywords.includes('STEALTH') || ctx.defender.keywords.includes('STEALTH');
         return stealth ? base + 1 : base;
       },
       // Стрельба вслепую: −1 к попаданию (включается опцией indirect).
-      (ctx, base) => (ctx.indirect && base !== null) ? base + 1 : base,
+      (ctx, base) =>
+        ctx.indirect && base !== null && !isPsychicAttack(ctx.weapon) ? base + 1 : base,
     ],
 
     extraHits: [
@@ -98,15 +114,26 @@ export function standardRules(): CombatRules {
     ],
 
     criticalWoundTarget: [
-      // [ANTI-X Y+]: ранение Y+ (не модифицированное) — критическое против цели с кейвордом X.
+      // [ANTI-X Y+]: ранение Y+ (НЕ модифицированное) — критическое против
+      // цели с кейвордом X.
+      //
+      // Перебираем ВСЕ Anti-кейворды оружия, а не только первый: у стволов бывает
+      // несколько («Anti-MONSTER 4+» и «Anti-VEHICLE 3+»), и каждое действует
+      // против своей цели. Берём наименьший порог из применимых — он и делает
+      // ранение критическим.
       (ctx, base) => {
-        const anti = ctx.weapon.keywords.find(
-          (k) => k.name === 'anti' && k.target !== null && k.value !== null
-        );
-        if (!anti || !anti.target || anti.value === null) return base;
-        const targetKeywords = [...ctx.defender.keywords, ...ctx.target.keywords];
-        if (!anti.target.some((required) => targetKeywords.includes(required))) return base;
-        return Math.min(base, anti.value.count);
+        const targetKeywords = targetKeywordsOf(ctx);
+        let target = base;
+        for (const anti of ctx.weapon.keywords) {
+          if (anti.name !== 'anti' || anti.target === null || anti.value === null) continue;
+          // Условие на цель ('Anti-VEHICLE 4+: non-FLYER') — точечно для этого
+          // кейворда, иначе keywordOf вернул бы только первое совпадение.
+          if (!keywordApplies(anti, targetKeywords)) continue;
+          const matches = anti.target.some((required) => targetKeywords.includes(required));
+          if (!matches) continue;
+          target = Math.min(target, anti.value.count);
+        }
+        return target;
       },
     ],
 
@@ -132,7 +159,19 @@ export function standardRules(): CombatRules {
       },
     ],
 
-    woundTarget: [],
+    woundTarget: [
+      // [LANCE]: +1 к ранению, если атакующий отряд в этом ходу совершил
+      // charge move. Порог уменьшается на 1 (−1 к броску ранения = +1 к нему).
+      //
+      // Правило применяется к «не модифицированному» броску: сначала считаем
+      // порог по S/T, затем Lance его улучшает. clampTarget в ядре не даёт
+      // порогу уйти лучше 2+.
+      (ctx, base) => {
+        if (base === null || !ctx.charged) return base;
+        if (!ctx.weapon.keywords.some((k) => k.name === 'lance')) return base;
+        return base - 1;
+      },
+    ],
   };
 }
 

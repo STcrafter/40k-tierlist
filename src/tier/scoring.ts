@@ -34,7 +34,16 @@
 
 import { damagePerRound, type PerRoundOptions } from '../combat/perRound.ts';
 import { survivabilityAgainstUnit, type SurvivalOptions } from '../combat/survival.ts';
-import { archetypeById, archetypeOf, type ArchetypeId } from '../combat/archetypes.ts';
+import {
+  ARCHETYPES,
+  ARMOR_ARCHETYPES,
+  INFANTRY_ARCHETYPES,
+  archetypeOf,
+  scaleArchetypeModels,
+  type ArchetypeId,
+  type UnitArchetype,
+} from '../combat/archetypes.ts';
+import { naturalBreaks } from '../combat/clustering.ts';
 import type { CombatUnit } from '../combat/types.ts';
 import { isEligibleForCalculations } from '../combat/budget.ts';
 import type { BsDatasheet } from '../bsdata/types.ts';
@@ -66,39 +75,50 @@ function phaseOf(mode: CombatMode): 'ranged' | 'melee' | 'all' {
   return 'all';
 }
 
-/** Типы целей, делящиеся на «пехоту» и «броню» для Best in Slot. */
-const INFANTRY_TARGETS: ArchetypeId[] = [
-  'infantry',
-  'infantry-veteran',
-  'swarm',
-  'terminator',
-  'jetpack',
-  'cavalry',
-];
-
-const ARMOR_TARGETS: ArchetypeId[] = [
-  'monster',
-  'walker',
-  'vehicle',
-  'transport',
-  'flyer',
-  'battlesuit',
-  'fortification',
-];
-
-/** Цели для выбранной парадигмы. */
+/**
+ * Цели для выбранной парадигмы.
+ *
+ * Раньше парадигмы перечисляли id руками ('infantry-veteran', 'terminator',
+ * 'monster'…), что сразу сломалось, как только типы перестали быть нашим
+ * решением. Теперь состав выводится из данных:
+ *   infantry — типы с группой 'infantry' (определяется по доле INFANTRY);
+ *   armor    — типы с группой 'armor';
+ *   elite    — типы с наибольшей живучестью ОДНОЙ модели;
+ *   all      — все типы.
+ *
+ * «elite» приходится выводить отдельно: отдельной группы «элита» в данных
+ * нет. Критерий — T×W на модель, потому что именно столько ран получает
+ * одна модель, и это же то, что определяет, сколько выстрелов нужно на
+ * её убийство.
+ */
 export function targetsForParadigm(paradigm: TargetParadigm = 'all'): ArchetypeId[] {
-  if (paradigm === 'infantry') return [...INFANTRY_TARGETS];
-  if (paradigm === 'elite') return ['infantry-veteran', 'terminator', 'jetpack', 'monster'];
-  if (paradigm === 'armor') return [...ARMOR_TARGETS];
-  return [...INFANTRY_TARGETS, ...ARMOR_TARGETS];
+  if (paradigm === 'infantry') return [...INFANTRY_ARCHETYPES];
+  if (paradigm === 'armor') return [...ARMOR_ARCHETYPES];
+  if (paradigm === 'elite') {
+    return [...ARCHETYPES]
+      .sort((a, b) => b.toughness * b.wounds - a.toughness * a.wounds)
+      .slice(0, Math.max(1, Math.ceil(ARCHETYPES.length / 3)))
+      .map((archetype) => archetype.id);
+  }
+  return ARCHETYPES.map((archetype) => archetype.id);
 }
 
 /** Веса итогового скора. */
 export const SCORE_WEIGHTS = { damage: 0.4, survivability: 0.35, utility: 0.25 } as const;
 
-/** Границы тиров по перцентилям. */
-export const TIER_PERCENTILES = { S: 0.9, A: 0.75, B: 0.5, C: 0.25 } as const;
+/**
+ * Порядок тиров: индекс натуральной группы (0 — самые слабые) → тир.
+ *
+ * Групп ровно пять, как и тиров, поэтому отображение взаимно однозначно.
+ * Если групп получилось меньше (набор слишком мал или вырожден), недостающие
+ * строки добираются с края по индексу — см. tierByGroup.
+ */
+const TIER_BY_GROUP: readonly Tier[] = ['D', 'C', 'B', 'A', 'S'];
+
+/** Тир по номеру группы натуральных разрывов. */
+export function tierByGroup(group: number): Tier {
+  return TIER_BY_GROUP[Math.max(0, Math.min(TIER_BY_GROUP.length - 1, group))];
+}
 
 /** Множители Melee Tax. */
 export interface MeleeTax {
@@ -179,6 +199,12 @@ export interface TieringOptions {
   combat?: PerRoundOptions;
   /** Целевые архетипы для режима «против X»: all — все, armor — броня. */
   targets?: ArchetypeId[] | null;
+  /**
+   * Замена эталонов целей — для sensitivity-анализа.
+   * По умолчанию ARCHETYPES; задаётся масштабированной копией, чтобы
+   * пересчитать тирлист при другом размере целей.
+   */
+  archetypes?: readonly UnitArchetype[] | null;
   /** Парадигма цели для сайта; all — все типы. */
   targetParadigm?: TargetParadigm;
   /** Общие настройки Монте-Карло для выживаемости. */
@@ -231,10 +257,14 @@ export function rawScoreOf(
   const combat = { ...(options.combat ?? {}), ...leaderOptions };
   const mode = options.mode ?? 'combined';
   const targets = options.targetParadigm === undefined && options.targets === undefined
-    ? [...INFANTRY_TARGETS, ...ARMOR_TARGETS]
+    ? targetsForParadigm('all')
     : options.targets ?? targetsForParadigm(options.targetParadigm);
   const survival = { ...(options.survival ?? {}), phase: phaseOf(mode), ...leaderOptions };
-  const damage = damagePerRound(baseUnit, { ...combat, targets });
+  const damage = damagePerRound(baseUnit, {
+    ...combat,
+    targets,
+    archetypes: options.archetypes ?? null,
+  });
   const scale = points > 0 ? 100 / points : 0;
   // Режим боя выбирает, из какой ветки разбивки берём цифры: в «ranged»
   // рукопашная часть просто не участвует в оценке.
@@ -244,18 +274,21 @@ export function rawScoreOf(
   const destroyedPointsByTarget: Record<string, number> = Object.fromEntries(
     targets.map((id) => [id, destroyedPer100(id)])
   );
-  const vsInfantry = mean(INFANTRY_TARGETS.map(destroyedPer100));
-  const vsArmor = mean(ARMOR_TARGETS.map(destroyedPer100));
+  const vsInfantry = mean(INFANTRY_ARCHETYPES.map(destroyedPer100));
+  const vsArmor = mean(ARMOR_ARCHETYPES.map(destroyedPer100));
   const universal = slice.destroyedPoints.overall.mean * scale;
   const damagePer100 = slice.overall.mean * scale;
   const [bestTarget, rawMaxDamage] = targets.reduce<[ArchetypeId, number]>(
     (best, id) => (destroyedPer100(id) > best[1] ? [id, destroyedPer100(id)] : best),
-    [targets[0] ?? 'infantry', 0]
+    [targets[0] ?? INFANTRY_ARCHETYPES[0] ?? ARCHETYPES[0]?.id ?? 'unknown', 0]
   );
-  const bestTargetName = archetypeById(bestTarget).name;
-  const bestSlot: RawScore['bestSlot'] = INFANTRY_TARGETS.includes(bestTarget)
+  // Ищем по списку, а не через archetypeById: тот бросает на неизвестном id,
+  // а `targets` может быть задан вызывающим кодом вручную.
+  const bestArchetype = ARCHETYPES.find((archetype) => archetype.id === bestTarget);
+  const bestTargetName = bestArchetype?.name ?? bestTarget;
+  const bestSlot: RawScore['bestSlot'] = INFANTRY_ARCHETYPES.includes(bestTarget)
     ? 'infantry'
-    : ARMOR_TARGETS.includes(bestTarget)
+    : ARMOR_ARCHETYPES.includes(bestTarget)
       ? 'armor'
       : 'universal';
 
@@ -311,6 +344,58 @@ export function rawScoreOf(
 }
 
 /**
+ * Остатки линейной регрессии `value ~ a + b·log(points)`.
+ *
+ * Зачем: живучесть сильно коррелирует с ценой (r ≈ 0.69), причём T/W растут
+ * СУБЛИНЕЙНО относительно стоимости. Из-за этого Titan на 1100 очков получает
+ * высокую живучесть «просто за цену», а не за реальную плотность HP на очко.
+ * Деление на 100 очков этого не устраняет: оно убирает масштаб, но не
+ * сохраняет сравнимость «сколько HP приходится на очко у соседей по цене».
+ *
+ * Метод: для каждой компоненты защиты строим регрессию по всему набору и
+ * ранжируем ОСТАТКИ. Положительный остаток = юнит живучее, чем предсказывает
+ * его цена. Именно это и должно попадать в тир: Titans получают около нуля
+ * (их живучесть обычна для их цены), а дешёвые живучие юниты — высокий
+ * остаток и обгоняют их.
+ *
+ * Логарифм вместо самой цены: связь логарифмическая (удвоение цены добавляет
+ * примерно одинаковый прирост HP), поэтому прямая регрессия по points давала бы
+ * перекос и плохо аппроксимировала бы края диапазона.
+ *
+ * @param points стоимость каждого юнита (те же элементы, что и `values`)
+ * @param values значения нормализуемой метрики
+ * @returns остатки (нулевое среднее по набору)
+ */
+export function residualizeOnLogPoints(points: number[], values: number[]): number[] {
+  if (values.length === 0) return [];
+  if (values.length === 1) return [0];
+  // log требует положительного аргумента; points >= 1 гарантировано фильтром
+  // пригодности, но подстрахуемся на случай нуля.
+  const xs = points.map((point) => Math.log(Math.max(1, point)));
+  const n = xs.length;
+  let sumX = 0;
+  let sumY = 0;
+  for (let i = 0; i < n; i += 1) {
+    sumX += xs[i];
+    sumY += values[i];
+  }
+  const meanX = sumX / n;
+  const meanY = sumY / n;
+  let cov = 0;
+  let varX = 0;
+  for (let i = 0; i < n; i += 1) {
+    cov += (xs[i] - meanX) * (values[i] - meanY);
+    varX += (xs[i] - meanX) ** 2;
+  }
+  // При нулевой дисперсии цены (все юниты одной цены) регрессия вырождается:
+  // предсказание constant = среднему, и остатки сохраняют исходный порядок.
+  if (varX === 0) return values.map((value) => value - meanY);
+  const slope = cov / varX;
+  const intercept = meanY - slope * meanX;
+  return values.map((value, i) => value - (intercept + slope * xs[i]));
+}
+
+/**
  * Min-Max нормализация набора значений в шкалу 0–100.
  * Если все значения одинаковы (Max == Min), каждому присваивается 50.
  */
@@ -350,12 +435,19 @@ export function percentileOf(sorted: number[], value: number): number {
   return (below / (sorted.length - 1)) * 100;
 }
 
-/** Тир по перцентилю Total. */
+/**
+ * Тир по перцентилю Total — оставлен для обратной совместимости отчётов.
+ *
+ * САМА тирлиста уже не использует: тиры назначаются натуральными разрывами
+ * (см. tierByGroup), потому что перцентильный разрез делит пополам
+ * почти-одинаковые значения. Новая функция оставлена, чтобы старые скрипты
+ * и внешние потребители не падали на отсутствующем экспорте.
+ */
 export function tierOf(percentile: number): Tier {
-  if (percentile > TIER_PERCENTILES.S * 100) return 'S';
-  if (percentile > TIER_PERCENTILES.A * 100) return 'A';
-  if (percentile > TIER_PERCENTILES.B * 100) return 'B';
-  if (percentile > TIER_PERCENTILES.C * 100) return 'C';
+  if (percentile > 90) return 'S';
+  if (percentile > 75) return 'A';
+  if (percentile > 50) return 'B';
+  if (percentile > 25) return 'C';
   return 'D';
 }
 
@@ -391,18 +483,37 @@ export function tierList(
     faction: faction ?? datasheet.faction,
     points: totalPoints,
     models: (leader ? attachLeaderToUnit(unit, leader) : unit).models.length,
-    archetype: archetypeOf(unit)?.id ?? 'unknown',
+    archetype: archetypeOf(unit, totalPoints)?.id ?? 'unknown',
     };
   });
 
   const offenseKeys = Object.keys(drafts[0]?.effectiveOffenseVector ?? {});
   const defenseKeys = Object.keys(drafts[0]?.defenseVector ?? {});
-  const rankComponent = (pick: (row: DraftRow) => number | undefined): number[] => {
-    const sorted = drafts.map((row) => pick(row) ?? 0).sort((a, b) => a - b);
-    return drafts.map((row) => percentileOf(sorted, pick(row) ?? 0));
+  const costs = drafts.map((row) => row.points);
+  /**
+   * Ранг одной компоненты вектора.
+   *
+   * `residual: true` ранжирует не саму величину, а остаток от регрессии на
+   * log(стоимость). Применяется только к защите: там корреляция с ценой
+   * структурная (T/W растут сублинейно к цене), и абсолютные значения просто
+   * награждали бы дорогие модели. Урон ранжируется как раньше — по абсолютным
+   * значениям: стоимость в нём уже учтена делением на 100 очков.
+   */
+  const rankComponent = (
+    pick: (row: DraftRow) => number | undefined,
+    residual: boolean
+  ): number[] => {
+    const values = drafts.map((row) => pick(row) ?? 0);
+    const scored = residual ? residualizeOnLogPoints(costs, values) : values;
+    const sorted = [...scored].sort((a, b) => a - b);
+    return scored.map((value) => percentileOf(sorted, value));
   };
-  const offenseRanks = offenseKeys.map((key) => rankComponent((row) => row.effectiveOffenseVector[key]));
-  const defenseRanks = defenseKeys.map((key) => rankComponent((row) => row.defenseVector[key]));
+  const offenseRanks = offenseKeys.map((key) =>
+    rankComponent((row) => row.effectiveOffenseVector[key], false)
+  );
+  const defenseRanks = defenseKeys.map((key) =>
+    rankComponent((row) => row.defenseVector[key], true)
+  );
   const aggregate = (ranks: number[][], index: number): { score: number; floor: number } => {
     if (ranks.length === 0) return { score: 50, floor: 50 };
     const values = ranks.map((component) => component[index]).sort((a, b) => a - b);
@@ -429,12 +540,86 @@ export function tierList(
     return { ...drafts[index], normDamage: normDamage[index], normSurvivability: normSurvivability[index], normUtility: normUtility[index], vectorDamageScore: vectorRows[index].damageVector.score, vectorSurvivabilityScore: vectorRows[index].defenseVector.score, vectorDamageFloor: vectorRows[index].damageVector.floor, vectorSurvivabilityFloor: vectorRows[index].defenseVector.floor, totalScore: total };
   });
 
+  /**
+   * Тиры — по натуральным разрывам распределения Total, а не по перцентилям.
+   *
+   * Перцентили режут набор равными долями, поэтому граница тира попадает в
+   * середину плотной группы и делит пополам почти-одинаковые значения:
+   * Total 61.02 и 61.11 оказывались в S и A. Натуральные разрывы (Fisher–Jenks)
+   * минимизируют разброс внутри тира и потому ставят границы в реальные провалы
+   * шкалы. Цена — размер тира перестаёт быть заданным: S получает столько
+   * юнитов, сколько шкала реально разделяет.
+   */
+  const breaks = naturalBreaks(
+    totals.map((row) => row.totalScore),
+    TIER_BY_GROUP.length
+  );
+  // Перцентиль оставлен для отчётов и сортировки в UI — сами тиры он уже
+  // не определяет, но показывает, где юнит стоит в наборе в целом.
   const sorted = totals.map((row) => row.totalScore).sort((a, b) => a - b);
   return totals
-    .map((row) => {
-      const percentile = percentileOf(sorted, row.totalScore);
-      return { ...row, percentile, tier: tierOf(percentile) };
-    })
+    .map((row, index) => ({
+      ...row,
+      percentile: percentileOf(sorted, row.totalScore),
+      tier: tierByGroup(breaks.labels[index] ?? 0),
+    }))
     .sort((a, b) => b.totalScore - a.totalScore);
+}
+
+/** Насколько ранг юнита зависит от произвольного допущения о размере целей. */
+export interface SensitivityReport {
+  id: string;
+  /** Разброс перцентиля между прогонами (max − min). */
+  spread: number;
+  /** Выше порога — результат неустойчив к размеру эталонов. */
+  high: boolean;
+}
+
+/** Порог, выше которого ранг считается неустойчивым (в перцентилях). */
+export const SENSITIVITY_THRESHOLD = 15;
+
+/**
+ * Sensitivity-анализ: пересчитывает тирлист при ±20% моделей в эталонах целей
+ * и измеряет, насколько сдвинулся перцентиль каждого юнита.
+ *
+ * Зачем: число моделей в эталоне — допущение модели, а не данные правил.
+ * Юнит, чей ранг скачет из-за этого допущения, тем самым объявляет свою
+ * узкую специализацию: его оценка держится на конкретном матчапе, а не на
+ * самостоятельной силе.
+ *
+ * Масштабируются переданные в `options.archetypes` эталоны (а не глобальные
+ * ARCHETYPES) — иначе базовый прогон и прогоны возмущения считали бы разные
+ * наборы целей, и разброс отражал бы подмену, а не чувствительность.
+ *
+ * Дорого: три полных прогона тирлиста. Считается только для основного вида
+ * (all/combined) — ради остальных режимов удвоение времени сборки не оправдано.
+ */
+export function sensitivityAnalysis(
+  entries: Array<{ datasheet: BsDatasheet; unit: CombatUnit; points: number }>,
+  options: TieringOptions = {},
+  factors: number[] = [0.8, 1.2]
+): Map<string, SensitivityReport> {
+  const baselineArchetypes = options.archetypes ?? ARCHETYPES;
+  const baseline = tierList(entries, options);
+  const spreads = new Map<string, number>();
+  for (const row of baseline) spreads.set(row.id, row.percentile);
+
+  for (const factor of factors) {
+    const scaled = tierList(entries, {
+      ...options,
+      archetypes: scaleArchetypeModels(baselineArchetypes, factor),
+    });
+    for (const row of scaled) {
+      const base = spreads.get(row.id);
+      if (base === undefined) continue;
+      spreads.set(row.id, Math.max(base, row.percentile) - Math.min(base, row.percentile));
+    }
+  }
+
+  return new Map(
+    [...spreads.entries()].map(
+      ([id, spread]) => [id, { id, spread, high: spread > SENSITIVITY_THRESHOLD }] as const
+    )
+  );
 }
 

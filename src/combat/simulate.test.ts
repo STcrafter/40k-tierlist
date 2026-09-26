@@ -21,6 +21,8 @@ import {
   monteCarlo,
   nextTargetIndex,
   rangedWeaponsOf,
+  resolveCombatOptions,
+  simulateRound,
   simulateTrial,
 } from './simulate.ts';
 import type { CombatModel, CombatUnit, CombatWeapon, Rng } from './types.ts';
@@ -512,3 +514,112 @@ describe('Монте-Карло', () => {
   });
 });
 
+/**
+ * Регрессии по кейвордам оружия, найденные при сверке с текстами правил
+ * BSData (gameSystem 'Warhammer 40,000.json').
+ */
+describe('кейворды: регрессии', () => {
+  it('[LANCE] даёт +1 к ранению после зарядки', () => {
+    // Порог по S/T: S5 против T4 → 3+. С зарядкой Lance → 2+.
+    // Ранение проходит от броска 2, но без Lance тот же бросок 2 не проходит.
+    const lance = weapon({ skill: 2, strength: 5, keywords: parseKeywords(['Lance']) });
+    const defender = unit([model({ toughness: 4, wounds: 9, save: 6 })]);
+
+    const charged = simulateTrial(gunner(lance), defender, { rng: die(2), charged: true });
+    expect(charged.weapons[0].wounds).toBe(1);
+
+    // Без зарядки (или без самого кейворда) 2+ не хватает.
+    const notCharged = simulateTrial(gunner(lance), defender, { rng: die(2), charged: false });
+    expect(notCharged.weapons[0].wounds).toBe(0);
+  });
+
+  it('[LANCE] не меняет порог, если оружия нет', () => {
+    const plain = weapon({ skill: 2, strength: 5 });
+    const defender = unit([model({ toughness: 4, wounds: 9, save: 6 })]);
+    expect(simulateTrial(gunner(plain), defender, { rng: die(2), charged: true }).weapons[0].wounds).toBe(0);
+  });
+
+  it('[ANTI-X] учитывает ВСЕ anti-кейворды оружия, а не только первый', () => {
+    // Регрессия: брался только первый Anti. Здесь первым идёт Anti-MONSTER 4+,
+    // а против техники решает второй — Anti-VEHICLE 3+ (порог 3).
+    // Ранение 3+ от броска 3 должно быть критическим.
+    const gun = weapon({
+      skill: 2,
+      strength: 5,
+      keywords: parseKeywords(['Anti-MONSTER 4+', 'Anti-VEHICLE 3+', 'Devastating Wounds']),
+    });
+    const vehicle = unit([model({ toughness: 4, wounds: 9, save: 6, keywords: ['VEHICLE'] })]);
+    // Сейв 6+ отказывает; Devastating Wounds на критическом ранении даёт мортиды
+    // в обход сейва, поэтому урон равен D оружия.
+    const result = simulateTrial(gunner(gun), vehicle, { rng: die(3) });
+    expect(result.weapons[0].mortals).toBe(1);
+  });
+
+  it('[ANTI-X] с условием не срабатывает, когда условие нарушено', () => {
+    // 'Anti-VEHICLE 4+: non-FLYER' — против FLYER условие не выполнено,
+    // поэтому крит. ранения не будет и мортидов не будет.
+    const gun = weapon({
+      skill: 2,
+      strength: 5,
+      keywords: parseKeywords(['Anti-VEHICLE 4+: non-FLYER', 'Devastating Wounds']),
+    });
+    const flyer = unit([model({ toughness: 4, wounds: 9, save: 6, keywords: ['FLYER'] })]);
+    expect(simulateTrial(gunner(gun), flyer, { rng: die(4) }).weapons[0].mortals).toBe(0);
+  });
+
+  it('[PSYCHIC] игнорирует штраф попадания от Stealth', () => {
+    // Stealth добавляет +1 к порогу попадания. Псионическая атака его игнорирует,
+    // поэтому бросок 3 по BS 3+ попадает и без Stealth.
+    const gun = weapon({ skill: 3, strength: 5, keywords: parseKeywords(['Psychic']) });
+    const plain = unit([model({ toughness: 4, wounds: 9, save: 6, keywords: ['INFANTRY'] })]);
+    const hidden = unit([model({ toughness: 4, wounds: 9, save: 6, keywords: ['STEALTH'] })]);
+
+    // По BS 3+ бросок 3 попадает всегда → ранение есть.
+    expect(simulateTrial(gunner(gun), hidden, { rng: die(3) }).weapons[0].wounds).toBe(1);
+    // Без [PSYCHIC] тот же бросок против Stealth-цели промахивается.
+    const normal = weapon({ skill: 3, strength: 5 });
+    expect(simulateTrial(gunner(normal), hidden, { rng: die(3) }).weapons[0].wounds).toBe(0);
+    expect(simulateTrial(gunner(normal), plain, { rng: die(3) }).weapons[0].wounds).toBe(1);
+  });
+
+  it('[PSYCHIC] игнорирует бонус [HEAVY]', () => {
+    // [HEAVY] улучшает попадание на 1, но псионическая атака игнорирует
+    // модификаторы — бросок 3 по BS 4+ без Heavy должен промахнуться.
+    const gun = weapon({ skill: 4, strength: 5, keywords: parseKeywords(['Psychic', 'Heavy']) });
+    const defender = unit([model({ toughness: 4, wounds: 9, save: 6 })]);
+    expect(simulateTrial(gunner(gun), defender, { rng: die(3), stationary: true }).weapons[0].hits).toBe(0);
+    // Без [PSYCHIC] тот же Heavy превращает 3 в попадание.
+    const heavy = weapon({ skill: 4, strength: 5, keywords: parseKeywords(['Heavy']) });
+    expect(simulateTrial(gunner(heavy), defender, { rng: die(3), stationary: true }).weapons[0].hits).toBe(1);
+  });
+
+  it('[BLAST] считается от моделей в отряде, а не от живых', () => {
+    // Регрессия: считалось от живых на момент броска, и Blast терял бонус
+    // по мере убийства. 10 моделей с [BLAST] всегда дают +2 кубика атаки.
+    const gun = weapon({ skill: 2, strength: 5, keywords: parseKeywords(['Blast']) });
+    const many = unit(Array.from({ length: 10 }, (_, i) => model({ id: `m${i}`, wounds: 1, save: 6 })));
+    // 1 атака + 2 от Blast = 3; бросок 4 попадает по BS 2+.
+    const result = simulateTrial(gunner(gun), many, { rng: die(4) });
+    expect(result.weapons[0].attacks).toBe(3);
+  });
+
+  it('[BLAST] не теряет бонус после смертей в том же бою', () => {
+    // Первая атака убивает часть моделей, но у следующей атаки число кубиков
+    // остаётся прежним: [BLAST] считается от состава отряда, а не от живых.
+    // Регрессия: при aliveCount у второй атаки было бы 2 кубика вместо 3.
+    const gun = weapon({ skill: 2, strength: 5, keywords: parseKeywords(['Blast']) });
+    const many = unit(
+      Array.from({ length: 10 }, (_, i) => model({ id: `m${i}`, wounds: 1, save: 6 }))
+    );
+    const state = createDefenderState(many);
+    // Убиваем 5 моделей до начала атаки.
+    for (let i = 0; i < 5; i += 1) damageNextModel(state, 1, die(6));
+    expect(state.aliveCount).toBe(5);
+    expect(state.initialModelCount).toBe(10);
+
+    const usages = new Map();
+    simulateRound(gunner(gun), state, resolveCombatOptions({ rng: die(1) }), usages);
+    // 1 базовый кубик + 2 от Blast (10 моделей в отряде) = 3, несмотря на 5 смертей.
+    expect(usages.get(gun.id)?.attacks).toBe(3);
+  });
+});

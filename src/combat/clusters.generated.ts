@@ -1,0 +1,106 @@
+/**
+ * ТИПЫ ЮНИТОВ, ВЫВЕДЕННЫЕ ИЗ ДАННЫХ. Файл генерируется — правьте генератор.
+ *
+ * Создан scripts/build-clusters.ts (k-means по реальным даташитам BSData,
+ * K выбран по силуэту). Ручная типизация была кривой: в одной корзине
+ * «infantry» жили и Battle Sisters (W1/Sv3+), и Acolyte Hybrids (W1/Sv5+),
+ * и Bloodletters (W1/Sv7+), из-за чего медиана давала несуществующего юнита.
+ *
+ * НЕ ПРАВИТЬ ВРУЧНУЮ: перезапишется при следующей генерации.
+ */
+
+import type { ClusterProfile } from './clusterProfiles.ts';
+
+export const CLUSTER_PROFILES: readonly ClusterProfile[] = [
+  {
+    id: "cluster-1",
+    name: "Пехота T3 W4",
+    group: "infantry",
+    keywords: ["CHARACTER","INFANTRY"],
+    models: 1,
+    toughness: 3,
+    wounds: 4,
+    save: null,
+    invuln: 5,
+    points: 55,
+    sample: 107,
+  },
+  {
+    id: "cluster-2",
+    name: "Усиленная пехота T5 W5 Sv2+",
+    group: "infantry",
+    keywords: ["CHARACTER","IMPERIUM","INFANTRY","LEADER"],
+    models: 1,
+    toughness: 5,
+    wounds: 5,
+    save: 2,
+    invuln: 4,
+    points: 80,
+    sample: 227,
+  },
+  {
+    id: "cluster-3",
+    name: "Пехота T3 W1",
+    group: "infantry",
+    keywords: ["BATTLELINE","GRENADES","INFANTRY"],
+    models: 10,
+    toughness: 3,
+    wounds: 1,
+    save: 5,
+    invuln: null,
+    points: 94,
+    sample: 59,
+  },
+  {
+    id: "cluster-4",
+    name: "Ополчение T4 W3",
+    group: "infantry",
+    keywords: ["INFANTRY"],
+    models: 3,
+    toughness: 4,
+    wounds: 3,
+    save: 3,
+    invuln: null,
+    points: 108,
+    sample: 326,
+  },
+  {
+    id: "cluster-5",
+    name: "Техника T9 W11",
+    group: "armor",
+    keywords: ["VEHICLE"],
+    models: 1,
+    toughness: 9,
+    wounds: 11,
+    save: 3,
+    invuln: null,
+    points: 140,
+    sample: 223,
+  },
+  {
+    id: "cluster-6",
+    name: "Техника T10 W14",
+    group: "armor",
+    keywords: ["CHAOS","CHARACTER","DAEMON","MONSTER"],
+    models: 1,
+    toughness: 10,
+    wounds: 14,
+    save: 3,
+    invuln: 4,
+    points: 210,
+    sample: 89,
+  },
+  {
+    id: "cluster-7",
+    name: "Титан T12 W26",
+    group: "armor",
+    keywords: ["TITANIC","TOWERING","VEHICLE","WALKER"],
+    models: 1,
+    toughness: 12,
+    wounds: 26,
+    save: 3,
+    invuln: 5,
+    points: 395,
+    sample: 62,
+  },
+];

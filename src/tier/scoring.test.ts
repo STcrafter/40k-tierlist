@@ -16,7 +16,9 @@ import {
   meleeTax,
   percentileOf,
   rawScoreOf,
+  residualizeOnLogPoints,
   SCORE_WEIGHTS,
+  tierByGroup,
   tierList,
   tierOf,
 } from './scoring.ts';
@@ -172,12 +174,25 @@ describe('нормализация и перцентили', () => {
     expect(percentileOf([5], 5)).toBe(50);
   });
 
-  it('тиры назначаются по границам перцентилей', () => {
+  it('tierOf по перцентилю оставлен для совместимости', () => {
+    // Сами тиры теперь назначает naturalBreaks + tierByGroup; эта функция
+    // осталась только для внешних отчётов.
     expect(tierOf(95)).toBe('S');
     expect(tierOf(80)).toBe('A');
     expect(tierOf(60)).toBe('B');
     expect(tierOf(30)).toBe('C');
     expect(tierOf(10)).toBe('D');
+  });
+
+  it('tierByGroup сопоставляет группы тирам по возрастанию', () => {
+    expect(tierByGroup(0)).toBe('D');
+    expect(tierByGroup(1)).toBe('C');
+    expect(tierByGroup(2)).toBe('B');
+    expect(tierByGroup(3)).toBe('A');
+    expect(tierByGroup(4)).toBe('S');
+    // Вне диапазона не вылетает.
+    expect(tierByGroup(-3)).toBe('D');
+    expect(tierByGroup(99)).toBe('S');
   });
 
   it('сумма весов равна единице', () => {
@@ -213,10 +228,16 @@ describe('Best in Slot и метрики', () => {
       8
     );
 
-    // Слоты различаются: у Abominant (S-профиль против T11+) броня выгоднее пехоты.
-    const abominant = find('Abominant');
-    const adapted = adaptUnit(abominant, { size: 'min' });
-    const heavy = rawScoreOf(abominant, adapted.unit, adapted.points, fast);
+    // Слоты различаются: у Cerastus Knight Lancer (копьё = +1 к ранению,
+    // антиброневый профиль) техника выгоднее пехоты.
+    //
+    // Раньше здесь стоял Abominant, но после перехода на кластеры это
+    // перестало быть верным: его цеп и S-профиль пробивают пехоту, а новые
+    // armor-цели (T9/W11 … T12/W26) он уже не продавливает. Это не регресс
+    // модели, а смена определения «броня» — ручной список типов был мягче.
+    const lancer = find('Cerastus Knight Lancer');
+    const adapted = adaptUnit(lancer, { size: 'min' });
+    const heavy = rawScoreOf(lancer, adapted.unit, adapted.points, fast);
     expect(heavy.vsArmor).toBeGreaterThan(heavy.vsInfantry);
     expect(heavy.bestTarget).toBeTruthy();
   });
@@ -502,6 +523,101 @@ describe('тирлист', () => {
     expect(rows[0].tier).toBe('S');
     // Худший — ниже 25-го.
     expect(rows[rows.length - 1].tier).toBe('D');
+  });
+});
+
+
+/** Пирсонова корреляция — для проверки, что остатки действительно убирают связь. */
+function pearson(xs: number[], ys: number[]): number {
+  if (xs.length !== ys.length || xs.length < 2) return 0;
+  const meanX = xs.reduce((a, b) => a + b, 0) / xs.length;
+  const meanY = ys.reduce((a, b) => a + b, 0) / ys.length;
+  let cov = 0;
+  let varX = 0;
+  let varY = 0;
+  for (let i = 0; i < xs.length; i += 1) {
+    cov += (xs[i] - meanX) * (ys[i] - meanY);
+    varX += (xs[i] - meanX) ** 2;
+    varY += (ys[i] - meanY) ** 2;
+  }
+  if (varX === 0 || varY === 0) return 0;
+  return cov / Math.sqrt(varX * varY);
+}
+
+describe('остаточная нормализация живучести', () => {
+  it('остатки ортогональны log(цены) по построению', () => {
+    // Ключевое свойство МНК-остатков: их сумма равна нулю и ковариация с
+    // регрессором равна нулю. Именно это, а не корреляция Пирсона, означает
+    // «остаток не содержит информации о цене». (Пирсон тут даёт ±0.5: при
+    // трёх точках и двух параметрах остаётся одна степень свободы.)
+    const points = [20, 50, 100, 200, 400, 800, 1600];
+    const values = [30, 45, 55, 70, 80, 95, 105];
+    const xs = points.map(Math.log);
+    const residuals = residualizeOnLogPoints(points, values);
+
+    expect(residuals.reduce((a, b) => a + b, 0)).toBeCloseTo(0, 8);
+    const meanX = xs.reduce((a, b) => a + b, 0) / xs.length;
+    const meanR = residuals.reduce((a, b) => a + b, 0) / residuals.length;
+    const cov = xs.reduce((sum, x, i) => sum + (x - meanX) * (residuals[i] - meanR), 0);
+    expect(cov).toBeCloseTo(0, 6);
+  });
+
+  it('юнит, живучесть которого выше тренда цены, получает положительный остаток', () => {
+    // Строим «обычный» тренд в log(цене) и один выброс: дешёвый юнит, который
+    // живучее, чем предсказывает его цена. Именно его модель должна награждать.
+    const points = [50, 100, 200, 400, 800];
+    const trend = points.map((point) => 20 + 30 * Math.log(point / 50));
+    const values = [...trend];
+    values[0] += 25; // дешёвый юнит аномально живучий для своей цены
+    const residuals = residualizeOnLogPoints(points, values);
+    expect(residuals[0]).toBeGreaterThan(5);
+    // Дорогие юниты, лежащие на тренде, остаются около нуля.
+    expect(Math.abs(residuals[4])).toBeLessThan(Math.abs(residuals[0]));
+  });
+
+  it('корреляция цены и живучести падает после регрессии', () => {
+    // Нужно достаточно точек: при n=3 остаток ровно один и корреляция Пирсона
+    // с одним элементом бессмысленна (всегда ±1).
+    const points = [20, 50, 100, 200, 400, 800, 1600];
+    const values = [30, 45, 55, 70, 80, 95, 105];
+    const xs = points.map(Math.log);
+    const before = pearson(xs, values);
+    const after = pearson(xs, residualizeOnLogPoints(points, values));
+    expect(before).toBeGreaterThan(0.9);
+    expect(Math.abs(after)).toBeLessThan(Math.abs(before));
+  });
+
+  it('вырожденные случаи не дают NaN', () => {
+    expect(residualizeOnLogPoints([], [])).toEqual([]);
+    expect(residualizeOnLogPoints([100], [50])).toEqual([0]);
+    // Все юниты одной цены — дисперсия log(цены) нулевая.
+    const same = residualizeOnLogPoints([100, 100, 100], [10, 20, 30]);
+    for (const value of same) expect(Number.isFinite(value)).toBe(true);
+  });
+
+  it('в тирлисте живучесть больше не награждает за цену', () => {
+    // Сквозная проверка на реальных даташитах: после остаточной нормализации
+    // связь log(цены) с нормированной живучестью должна исчезнуть. До правки
+    // она была r ≈ 0.69, из-за чего верх живучести занимали титаны.
+    // Набор — 50 равномерно взятых юнитов, чтобы тест не гонял все 1093.
+    const entries = datasheets
+      .filter((sheet) => !sheet.name.includes('[Legends]'))
+      .map((sheet) => {
+        const adapted = adaptUnit(sheet, { size: 'min' });
+        return { datasheet: sheet, unit: adapted.unit, points: adapted.points };
+      })
+      .filter((entry) => entry.unit.models.length > 0 && entry.points > 0)
+      .filter((_, index) => index % 20 === 0)
+      .slice(0, 50);
+    expect(entries.length).toBeGreaterThanOrEqual(30);
+
+    const rows = tierList(entries, {
+      combat: { trials: 3, distance: 12 },
+      survival: { trials: 3, maxRounds: 8, distance: 12 },
+    });
+    const costs = rows.map((row) => Math.log(Math.max(1, row.points)));
+    const survivability = rows.map((row) => row.normSurvivability);
+    expect(Math.abs(pearson(costs, survivability))).toBeLessThan(0.25);
   });
 });
 

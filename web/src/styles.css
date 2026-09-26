@@ -410,6 +410,14 @@ td {
   color: var(--accent);
 }
 
+/* Неустойчивый ранг: зависит от допущения о размере эталонных целей. */
+.tag.sens-mark {
+  background: rgba(240, 170, 60, 0.18);
+  border-color: rgba(240, 170, 60, 0.55);
+  color: #f0aa3c;
+  cursor: help;
+}
+
 .bar {
   position: relative;
   display: block;

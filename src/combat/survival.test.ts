@@ -7,7 +7,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { ARCHETYPES, archetypeById, targetUnitOf } from './archetypes.ts';
+import { ARCHETYPES, archetypesByGroup, targetUnitOf } from './archetypes.ts';
 import {
   WEAPON_ARCHETYPES,
   WEAPON_GROUPS,
@@ -30,9 +30,19 @@ import {
 } from './simulate.ts';
 import type { CombatUnit } from './types.ts';
 
+/**
+ * Типы целей выведены из данных, поэтому обращаемся к ним ПО СМЫСЛУ, а не по
+ * ручному id: id меняются при каждой смене K, и тест на 'infantry' после
+ * рефакторинга был бы просто ссылкой на несуществующий тип.
+ */
+const weakestInfantry = archetypesByGroup('infantry')[0];
+const armorTypes = archetypesByGroup('armor');
+/** Самая живучая техника — для проверок на anti-armour. */
+const toughestArmor = armorTypes[armorTypes.length - 1];
+
 /** Цель с заданными T/W/Sv и числом моделей. */
 function target(models: number, toughness: number, wounds: number, save: number | null): CombatUnit {
-  return targetUnitOf(archetypeById('infantry'), { models, toughness, wounds, save });
+  return targetUnitOf(weakestInfantry, { models, toughness, wounds, save });
 }
 
 describe('многораундовая симуляция боя', () => {
@@ -161,7 +171,7 @@ describe('выживаемость', () => {
   const options = { trials: 40, maxRounds: 12, distance: 12, seed: 5 };
 
   it('считает метрики по каждому шаблону оружия', () => {
-    const result = survivabilityAgainstArchetype(archetypeById('infantry'), options);
+    const result = survivabilityAgainstArchetype(weakestInfantry, options);
     expect(result.weapons).toHaveLength(WEAPON_ARCHETYPES.length);
     for (const threat of result.weapons) {
       expect(threat.damagePerRound.mean, threat.weaponId).toBeGreaterThanOrEqual(0);
@@ -181,7 +191,7 @@ describe('выживаемость', () => {
   });
 
   it('антибронебойное оружие эффективнее стрелкового против техники', () => {
-    const result = survivabilityAgainstArchetype(archetypeById('vehicle'), options);
+    const result = survivabilityAgainstArchetype(toughestArmor, options);
     const find = (id: string) => result.weapons.find((w) => w.weaponId === id);
     // Лазган (S3) почти не пробивает T11 с Sv2+, ланс (S12 AP-5) — наоборот.
     expect(find('lance')!.roundsToKill.mean).toBeLessThan(find('lasgun')!.roundsToKill.mean);
@@ -191,17 +201,20 @@ describe('выживаемость', () => {
   });
 
   it('нормировка на 100 очков: нанесённый и пережитый урон считаются раздельно', () => {
-    const result = survivabilityAgainstArchetype(archetypeById('monster'), options);
+    const result = survivabilityAgainstArchetype(toughestArmor, options);
     const threat = result.weapons.find((w) => w.weaponId === 'bolter');
     // Болтер наносит свой урон на 100 своих очков (10 × 12 = 120 очков),
     // а монстр «переживает» его на 100 своих (100 очков).
     expect(threat?.dealtPer100Points.mean).toBeGreaterThan(0);
     expect(threat?.takenPer100Points.mean).toBeGreaterThan(0);
-    expect(result.target.points).toBe(100);
+    // Стоимость эталона берётся у самого кластера: раньше здесь стояло
+    // жёсткое 100, а после перехода на данные у «крепкой техники» это 395.
+    expect(result.target.points).toBe(toughestArmor.points);
+    expect(result.target.points).toBeGreaterThan(0);
   });
 
   it('фильтр групп оружия сужает набор', () => {
-    const result = survivabilityAgainstArchetype(archetypeById('infantry'), {
+    const result = survivabilityAgainstArchetype(weakestInfantry, {
       ...options,
       groups: ['melee-infantry'],
     });
@@ -210,8 +223,8 @@ describe('выживаемость', () => {
   });
 
   it('одинаковый seed даёт одинаковый результат', () => {
-    const first = survivabilityAgainstArchetype(archetypeById('walker'), options);
-    const second = survivabilityAgainstArchetype(archetypeById('walker'), options);
+    const first = survivabilityAgainstArchetype(toughestArmor, options);
+    const second = survivabilityAgainstArchetype(toughestArmor, options);
     expect(first.overall.roundsToKill).toEqual(second.overall.roundsToKill);
     expect(first.overall.takenPer100Points).toEqual(second.overall.takenPer100Points);
   });

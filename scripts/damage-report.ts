@@ -45,12 +45,21 @@ console.log(`Прогонов на замер: ${trials}, размер отря�
 
 const fmt = (value: number): string => value.toFixed(2).padStart(7);
 
-/** Адаптированный отряд: пропускаем даташиты без профиля модели. */
-function toUnit(datasheet: BsDatasheet): CombatUnit | null {
+/**
+ * Адаптированный отряд вместе со стоимостью: классификация типа идёт по
+ * ближайшему центроиду, и один из признаков — очки на модель, поэтому
+ * голого CombatUnit (без цены) недостаточно.
+ */
+function toEntry(datasheet: BsDatasheet): { unit: CombatUnit; points: number } | null {
   const adapted = adaptUnit(datasheet, { size });
-  return adapted.unit.models.length > 0 && isEligibleForCalculations(datasheet.name, adapted.points)
-    ? adapted.unit
-    : null;
+  if (adapted.unit.models.length === 0) return null;
+  if (!isEligibleForCalculations(datasheet.name, adapted.points)) return null;
+  return { unit: adapted.unit, points: adapted.points };
+}
+
+/** Только отряд, без цены — там, где стоимость не нужна. */
+function toUnit(datasheet: BsDatasheet): CombatUnit | null {
+  return toEntry(datasheet)?.unit ?? null;
 }
 
 const rows: Array<{
@@ -83,7 +92,7 @@ for (const datasheet of limited) {
   rows.push({
     faction: datasheet.faction,
     name: datasheet.name,
-    type: archetypeOf(unit)?.id ?? 'unknown',
+    type: archetypeOf(unit, points)?.id ?? 'unknown',
     models: unit.models.length,
     points,
     ranged: damage.ranged.overall.mean,
@@ -133,7 +142,7 @@ if (argv.includes('--units')) {
   console.log('');
   console.log('=== Среднее по типам атакующего ===');
   const byType = damagePerRoundByType(
-    limited.map(toUnit).filter((unit): unit is CombatUnit => unit !== null),
+    limited.map(toEntry).filter((entry): entry is { unit: CombatUnit; points: number } => entry !== null),
     { trials, distance }
   );
   for (const row of byType) {

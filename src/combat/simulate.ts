@@ -54,7 +54,15 @@ export interface CombatOptions {
   phase?: Phase;
   /** Дистанция в дюймах (для Rapid Fire/Melta/Heavy); null — неизвестна. */
   distance?: number | null;
-  /** Атакующий совершил charge move (Lance). */
+  /**
+   * Атакующий совершил charge move ([LANCE]: +1 к ранению).
+   *
+   * По умолчанию `true`: симуляция не моделирует перемещения по карте, а
+   * оценивает бой в состоянии, когда атакующий уже добрался до цели. Раньше
+   * здесь стоял `false`, из-за чего [LANCE] не срабатывал НИКОГДА — кейворд
+   * был мёртвым у всех 40+ единиц оружия (Bright/Laser/Inferno/Sonic Lance).
+   * Вызывающий код может выставить `false`, чтобы снять бонус зарядки.
+   */
   charged?: boolean;
   /** Атакующий не двигался (Heavy). */
   stationary?: boolean;
@@ -99,7 +107,8 @@ export function resolveCombatOptions(options: CombatOptions = {}): ResolvedComba
   return {
     phase: options.phase ?? 'ranged',
     distance: options.distance ?? null,
-    charged: options.charged ?? false,
+    // Зарядка по умолчанию: см. CombatOptions.charged.
+    charged: options.charged ?? true,
     stationary: options.stationary ?? true,
     indirect: options.indirect ?? false,
     cover: options.cover ?? false,
@@ -210,6 +219,15 @@ export interface DefenderState {
   /** Порядок распределения урона. */
   order: number[];
   aliveCount: number;
+  /**
+   * Сколько моделей было в отряде в начале боя.
+   *
+   * Нужен отдельно от `aliveCount`: [BLAST]/[CLEAVE] по правилам считаются
+   * от числа моделей, которые БЫЛИ в цели на шаге выбора целей, а не от
+   * живых на момент броска. Иначе Blast 10-ти моделей терял бы бонус
+   * по мере убийства.
+   */
+  initialModelCount: number;
   kills: number;
   /** Урон, доведённый до моделей (без избытка по «убитым» ранам). */
   damage: number;
@@ -230,6 +248,7 @@ export function createDefenderState(
     woundsLeft: unit.models.map((model) => model.wounds),
     order,
     aliveCount: unit.models.length,
+    initialModelCount: unit.models.length,
     kills: 0,
     damage: 0,
   };
@@ -520,7 +539,7 @@ function contextFor(
   state: DefenderState,
   target: CombatModel
 ): CombatContext {
-  return { ...ctx, target, defenderModelCount: state.aliveCount };
+  return { ...ctx, target, defenderModelCount: state.initialModelCount };
 }
 
 /** Фазы боя, в которые попадает атакующий ('all' → сначала стрельба, потом рукопашная). */
@@ -576,7 +595,7 @@ export function simulateRound(
           attackerModel: model,
           defender: state.unit,
           target: state.unit.models[targetIndex],
-          defenderModelCount: state.aliveCount,
+          defenderModelCount: state.initialModelCount,
           charged: opts.charged,
           stationary: opts.stationary,
           indirect: opts.indirect,

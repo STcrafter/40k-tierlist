@@ -100,6 +100,21 @@ export function parseKeyword(raw: string): ParsedKeyword | null {
   return keyword;
 }
 
+/**
+ * Ключ дедупликации: два кейворда считаются одним и тем же, если совпадают
+ * каноническое имя И цель.
+ *
+ * Одного имени мало для [ANTI-X Y+]: у одного ствола бывает сразу
+ * «Anti-MONSTER 4+» и «Anti-VEHICLE 3+», и это РАЗНЫЕ правила — второе
+ * срабатывает против техники. Схлопывание по имени теряло Anti-VEHICLE
+ * целиком, оставляя только Anti-MONSTER.
+ */
+function dedupeKey(keyword: ParsedKeyword): string {
+  return keyword.target === null
+    ? keyword.name
+    : `${keyword.name}:${[...keyword.target].sort().join('/')}`;
+}
+
 /** Массовый разбор списка кейвордов. */
 export function parseKeywords(raw: string[]): ParsedKeyword[] {
   const seen = new Map<string, ParsedKeyword>();
@@ -108,12 +123,38 @@ export function parseKeywords(raw: string[]): ParsedKeyword[] {
     if (keyword === null) continue;
     // Дубликаты с разным регистром склеиваем; более сильное значение побеждает
     // (упрощение: Sustained Hits 1 + SUSTAINED HITS 2 → 2).
-    const existing = seen.get(keyword.name);
-    if (!existing || (keyword.value !== null && (existing.value === null || keyword.value.count > existing.value.count))) {
-      seen.set(keyword.name, keyword);
+    const key = dedupeKey(keyword);
+    const existing = seen.get(key);
+    if (
+      !existing ||
+      (keyword.value !== null && (existing.value === null || keyword.value.count > existing.value.count))
+    ) {
+      seen.set(key, keyword);
     }
   }
   return [...seen.values()];
+}
+
+/**
+ * Применим ли кейворд к цели с данными кейвордами — проверка ЕГО условия.
+ *
+ * В отличие от `keywordOf`, который возвращает первое подходящее совпадение,
+ * эта функция отвечает на вопрос про конкретный экземпляр кейворда. Это нужно
+ * там, где правило перебирает несколько кейвордов одного оружия: например
+ * [ANTI-MONSTER 4+] и [ANTI-VEHICLE 3+] у одного ствола применяются независимо,
+ * и `keywordOf` вернул бы только Anti-MONSTER, пропустив второе условие.
+ *
+ * @param defenderKeywords кейворды отряда и модели цели (вместе)
+ */
+export function keywordApplies(
+  keyword: ParsedKeyword,
+  defenderKeywords?: string[]
+): boolean {
+  if (keyword.condition === null || defenderKeywords === undefined) return true;
+  const has = keyword.condition.keywords.some((required) =>
+    defenderKeywords.includes(required)
+  );
+  return keyword.condition.negate ? !has : has;
 }
 
 /** Кейворд по каноническому имени, с учётом условия на кейворды цели. */
@@ -124,11 +165,7 @@ export function keywordOf(
 ): ParsedKeyword | null {
   for (const keyword of keywords) {
     if (keyword.name !== name) continue;
-    if (keyword.condition === null || defenderKeywords === undefined) return keyword;
-    const has = keyword.condition.keywords.some((required) =>
-      defenderKeywords.includes(required)
-    );
-    if (keyword.condition.negate ? !has : has) return keyword;
+    if (keywordApplies(keyword, defenderKeywords)) return keyword;
   }
   return null;
 }

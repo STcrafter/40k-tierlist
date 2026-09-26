@@ -17,8 +17,14 @@ import { loadBsData, parseBsDatabase } from '../src/bsdata/index.ts';
 import { adaptUnit, loadoutVariantsOf, type LoadoutCandidate } from '../src/combat/adapter.ts';
 import { isEligibleForCalculations } from '../src/combat/budget.ts';
 import { leaderDefinitionsOf } from '../src/tier/leaders.ts';
-import { archetypeOf } from '../src/combat/archetypes.ts';
-import { tierList, type CombatMode, type TargetParadigm, type TierRow } from '../src/tier/scoring.ts';
+import { ARCHETYPES, archetypeOf } from '../src/combat/archetypes.ts';
+import {
+  sensitivityAnalysis,
+  tierList,
+  type CombatMode,
+  type TargetParadigm,
+  type TierRow,
+} from '../src/tier/scoring.ts';
 import type { BsDatasheet } from '../src/bsdata/types.ts';
 import type { CombatUnit } from '../src/combat/types.ts';
 
@@ -52,6 +58,21 @@ console.log(`Пригодных юнитов: ${prepared.length} (${Date.now() -
 
 const leaders = leaderDefinitionsOf(datasheets);
 if (leaders.length === 0) throw new Error('BSData: не найдено ни одного Leader/Support с допустимыми отрядами');
+
+/**
+ * Эталоны целей берутся из clusters.generated.ts — они выведены k-means из
+ * реальных даташитов (scripts/build-clusters.ts). Отчёт ниже нужен, чтобы было
+ * видно состав типов и их наполненность, а не чтобы что-то проверять: раньше
+ * здесь сверялись медианы по РУЧНЫМ корзинам, и почти все расходились.
+ */
+console.log(`Эталоны целей: ${ARCHETYPES.length} (выведены из данных)`);
+for (const archetype of ARCHETYPES) {
+  console.log(
+    `  ${archetype.id.padEnd(11)} ${archetype.name.padEnd(26)} n=${String(archetype.sample).padStart(4)} ` +
+      `T${archetype.toughness} W${archetype.wounds} Sv${archetype.save ?? '-'} models=${archetype.models} ` +
+      `pts=${archetype.points} [${archetype.group}]`
+  );
+}
 
 interface AttachedPayload {
   unitId: string;
@@ -115,12 +136,14 @@ for (const paradigm of paradigms) {
       targetParadigm: paradigm,
       combat: { trials, distance },
       survival: { trials, maxRounds: 15, distance },
+      archetypes: ARCHETYPES,
     });
     const attachedRows = tierList(attachedEntries, {
       mode,
       targetParadigm: paradigm,
       combat: { trials: Math.min(trials, 4), distance },
       survival: { trials: Math.min(trials, 3), maxRounds: 8, distance },
+      archetypes: ARCHETYPES,
     });
     attachedByParadigm[paradigm][mode] = attachedRows.map((row) => ({
       unitId: row.id.split('+')[0],
@@ -142,6 +165,25 @@ for (const paradigm of paradigms) {
     console.log(`Парадигма ${paradigm}/${mode}: ${byParadigm[paradigm][mode].length} юнитов, ${attachedRows.length} с лидерами (${Date.now() - modeStarted} мс)`);
   }
 }
+
+// Sensitivity-анализ только для основного вида (all/combined): это три полных
+// прогона тирлиста, и считать их для 11 остальных комбинаций означало бы
+// утроить время сборки ради второстепенных метрик.
+const sensitivityStarted = Date.now();
+const sensitivity = sensitivityAnalysis(
+  prepared,
+  {
+    mode: 'combined',
+    targetParadigm: 'all',
+    combat: { trials, distance },
+    survival: { trials, maxRounds: 15, distance },
+    archetypes: ARCHETYPES,
+  }
+);
+const sensitivityHigh = [...sensitivity.values()].filter((item) => item.high).length;
+console.log(
+  `Sensitivity (all/combined): HIGH у ${sensitivityHigh} из ${sensitivity.size} юнитов (${Date.now() - sensitivityStarted} мс)`
+);
 
 /**
  * Боевой профиль юнита для пересчёта на клиенте: модель целиком, чтобы
@@ -203,6 +245,7 @@ const payload = {
   factions: [...new Set(prepared.flatMap((item) => item.datasheet.factions))].sort(),
   units: prepared.map(({ datasheet, unit, points, loadouts }) => {
     const base = byParadigm.all.combined.find((row) => row.id === datasheet.id);
+    const sensitivityRow = sensitivity.get(datasheet.id);
     const metricsFor = (paradigm: TargetParadigm, mode: CombatMode) => {
       const row = byParadigm[paradigm][mode].find((candidate) => candidate.id === datasheet.id);
       return {
@@ -253,7 +296,16 @@ const payload = {
       factions: datasheet.factions,
       points,
       models: unit.models.length,
-      archetype: archetypeOf(unit)?.id ?? 'unknown',
+      archetype: archetypeOf(unit, points)?.id ?? 'unknown',
+      /**
+       * Чувствительность ранга к размеру эталонных целей (±20% моделей).
+       * Считается только для all/combined — это единственный вид, для которого
+       * прогон делается; в остальных полях флаг не переносится.
+       */
+      sensitivity: {
+        spread: sensitivityRow?.spread ?? 0,
+        high: sensitivityRow?.high ?? false,
+      },
       utilityFlags: base?.utilityFlags ?? [],
       utilityScore: base?.utilityScore ?? 0,
       unit: unitProfileOf(unit, points),

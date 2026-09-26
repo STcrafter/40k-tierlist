@@ -92,6 +92,12 @@ export interface PerRoundOptions extends CombatOptions {
   weights?: Partial<Record<ArchetypeId, number>> | null;
   /** Какие типы целей считать; по умолчанию — все из ARCHETYPES. */
   targets?: ArchetypeId[] | null;
+  /**
+   * Замена набора эталонов целей (для sensitivity-анализа).
+   * По умолчанию — ARCHETYPES. Используется, чтобы пересчитать тирлист с
+   * другим размером целей и сравнить ранги: см. scaleArchetypeModels.
+   */
+  archetypes?: readonly UnitArchetype[] | null;
 }
 
 /** Среднее и σ с безопасным делением на ноль. */
@@ -214,9 +220,12 @@ function measure(
 
 /** Типы целей из опций: по умолчанию — все архетипы. */
 function targetsOf(options: PerRoundOptions): UnitArchetype[] {
+  const pool = options.archetypes ?? ARCHETYPES;
   const ids = options.targets;
-  if (ids === null || ids === undefined) return [...ARCHETYPES];
-  return ids.map((id) => archetypeById(id));
+  if (ids === null || ids === undefined) return [...pool];
+  // Ищем в переопределённом наборе, а не в глобальном ARCHETYPES: при
+  // sensitivity-запуске именно там лежат масштабированные цели.
+  return ids.map((id) => pool.find((archetype) => archetype.id === id) ?? archetypeById(id));
 }
 
 /**
@@ -248,13 +257,15 @@ export interface ArchetypeDamageRow {
  * перебивала монстров и наоборот.
  */
 export function damagePerRoundByType(
-  units: CombatUnit[],
+  entries: Array<{ unit: CombatUnit; points: number }>,
   options: PerRoundOptions = {}
 ): ArchetypeDamageRow[] {
   const grouped = new Map<string, { type: ArchetypeId | 'unknown'; units: CombatUnit[] }>();
 
-  for (const unit of units) {
-    const archetype = archetypeOf(unit);
+  for (const { unit, points } of entries) {
+    // Классификация идёт по ближайшему центроиду, и один из признаков —
+    // очки на модель, поэтому без стоимости тип не определяется.
+    const archetype = archetypeOf(unit, points);
     const type = archetype?.id ?? 'unknown';
     const bucket = grouped.get(type) ?? { type, units: [] };
     bucket.units.push(unit);

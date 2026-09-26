@@ -105,6 +105,8 @@ export interface UnitEntry {
   points: number;
   models: number;
   archetype: string;
+  /** Чувствительность ранга к ±20% числа моделей в эталонных целях. */
+  sensitivity?: { spread: number; high: boolean };
   utilityFlags: Array<{ id: string; points: number; reason: string }>;
   utilityScore: number;
   unit: UnitProfile;
@@ -176,7 +178,6 @@ export interface ScoredRow {
 }
 
 export const SCORE_WEIGHTS = { damage: 0.4, survivability: 0.35, utility: 0.25 } as const;
-export const TIER_PERCENTILES = { S: 0.9, A: 0.75, B: 0.5, C: 0.25 } as const;
 
 /**
  * Min-Max нормализация на шкалу 0–100. При Max == Min все получают 50 —
@@ -210,13 +211,17 @@ export function percentileOf(sorted: number[], value: number): number {
   return (below / (sorted.length - 1)) * 100;
 }
 
-/** Тир по перцентилю Total. */
-export function tierOf(percentile: number): Tier {
-  if (percentile > TIER_PERCENTILES.S * 100) return 'S';
-  if (percentile > TIER_PERCENTILES.A * 100) return 'A';
-  if (percentile > TIER_PERCENTILES.B * 100) return 'B';
-  if (percentile > TIER_PERCENTILES.C * 100) return 'C';
-  return 'D';
+/**
+ * Тир по номеру группы натуральных разрывов.
+ *
+ * Дублирует src/tier/scoring.ts: клиент пересобирает тирлист сам после правки
+ * юнита в редакторе, и разбиение обязано совпадать с серверным, иначе правка
+ * одного юнита переставит тиры у всех.
+ */
+const TIER_BY_GROUP: readonly Tier[] = ['D', 'C', 'B', 'A', 'S'];
+
+export function tierByGroup(group: number): Tier {
+  return TIER_BY_GROUP[Math.max(0, Math.min(TIER_BY_GROUP.length - 1, group))];
 }
 
 /** Среднее по списку. */
@@ -235,6 +240,118 @@ function percentileAt(sorted: number[], fraction: number): number {
   const high = Math.ceil(index);
   if (low === high) return sorted[low];
   return sorted[low] + (sorted[high] - sorted[low]) * (index - low);
+}
+
+/**
+ * Остатки линейной регрессии `value ~ a + b·log(points)`.
+ *
+ * Дублирует src/tier/scoring.ts: клиент пересобирает тирлист сам после правки
+ * юнита в редакторе, и регрессия обязана совпадать с серверной до числа, иначе
+ * правка одного юнита сдвинет шкалу иначе, чем при полной пересборке.
+ */
+export function residualizeOnLogPoints(points: number[], values: number[]): number[] {
+  if (values.length === 0) return [];
+  if (values.length === 1) return [0];
+  const xs = points.map((point) => Math.log(Math.max(1, point)));
+  const n = xs.length;
+  const meanX = mean(xs);
+  const meanY = mean(values);
+  let cov = 0;
+  let varX = 0;
+  for (let i = 0; i < n; i += 1) {
+    cov += (xs[i] - meanX) * (values[i] - meanY);
+    varX += (xs[i] - meanX) ** 2;
+  }
+  if (varX === 0) return values.map((value) => value - meanY);
+  const slope = cov / varX;
+  const intercept = meanY - slope * meanX;
+  return values.map((value, i) => value - (intercept + slope * xs[i]));
+}
+
+/**
+ * Натуральные разрывы (Fisher–Jenks) для одномерного набора.
+ *
+ * Дублирует src/combat/clustering.ts — по той же причине, что и регрессия:
+ * клиент обязан получить ровно те же тиры, что и серверная сборка.
+ */
+export function naturalBreaks(values: number[], requestedGroups: number): {
+  labels: number[];
+  boundaries: number[];
+  sizes: number[];
+} {
+  const n = values.length;
+  const groups = Math.max(1, Math.min(requestedGroups, n));
+  if (n === 0) return { labels: [], boundaries: [], sizes: [] };
+  if (groups === 1) return { labels: values.map(() => 0), boundaries: [], sizes: [n] };
+
+  const sorted = [...values].sort((a, b) => a - b);
+  const prefix = new Float64Array(n + 1);
+  const prefixSq = new Float64Array(n + 1);
+  for (let i = 0; i < n; i += 1) {
+    prefix[i + 1] = prefix[i] + sorted[i];
+    prefixSq[i + 1] = prefixSq[i] + sorted[i] * sorted[i];
+  }
+  const sseOf = (lo: number, hi: number): number => {
+    const count = hi - lo;
+    if (count <= 1) return 0;
+    const sum = prefix[hi] - prefix[lo];
+    const sumSq = prefixSq[hi] - prefixSq[lo];
+    return Math.max(0, sumSq - (sum * sum) / count);
+  };
+
+  const best: Float64Array[] = [];
+  const back: Int32Array[] = [];
+  for (let g = 0; g <= groups; g += 1) {
+    best.push(new Float64Array(n + 1).fill(Number.POSITIVE_INFINITY));
+    back.push(new Int32Array(n + 1));
+  }
+  best[0][0] = 0;
+  for (let g = 1; g <= groups; g += 1) {
+    for (let i = g; i <= n; i += 1) {
+      for (let j = g - 1; j < i; j += 1) {
+        if (best[g - 1][j] === Number.POSITIVE_INFINITY) continue;
+        const candidate = best[g - 1][j] + sseOf(j, i);
+        if (candidate < best[g][i]) {
+          best[g][i] = candidate;
+          back[g][i] = j;
+        }
+      }
+    }
+  }
+
+  const cuts: number[] = [];
+  let cursor = n;
+  for (let g = groups; g >= 1; g -= 1) {
+    const j = back[g][cursor];
+    if (g > 1) cuts.push(j);
+    cursor = j;
+  }
+  cuts.reverse();
+
+  // Сдвиг вправо до конца серии одинаковых значений: одинаковые Total не должны
+  // попадать в разные тиры (см. комментарий в src/combat/clustering.ts).
+  const adjusted: number[] = [];
+  let previous = 0;
+  for (const cut of cuts) {
+    let moved = Math.max(cut, previous);
+    while (moved < n && sorted[moved] === sorted[moved - 1]) moved += 1;
+    adjusted.push(moved);
+    previous = moved;
+  }
+
+  const labels = values.map((value) => {
+    let group = 0;
+    for (const cut of adjusted) if (value >= sorted[cut]) group += 1;
+    return group;
+  });
+  const sizes = new Array<number>(groups).fill(0);
+  for (const label of labels) sizes[label] += 1;
+  const boundaries = adjusted.map((cut) => {
+    const below = sorted[cut - 1];
+    const above = sorted[cut];
+    return below + (above - below) / 2;
+  });
+  return { labels, boundaries, sizes };
 }
 
 /** «Сырые» величины юнита — всё, что нужно для нормировки и тиров. */
@@ -259,7 +376,7 @@ export function rebuildTierlist<T extends {
   defenseVector: Record<string, number>;
   effectiveOffenseVector: Record<string, number>;
   utilityScore: number;
-}>(units: Array<{ id: string; raw: T }>): Map<string, T & {
+}>(units: Array<{ id: string; raw: T; points: number }>): Map<string, T & {
   normDamage: number;
   normSurvivability: number;
   normUtility: number;
@@ -273,16 +390,19 @@ export function rebuildTierlist<T extends {
 }> {
   const rankVector = (
     keys: string[],
-    pick: (raw: T, key: string) => number
+    pick: (raw: T, key: string) => number,
+    residual: boolean
   ): { scores: number[]; floors: number[] } => {
     if (keys.length === 0) {
       return { scores: units.map(() => 50), floors: units.map(() => 50) };
     }
+    const costs = units.map((unit) => unit.points);
     const ranks = keys.map((key) => {
-      const sorted = units
-        .map((unit) => pick(unit.raw, key))
-        .sort((a, b) => a - b);
-      return units.map((unit) => percentileOf(sorted, pick(unit.raw, key)));
+      const values = units.map((unit) => pick(unit.raw, key));
+      // Защита ранжируется по остаткам от log(цены), как на сервере.
+      const scored = residual ? residualizeOnLogPoints(costs, values) : values;
+      const sorted = [...scored].sort((a, b) => a - b);
+      return scored.map((value) => percentileOf(sorted, value));
     });
     return {
       scores: units.map((_, index) => {
@@ -300,8 +420,8 @@ export function rebuildTierlist<T extends {
   };
   const offenseKeys = Object.keys(units[0]?.raw.effectiveOffenseVector ?? {});
   const defenseKeys = Object.keys(units[0]?.raw.defenseVector ?? {});
-  const offense = rankVector(offenseKeys, (raw, key) => raw.effectiveOffenseVector[key] ?? 0);
-  const defense = rankVector(defenseKeys, (raw, key) => raw.defenseVector[key] ?? 0);
+  const offense = rankVector(offenseKeys, (raw, key) => raw.effectiveOffenseVector[key] ?? 0, false);
+  const defense = rankVector(defenseKeys, (raw, key) => raw.defenseVector[key] ?? 0, true);
   const normDamage = offense.scores;
   const normSurvivability = defense.scores;
   const normUtility = minMaxNormalize(units.map((unit) => unit.raw.utilityScore));
@@ -321,6 +441,10 @@ export function rebuildTierlist<T extends {
     vectorSurvivabilityFloor: defense.floors[index],
   }));
 
+  const breaks = naturalBreaks(
+    totals.map((row) => row.totalScore),
+    TIER_BY_GROUP.length
+  );
   const sorted = totals.map((row) => row.totalScore).sort((a, b) => a - b);
   type Scored = T & {
     normDamage: number;
@@ -337,7 +461,12 @@ export function rebuildTierlist<T extends {
   const result = new Map<string, Scored>();
   totals.forEach((row, index) => {
     const percentile = percentileOf(sorted, row.totalScore);
-    result.set(row.id, { ...units[index].raw, ...row, percentile, tier: tierOf(percentile) } as Scored);
+    result.set(row.id, {
+      ...units[index].raw,
+      ...row,
+      percentile,
+      tier: tierByGroup(breaks.labels[index] ?? 0),
+    } as Scored);
   });
   return result;
 }

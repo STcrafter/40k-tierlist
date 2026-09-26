@@ -7,233 +7,117 @@
  * считается по каждому архетипу отдельно, а затем усредняется по весам —
  * так в оценке юнита участвуют и пехота, и техника, и монстры.
  *
- * Характеристики взяты из правил 11-й редакции и сверены с медианами по
- * реальным даташитам BSData (n — число профилей в базе). Расхождения, найденные
- * такой сверкой и исправленные:
- *   walker  9/8/2  → 10/12/3  (n=147)
- *   vehicle 11/13/2 → 10/11/3  (n=130)
- *   transport 9/10/3 → 11/16/3 (n=74)
- *   flyer   10/14/2 →  9/12/3  (n=139)
- *   fortification 10/12/4 → 12/12/3 (n=36)
- * terminator (5/3/2, n=139) и jetpack (4/2/3, n=90) совпали с медианами.
+ * Шаблоны типов юнитов — ТИПЫ ТЕПЕРЬ ПРИХОДЯТ ИЗ ДАННЫХ.
  *
- * Важнее прочих было Sv: у walker/vehicle/flyer стояло 2+, тогда как медиана
- * BSData — 3+. Sv 2+ существенно живучее, поэтому техника в тирлисте была
- * систематически завышена, а infantry не могла набрать процентов.
+ * Зачем: одинаковая цифра «урон в раунд» для всех юнитов бессмысленна —
+ * урон зависит от того, во что стреляют и бьют. Каждый юнит сравнивается с
+ * набором эталонных целей, и агрегированные метрики считаются по ним.
+ *
+ * ИСТОРИЯ: раньше здесь был закрытый список из 13 типов, заданных вручную
+ * (infantry, walker, flyer, …). Он оказался кривым: корзина infantry
+ * объединяла и обычную пехоту, и героев, и фланг-инфантрию, а flyer,
+ * transport и vehicle различались там, где сами данные не различают.
+ * Из-за этого медианы по корзинам давали несуществующих юнитов, а модель
+ * приходилось чинить вручную.
+ *
+ * Теперь типы выводятся k-means по реальным даташитам BSData и лежат в
+ * clusters.generated.ts; набор и число типов — следствие данных, а не нашего
+ * решения. См. scripts/build-clusters.ts.
+ *
+ * Известная потеря: кейворды кластера берутся по большинству его юнитов, так
+ * что в кластере VEHICLE (T9/W11) часть участников летает, а FLY не
+ * набирает порога. Это осознанно: антифайерные бонусы у части техники
+ * поэтому не срабатывают.
  *
  * Это допущения модели, а не точная копия кодекса: у конкретных отрядов
  * характеристики отличаются (Cadian Shock Troops Sv2+, Hormagaunts W1).
- * Цель шаблона — дать устойчивую, сопоставимую основу для тирлиста.
+ * Цель эталона — дать устойчивую, сопоставимую основу для тирлиста.
  */
 
+import { CLUSTER_PROFILES } from './clusters.generated.ts';
+import type { ArchetypeGroup, ArchetypeId, ClusterProfile } from './clusterProfiles.ts';
 import type { CombatModel, CombatUnit } from './types.ts';
 
-/** Идентификатор типа юнита. */
-export type ArchetypeId =
-  | 'infantry'
-  | 'infantry-veteran'
-  | 'swarm'
-  | 'terminator'
-  | 'jetpack'
-  | 'cavalry'
-  | 'monster'
-  | 'walker'
-  | 'vehicle'
-  | 'transport'
-  | 'flyer'
-  | 'battlesuit'
-  | 'fortification';
+export { CLUSTER_PROFILES } from './clusters.generated.ts';
+
+export type { ArchetypeGroup, ArchetypeId, ClusterProfile } from './clusterProfiles.ts';
 
 /** Эталонная цель типа юнита. */
-export interface UnitArchetype {
-  id: ArchetypeId;
-  name: string;
+export interface UnitArchetype extends ClusterProfile {
   /** Зачем нужен этот тип (для отчётов и документации). */
   description: string;
-  /** Число моделей в эталонном отряде. */
-  models: number;
-  toughness: number;
-  wounds: number;
-  /** Sv '3+' → 3; null — сейва нет. */
-  save: number | null;
-  /** InSv '4+' → 4; null — инвулы нет. */
-  invuln: number | null;
-  /** Кейворды цели в верхнем регистре (важны для [ANTI-X] и [LETHAL HITS]). */
-  keywords: string[];
   /**
-   * Типичная стоимость эталона в очках — по ней нормируется урон
-   * («урон на 100 очков»). Ориентиры: Intercessor Squad 80, Boyz 180,
-   * Deathwatch Terminators 330, Deff Dread 130, Leman Russ 160.
+   * Может ли цель двигаться/быть в зоне боя (влияет на не-MONSTER/VEHICLE
+   * условия). По умолчанию считаем, что да: осаждённый отряд в реальности всё
+   * равно защищает объекты, а ошибочное срабатывание условия стоит дороже
+   * пропущенного.
    */
-  points: number;
-  /** Может ли цель двигаться/быть в зоне боя (влияет на не-MONSTER/VEHICLE условия). */
   defaultEngaged?: boolean;
 }
 
+/** Эталонные типы, выведенные из данных. */
+export const ARCHETYPES: readonly UnitArchetype[] = CLUSTER_PROFILES.map((profile) => ({
+  ...profile,
+  description: `Тип из k-means: ${profile.sample} реальных юнитов, медиана T${profile.toughness} W${profile.wounds}`,
+}));
+
+/** Идентификаторы типов-пехоты (для парадигмы «против пехоты»). */
+export const INFANTRY_ARCHETYPES: readonly ArchetypeId[] = ARCHETYPES.filter(
+  (archetype) => archetype.group === 'infantry'
+).map((archetype) => archetype.id);
+
+/** Идентификаторы типов-техники. */
+export const ARMOR_ARCHETYPES: readonly ArchetypeId[] = ARCHETYPES.filter(
+  (archetype) => archetype.group === 'armor'
+).map((archetype) => archetype.id);
+
 /**
- * Эталонные архетипы. `models` — разумный размер для расчёта: рой и пехота
- * берутся по нижней границе типовой «рабочей» численности, одиночные техники и
- * монстры — одной моделью.
+ * Типы заданной группы, отсортированные от слабого к сильному.
+ *
+ * Нужно отчётам и тестам: обращаться к типам по смыслу («самая хрупкая
+ * пехота», «самая живучая техника»), а не по ручному списку id — он
+ * рассыпается при каждой смене K.
  */
-export const ARCHETYPES: readonly UnitArchetype[] = [
-  {
-    id: 'infantry',
-    name: 'Пехота',
-    description: 'Обычный пехотный отряд: имён, гвардейцы, культисты, ячейки.',
-    models: 10,
-    toughness: 4,
-    wounds: 2,
-    save: 3,
-    invuln: null,
-    keywords: ['INFANTRY', 'BATTLELINE'],
-    points: 100,
-  },
-  {
-    id: 'infantry-veteran',
-    name: 'Ветеранская пехота',
-    description: 'Усиленная пехота с бронёй 2+ и/или большим числом ран.',
-    models: 10,
-    toughness: 4,
-    wounds: 2,
-    save: 2,
-    invuln: null,
-    keywords: ['INFANTRY'],
-    points: 180,
-  },
-  {
-    id: 'swarm',
-    name: 'Рой',
-    description: 'Много мелких моделей с 1 раной: Gaunts, Hormagaunts, Razorbeasts.',
-    models: 10,
-    toughness: 3,
-    wounds: 1,
-    save: 6,
-    invuln: null,
-    keywords: ['INFANTRY', 'SWARM'],
-    points: 100,
-  },
-  {
-    id: 'terminator',
-    name: 'Терминаторы',
-    description: 'Бронированная пехота в терминаторских доспехах, Sv2+ и InSv.',
-    models: 5,
-    toughness: 5,
-    wounds: 3,
-    save: 2,
-    invuln: 4,
-    keywords: ['INFANTRY', 'TERMINATOR'],
-    points: 250,
-  },
-  {
-    id: 'jetpack',
-    name: 'Джамп-паки',
-    description: 'Пехота с джамп-паками: атакует в ближнем бою сразу в свой ход.',
-    models: 5,
-    toughness: 4,
-    wounds: 2,
-    save: 3,
-    invuln: null,
-    keywords: ['INFANTRY', 'JUMP PACK'],
-    points: 250,
-    defaultEngaged: true,
-  },
-  {
-    id: 'cavalry',
-    name: 'Кавалерия',
-    description: 'Всадники / мотоциклы: быстрый доступ к рукопашной.',
-    models: 5,
-    toughness: 5,
-    wounds: 5,
-    save: 3,
-    invuln: null,
-    keywords: ['CAVALRY', 'MOUNTED'],
-    points: 160,
-  },
-  {
-    id: 'monster',
-    name: 'Монстр',
-    description: 'Крупная одиночная пехотная/звероподобная модель (T6–8).',
-    models: 1,
-    toughness: 7,
-    wounds: 6,
-    save: 3,
-    invuln: null,
-    keywords: ['MONSTER'],
-    points: 100,
-  },
-  {
-    id: 'walker',
-    name: 'Шагоход',
-    description: 'Дроид-шагоход: Deff Dread, Dreadnought, Knight-подобные.',
-    models: 1,
-    toughness: 10,
-    wounds: 12,
-    save: 3,
-    invuln: null,
-    keywords: ['VEHICLE', 'WALKER'],
-    points: 135,
-  },
-  {
-    id: 'vehicle',
-    name: 'Техника',
-    description: 'Бронированная машина: Leman Russ, Land Raider, аналоги.',
-    models: 1,
-    toughness: 10,
-    wounds: 11,
-    save: 3,
-    invuln: null,
-    keywords: ['VEHICLE'],
-    points: 160,
-  },
-  {
-    id: 'transport',
-    name: 'Транспорт',
-    description: 'Машина для перевозки: Rhino,_TRANSPORT_, Drop Pod.',
-    models: 1,
-    toughness: 11,
-    wounds: 16,
-    save: 3,
-    invuln: null,
-    keywords: ['VEHICLE', 'TRANSPORT'],
-    points: 100,
-  },
-  {
-    id: 'flyer',
-    name: 'Летающая техника',
-    description: 'Авиация и «летуны»: Valkyrie, Stormwings, крейсеры.',
-    models: 1,
-    toughness: 9,
-    wounds: 12,
-    save: 3,
-    invuln: null,
-    keywords: ['VEHICLE', 'FLY'],
-    points: 170,
-  },
-  {
-    id: 'battlesuit',
-    name: 'Боевые костюмы',
-    description: 'Костюмы: T\'au Crisis, Necron Warriors, Skitarii (не-пехота).',
-    models: 3,
-    toughness: 5,
-    wounds: 4,
-    save: 3,
-    invuln: null,
-    keywords: ['VEHICLE', 'BATTLESUIT'],
-    points: 350,
-  },
-  {
-    id: 'fortification',
-    name: 'Укрепление',
-    description: 'Стационарная цель: Bastion, блокпост, храм.',
-    models: 1,
-    toughness: 12,
-    wounds: 12,
-    save: 3,
-    invuln: null,
-    keywords: ['FORTIFICATION'],
-    points: 145,
-  },
-];
+export function archetypesByGroup(group: ArchetypeGroup): UnitArchetype[] {
+  return ARCHETYPES.filter((archetype) => archetype.group === group).sort(
+    (a, b) => a.toughness * a.wounds - b.toughness * b.wounds
+  );
+}
+
+
+/**
+ * Копия эталонов с изменённым числом моделей — для sensitivity-анализа.
+ *
+ * Размер эталона цели задаёт, СКОЛЬКО урона нужно потратить на её уничтожение,
+ * и поэтому напрямую влияет на оценку. Юнит, ранг которого скачет при ±20%
+ * моделей, зависит от произвольного допущения о размере цели.
+ *
+ * Стоимость (`points`) масштабируется пропорционально, иначе «уничтоженные
+ * очки» по targets перестали бы быть согласованными с числом моделей.
+ *
+ * ВАЖНО: масштабируются только ОТРЯДНЫЕ эталоны (models >= MIN_SQUAD_TARGET).
+ * Причина: число моделей округляется, и для одиночной цели 1 модель × 1.2 =
+ * round(1.2) = 1, то есть возмущение равно нулю. Смешивание «+20% у пехоты»
+ * с «+0% у техники» не проверяет устойчивость модели, а измеряет эффект
+ * округления: наблюдаемый разброс перцентилей при этом ~48 вместо нескольких,
+ * и флаг чувствительности теряет смысл.
+ */
+export const MIN_SQUAD_TARGET = 2;
+
+export function scaleArchetypeModels(
+  archetypes: readonly UnitArchetype[],
+  factor: number
+): UnitArchetype[] {
+  return archetypes.map((archetype) => {
+    if (archetype.models < MIN_SQUAD_TARGET) return { ...archetype };
+    const models = Math.max(MIN_SQUAD_TARGET, Math.round(archetype.models * factor));
+    return {
+      ...archetype,
+      models,
+      points: Math.max(1, Math.round((archetype.points * models) / archetype.models)),
+    };
+  });
+}
 
 /** Архетип по идентификатору; бросает ошибку на неизвестном id. */
 export function archetypeById(id: ArchetypeId): UnitArchetype {
@@ -270,55 +154,71 @@ export function targetUnitOf(
 }
 
 /**
- * Определяет архетип реального отряда по его кейвордам и характеристикам.
- * Порядок важен: более специфичные кейворды проверяются первыми
- * (терминатор — это пехота, но не рой; транспорт — техника, но не «обычная»).
+ * Определяет тип реального отряда — БЛИЖАЙШИМ ЦЕНТРОИДОМ в том же
+ * признаковом пространстве, в котором строились кластеры.
  *
- * Возвращает null, если отряд не похож ни на один шаблон (например, в базе
- * BSData у части даташитов нет профиля модели — тогда классифицировать нечего).
+ * Раньше здесь стояла лестница правил по кейвордам (FORTIFICATION →
+ * BATTLESUIT → TERMINATOR → …). Она и была источником кривой типизации:
+ * порядок правил решал за данные, а «cavalry» и «infantry-veteran» вообще
+ * различались вручную. Теперь правил нет — только расстояние до центроидов.
+ *
+ * Расстояние считается в z-score, иначе признак «очки на модель» (среднее
+ * ~36, σ ~40) перевешивал бы T и W (σ единиц) и всё сводил к деньгам.
+ * Стандартизация берётся из тех же кластеров, что и при обучении, иначе
+ * ближайшим оказывался бы не тот тип.
  */
-export function archetypeOf(unit: CombatUnit): UnitArchetype | null {
-  const keywords = new Set(unit.keywords);
-  const has = (...names: string[]): boolean => names.some((name) => keywords.has(name));
-
-  // Явно маркированные типы.
-  if (has('FORTIFICATION')) return archetypeById('fortification');
-  if (has('BATTLESUIT')) return archetypeById('battlesuit');
-  if (has('TERMINATOR')) return archetypeById('terminator');
-  if (has('JUMP PACK')) return archetypeById('jetpack');
-  if (has('SWARM')) return archetypeById('swarm');
-
-  // Техника. Порядок «летающая → шагоход → транспорт → машина»: шагоход идёт
-  // раньше транспорта, иначе Stompa (T14/W30, есть оба кейворда) уехал бы в
-  // транспорт, хотя по живучести это шагоход, а Kill Tank (T12/W24, только
-  // Transport) — в машину, а не в типовой T9/W10 транспорт.
-  if (has('VEHICLE', 'WALKER', 'AIRCRAFT', 'FRAME')) {
-    if (has('FLY')) return archetypeById('flyer');
-    if (has('WALKER')) return archetypeById('walker');
-    if (has('TRANSPORT')) return archetypeById('transport');
-    return archetypeById('vehicle');
-  }
-
-  // Звери и монстры по T/W, когда нет машинных кейвордов.
+export function archetypeOf(unit: CombatUnit, points: number): UnitArchetype | null {
+  if (ARCHETYPES.length === 0) return null;
   const first = unit.models[0];
   if (first === undefined) return null;
-
-  // Одиночные герои (Character: Warboss, Beastboss, Ghazghkull Thraka) — это
-  // пехота с большим числом ран, но не кавалерия: W ≥ 5 у них следствие доспеха.
-  if (first.wounds >= 5 && !has('INFANTRY')) return archetypeById('monster');
-  if (has('INFANTRY') && first.wounds >= 5) return archetypeById('infantry-veteran');
-
-  // Кавалерия — только отряд, а не одиночная скоростная машина:
-  // Wazdakka Gutsmek (одиночная, T8/W10, [MOUNTED]) — это зверь, не полк всадников.
-  if (has('CAVALRY', 'MOUNTED') && unit.models.length >= 3 && first.wounds < 8) {
-    return archetypeById('cavalry');
+  const modelCount = unit.models.length;
+  // Признаки юнита — те же шесть, по которым строились кластеры.
+  const observed: readonly number[] = [
+    first.toughness,
+    first.wounds,
+    // null («сейва нет») кодируется как 6 — так же, как в обучении.
+    first.save ?? NO_SAVE,
+    first.invuln ?? NO_SAVE,
+    modelCount,
+    points / modelCount,
+  ];
+  let best: UnitArchetype | null = null;
+  let bestDistance = Number.POSITIVE_INFINITY;
+  for (const archetype of ARCHETYPES) {
+    const reference: readonly number[] = [
+      archetype.toughness,
+      archetype.wounds,
+      archetype.save ?? NO_SAVE,
+      archetype.invuln ?? NO_SAVE,
+      archetype.models,
+      archetype.points / archetype.models,
+    ];
+    let distance = 0;
+    for (let i = 0; i < observed.length; i += 1) {
+      const delta = (observed[i] - reference[i]) / SCALES[i];
+      distance += delta * delta;
+    }
+    if (distance < bestDistance) {
+      bestDistance = distance;
+      best = archetype;
+    }
   }
-
-  // Sv3+ — обычная пехота; ветеран начинается с брони 2+.
-  if (has('INFANTRY') && first.save !== null && first.save <= 2) {
-    return archetypeById('infantry-veteran');
-  }
-  if (has('INFANTRY')) return archetypeById('infantry');
-  return null;
+  return best;
 }
 
+/** «Сейва нет» в признаковом пространстве. */
+const NO_SAVE = 6;
+
+/**
+ * Масштабы (σ) признаков — константы, а не пересчёт по текущему набору.
+ *
+ * Почему так: σ зависит от выборки, и если считать его на лету, один и тот
+ * же юнит мог бы попасть в разные типы в разных прогонах (сейчас — на
+ * полном наборе, потом — на отфильтрованном по фракции). Значения взяты из
+ * разброса локальной базы wh40k-11e; при смене базы их стоит перегенерировать
+ * вместе с clusters.generated.ts.
+ *
+ * Порядок соответствует unitFeatureVector в clustering.ts:
+ * T, W, Sv, InSv, models, очки на модель.
+ */
+const SCALES: readonly number[] = [2.5, 3.5, 1.2, 1.2, 4.5, 45];
