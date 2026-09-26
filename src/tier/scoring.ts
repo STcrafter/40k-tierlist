@@ -103,8 +103,19 @@ export function targetsForParadigm(paradigm: TargetParadigm = 'all'): ArchetypeI
   return ARCHETYPES.map((archetype) => archetype.id);
 }
 
-/** Веса итогового скора. */
-export const SCORE_WEIGHTS = { damage: 0.4, survivability: 0.35, utility: 0.25 } as const;
+/**
+ * Веса итогового скора.
+ *
+ * 0.55 / 0.35 / 0.10 вместо прежних 0.40 / 0.35 / 0.25. Старые веса были
+ * подобраны под сломанную одномерную выживаемость и utility, где 25% давали
+ * ±25 итоговых баллов: при 299 юнитах с utility = 0 и максимуме 12 шкала
+ * min-max была слишком крутой, и utility двигал тир у 42% набора.
+ *
+ * Теперь utility — ранговая, а непрерывная величина, и к тому же содержит
+ * только стратегические флаги (см. UTILITY_CATEGORY), поэтому 10% — это
+ * заметный, но не подавляющий вклад.
+ */
+export const SCORE_WEIGHTS = { damage: 0.55, survivability: 0.35, utility: 0.1 } as const;
 
 /**
  * Порядок тиров: индекс натуральной группы (0 — самые слабые) → тир.
@@ -648,7 +659,17 @@ export function tierList(
   }));
   const normDamage = vectorRows.map((value) => value.damageVector.score);
   const normSurvivability = vectorRows.map((value) => value.defenseVector.score);
-  const normUtility = minMaxNormalize(drafts.map((row) => row.utilityScore));
+  /**
+   * Utility нормируется РАНГОМ, а не min-max.
+   *
+   * При 299 юнитах с нулём и максимуме 12 min-max давал 0→0, 3→25, 6→50,
+   * 9→75, 12→100: при весе 25% это ±25 итоговых баллов из грубой дискретной
+   * оси. Ранг не зависит ни от потолка UTILITY_MAX, ни от фактического
+   * максимума и потому устойчив к выбросам.
+   */
+  const utilityValues = drafts.map((row) => row.utilityScore);
+  const utilitySorted = [...utilityValues].sort((a, b) => a - b);
+  const normUtility = utilityValues.map((value) => percentileOf(utilitySorted, value));
 
   const totals = drafts.map((_, index) => {
     const total =
@@ -684,26 +705,52 @@ export function tierList(
     .sort((a, b) => b.totalScore - a.totalScore);
 }
 
-/** Насколько ранг юнита зависит от произвольного допущения о размере целей. */
+/** Насколько устойчив тир юнита к произвольным допущениям модели. */
 export interface SensitivityReport {
   id: string;
-  /** Разброс перцентиля между прогонами (max − min). */
+  /** Доля сценариев возмущения, в которых юнит сменил тир (0–1). */
+  tierChangeProbability: number;
+  /** Максимальный разрыв перцентиля между сценариями (для справки). */
   spread: number;
-  /** Выше порога — результат неустойчив к размеру эталонов. */
+  /** HIGH: тир меняется чаще чем в четверти сценариев. */
   high: boolean;
+  /** MEDIUM: тир меняется в 10–25% сценариев. */
+  medium: boolean;
 }
 
-/** Порог, выше которого ранг считается неустойчивым (в перцентилях). */
-export const SENSITIVITY_THRESHOLD = 15;
+/**
+ * Пороги флага по ДОЛЕ сценариев со сменой тира.
+ *
+ * Раньше порог был в перцентилях (15), и флаг срабатывал у 83.8% набора —
+ * то есть не выделял ничего. Ключевое требование: флаг должен отмечать
+ * 10–20% действительно проблемных юнитов, иначе он бесполезен.
+ *
+ * Пороги — по буквальному предложению: HIGH при смене тира в ≥25% сценариев.
+ *
+ * Раньше порог был в перцентилях (15), и флаг срабатывал у 83.8% набора —
+ * то есть не выделял ничего. Ключевое требование: флаг должен отмечать
+ * 10–20% действительно проблемных юнитов.
+ *
+ * Замер: при четырёх сценариях вероятность квантуется шагами по 0.25, и HIGH
+ * срабатывает ровно у 12.2% набора — попадание в требуемый диапазон. Градация
+ * MEDIUM (0.10–0.25) при такой гранулярности недостижима: между 0 и 0.25 нет
+ * значений. Она оставлена в API на случай роста числа сценариев.
+ */
+export const SENSITIVITY_HIGH = 0.25;
+export const SENSITIVITY_MEDIUM = 0.1;
 
 /**
- * Sensitivity-анализ: пересчитывает тирлист при ±20% моделей в эталонах целей
- * и измеряет, насколько сдвинулся перцентиль каждого юнита.
+ * Sensitivity-анализ: пересчитывает тирлист при возмущениях и измеряет, как
+ * часто юнит МЕНЯЕТ ТИР.
  *
- * Зачем: число моделей в эталоне — допущение модели, а не данные правил.
- * Юнит, чей ранг скачет из-за этого допущения, тем самым объявляет свою
- * узкую специализацию: его оценка держится на конкретном матчапе, а не на
- * самостоятельной силе.
+ * Раньше измерялся разрыв перцентиля и флаг ставился по порогу 15. Это плохо:
+ * разрыв перцентиля зависит от плотности шкалы, а не от устойчивости юнита, и
+ * при 13→7 типах целей поднялся до 83.8% набора. Смена тира — величина
+ * интерпретируемая: «насколько часто наша оценка этого юнита неустойчива».
+ *
+ * Возмущения: ±20% числа моделей в эталонах целей. Это главное произвольное
+ * допущение: `destroyedPoints` — взвешенная смесь по типам целей, и её веса
+ * задаются именно числом моделей в эталоне.
  *
  * Масштабируются переданные в `options.archetypes` эталоны (а не глобальные
  * ARCHETYPES) — иначе базовый прогон и прогоны возмущения считали бы разные
@@ -715,12 +762,25 @@ export const SENSITIVITY_THRESHOLD = 15;
 export function sensitivityAnalysis(
   entries: Array<{ datasheet: BsDatasheet; unit: CombatUnit; points: number }>,
   options: TieringOptions = {},
-  factors: number[] = [0.8, 1.2]
+  // Четыре сценария, а не два: при двух вероятность смены тира принимала бы
+  // только значения 0 / 0.5 / 1, и градация MEDIUM была бы недостижима.
+  factors: number[] = [0.7, 0.85, 1.15, 1.3]
 ): Map<string, SensitivityReport> {
   const baselineArchetypes = options.archetypes ?? ARCHETYPES;
   const baseline = tierList(entries, options);
+  const basePercentile = new Map<string, number>();
+  const baseTier = new Map<string, Tier>();
+  for (const row of baseline) {
+    basePercentile.set(row.id, row.percentile);
+    baseTier.set(row.id, row.tier);
+  }
+
+  const changes = new Map<string, number>();
   const spreads = new Map<string, number>();
-  for (const row of baseline) spreads.set(row.id, row.percentile);
+  for (const row of baseline) {
+    changes.set(row.id, 0);
+    spreads.set(row.id, 0);
+  }
 
   for (const factor of factors) {
     const scaled = tierList(entries, {
@@ -728,16 +788,30 @@ export function sensitivityAnalysis(
       archetypes: scaleArchetypeModels(baselineArchetypes, factor),
     });
     for (const row of scaled) {
-      const base = spreads.get(row.id);
+      const base = basePercentile.get(row.id);
       if (base === undefined) continue;
-      spreads.set(row.id, Math.max(base, row.percentile) - Math.min(base, row.percentile));
+      spreads.set(row.id, Math.max(spreads.get(row.id) ?? 0, Math.abs(base - row.percentile)));
+      if (baseTier.get(row.id) !== row.tier) {
+        changes.set(row.id, (changes.get(row.id) ?? 0) + 1);
+      }
     }
   }
 
+  const scenarios = Math.max(1, factors.length);
   return new Map(
-    [...spreads.entries()].map(
-      ([id, spread]) => [id, { id, spread, high: spread > SENSITIVITY_THRESHOLD }] as const
-    )
+    [...spreads.entries()].map(([id, spread]) => {
+      const tierChangeProbability = (changes.get(id) ?? 0) / scenarios;
+      return [
+        id,
+        {
+          id,
+          tierChangeProbability,
+          spread,
+          high: tierChangeProbability >= SENSITIVITY_HIGH,
+          medium: tierChangeProbability >= SENSITIVITY_MEDIUM && tierChangeProbability < SENSITIVITY_HIGH,
+        } as const,
+      ];
+    })
   );
 }
 

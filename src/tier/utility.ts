@@ -1,14 +1,21 @@
 /**
  * Небоевая полезность юнита: разбор способностей BSData в utility-флаги.
  *
- * Каждый флаг даёт очки по правилам тирлиста (см. UTILITY_POINTS), сумма
- * ограничивается сверху 20 баллами. Флаги выводятся из данных, а не задаются
- * руками: `Feel No Pain 5+`, `(Aura)` с re-roll/ward, `Screening`, OC из
- * числовой характеристики профиля и т.д. Так список остаётся проверяемым:
- * для каждого флага сохраняется `reason` — что именно в данных его дало.
+ * КАЖДЫЙ флаг принадлежит одной из трёх категорий, и это не украшение:
  *
- * Спорные случаи помечены в коде явно: там, где в базе нет однозначного
- * признака (связывание), используется документированный запасной вариант.
+ *  - `modeled` — уже смоделировано в боевом расчёте, поэтому в utility идти
+ *    НЕ должно. FNP реально бросается в `simulate.ts` (feelNoPain), Stealth
+ *    повышает порог попадания в `rules.ts`. Платить за них ещё раз в общей
+ *    оси значило бы удваивать одно и то же свойство.
+ *  - `archetype` — маркер типа юнита, а не игровая ценность. У OC 3+ был
+ *    подъём в S с 27.6% до 82.7%: это описание «это техника/монстр», а не
+ *    причина силы. Такие флаги видны в отчёте, но в скоре не участвуют.
+ *  - `strategic` — собственно внебоевая ценность: ввод в бой вне фазы
+ *    развёртывания, экранирование, дым. Именно она идёт в Total.
+ *
+ * Баллы суммируются и нормируются ПО РАНГУ (см. scoring.ts): при 299 юнитах
+ * с нулём min-max делал шкалу слишком крутой — 3 балла из 12 превращались в
+ * четверть итогового скора.
  */
 
 import type { BsDatasheet, BsModelVariant } from '../bsdata/types.ts';
@@ -31,12 +38,49 @@ export type UtilityFlagId =
   | 'Aura_Ward'
   | 'Screening';
 
-/** Сработавший флаг и его цена в баллах. */
+/**
+ * Категория флага: смоделирован в бою / маркер архетипа / стратегическая ценность.
+ *
+ * Только `strategic` входит в Total. Остальные видны в интерфейсе, чтобы
+ * не потерять сведения, но не двигают тир.
+ */
+export type UtilityCategory = 'modeled' | 'archetype' | 'strategic';
+
+/**
+ * Разделение по категориям.
+ *
+ * `modeled`: FNP и Stealth/Lurkers учитываются прямо в симуляции, второй раз
+ * платить за них нельзя. `archetype`: OC 3+, Move 10" и FLY — свойства типа.
+ */
+export const UTILITY_CATEGORY: Record<UtilityFlagId, UtilityCategory> = {
+  'FNP_5+': 'modeled',
+  'FNP_6+': 'modeled',
+  Stealth: 'modeled',
+  Lurkers: 'modeled',
+  'OC_3+': 'archetype',
+  High_Speed: 'archetype',
+  Fly: 'archetype',
+  Deep_Strike: 'strategic',
+  Infiltrator: 'strategic',
+  Scouts: 'strategic',
+  Screening: 'strategic',
+  Reserves: 'strategic',
+  Smoke: 'strategic',
+  Aura_Re_roll_1s: 'strategic',
+  Aura_Ward: 'strategic',
+};
+
+/** Флаги, которые реально входят в итоговый скор. */
+export const isScoredFlag = (id: UtilityFlagId): boolean => UTILITY_CATEGORY[id] === 'strategic';
+
+/** Сработавший флаг, его категория и цена в баллах. */
 export interface UtilityFlag {
   id: UtilityFlagId;
   points: number;
   /** Что именно в данных дало флаг (для проверки глазами). */
   reason: string;
+  /** Входит ли флаг в итоговый скор тирлиста. */
+  category: UtilityCategory;
 }
 
 /**
@@ -128,7 +172,7 @@ export function detectUtilityFlags(datasheet: BsDatasheet): UtilityFlag[] {
   const flags: UtilityFlag[] = [];
   const add = (id: UtilityFlagId, reason: string): void => {
     if (flags.some((flag) => flag.id === id)) return;
-    flags.push({ id, points: UTILITY_POINTS[id], reason });
+    flags.push({ id, points: UTILITY_POINTS[id], reason, category: UTILITY_CATEGORY[id] });
   };
 
   const abilities = datasheet.abilities;
@@ -242,9 +286,27 @@ function datasheetsTexts(datasheet: BsDatasheet): string[] {
   );
 }
 
-/** Сумма баллов по флагам с потолком UTILITY_MAX. */
-export function utilityScoreOf(flags: UtilityFlag[]): number {
-  const sum = flags.reduce((total, flag) => total + flag.points, 0);
+/**
+ * Баллы, влияющие на Total: только СТРАТЕГИЧЕСКИЕ флаги.
+ *
+ * Флаги `modeled` (FNP, Stealth, Lurkers) уже учтены в боевой симуляции, а
+ * `archetype` (OC 3+, Move 10", FLY) описывают тип юнита, а не его ценность.
+ * Платить за них в общей оси значило бы либо удвоить смоделированное свойство,
+ * либо удвоить ось урона/живучести. Поэтому в скоре остаются только ввод в
+ * бой вне фазы развёртывания, экранирование, дым и ауры.
+ *
+ * @param flags полный список флагов юнита
+ * @param onlyScored true — только стратегические (для Total)
+ */
+export function utilityScoreOf(flags: UtilityFlag[], onlyScored = true): number {
+  const sum = flags
+    .filter((flag) => !onlyScored || isScoredFlag(flag.id))
+    .reduce((total, flag) => total + flag.points, 0);
   return Math.min(UTILITY_MAX, sum);
+}
+
+/** Сколько всего баллов набрано по всем флагам, включая не влияющие на скор. */
+export function fullUtilityScoreOf(flags: UtilityFlag[]): number {
+  return utilityScoreOf(flags, false);
 }
 

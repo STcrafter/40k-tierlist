@@ -46,7 +46,7 @@ interface UnitMetricsLocal {
   taxSurvivability: number;
   effectiveDamage: number;
   effectiveSurvivability: number;
-  utilityFlags: Array<{ id: string; points: number; reason: string }>;
+  utilityFlags: Array<{ id: string; points: number; reason: string; category: string }>;
   utilityScore: number;
   normDamage: number;
   normSurvivability: number;
@@ -495,8 +495,10 @@ function renderTable(): string {
           ${edited ? '<span class="tag edited-mark">изменён</span>' : ''}
           ${
             unit.sensitivity?.high
-              ? `<span class="tag sens-mark" title="Ранг смещается на ${unit.sensitivity.spread.toFixed(0)} перцентилей при ±20% числа моделей в эталонных целях — оценка держится на узком матчапе">Sensitivity: HIGH</span>`
-              : ''
+              ? `<span class="tag sens-mark" title="Тир меняется в ${(unit.sensitivity.tierChangeProbability * 100).toFixed(0)}% сценариев возмущения (±20% числа моделей в эталонных целях) — оценка держится на узком матчапе">Sensitivity: HIGH</span>`
+              : unit.sensitivity?.medium
+                ? `<span class="tag sens-mark" title="Тир меняется в ${(unit.sensitivity.tierChangeProbability * 100).toFixed(0)}% сценариев возмущения (±20% числа моделей в эталонных целях)">Sensitivity: MEDIUM</span>`
+                : ''
           }
         </td>
         ${cells}
@@ -625,9 +627,18 @@ function renderEditor(unit: UnitEntry): string {
     .map(({ weapon, index }) => weaponCard(weapon, index, 0, onlyKind))
     .join('');
 
-  const flags = (metrics.utilityFlags ?? unit.utilityFlags)
-    .map((flag) => `<span class="flag" title="${flag.reason}">${flag.id} +${flag.points}</span>`)
-    .join('');
+  // Флаги показываются по категориям, и только стратегические влияют на тир.
+  // Иначе в карточке не видно, почему, например, OC 3+ не поднял оценку.
+  const allFlags = metrics.utilityFlags ?? unit.utilityFlags;
+  const flagChip = (flag: (typeof allFlags)[number], className: string): string =>
+    `<span class="flag ${className}" title="${flag.reason}">${flag.id} +${flag.points}</span>`;
+  const flags = [
+    ...allFlags.filter((flag) => flag.category === 'strategic').map((flag) => flagChip(flag, 'flag-scored')),
+    ...allFlags
+      .filter((flag) => flag.category === 'archetype')
+      .map((flag) => flagChip(flag, 'flag-plain')),
+    ...allFlags.filter((flag) => flag.category === 'modeled').map((flag) => flagChip(flag, 'flag-modeled')),
+  ].join('');
   const loadouts = (unit.loadouts ?? []).map((loadout) => {
     const loadoutMetric = loadout.metrics;
     const isSelected = state.edited.has(unit.id) && state.edited.get(unit.id)?.points === loadout.points;

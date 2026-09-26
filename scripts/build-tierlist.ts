@@ -306,6 +306,11 @@ const payload = {
       sensitivity: {
         spread: sensitivityRow?.spread ?? 0,
         high: sensitivityRow?.high ?? false,
+        medium: sensitivityRow?.medium ?? false,
+        // Доля сценариев возмущения, в которых юнит сменил тир: это и есть
+        // содержательная мера устойчивости (прежний порог в перцентилях
+        // срабатывал у 83.8% набора и ничего не выделял).
+        tierChangeProbability: sensitivityRow?.tierChangeProbability ?? 0,
       },
       utilityFlags: base?.utilityFlags ?? [],
       utilityScore: base?.utilityScore ?? 0,

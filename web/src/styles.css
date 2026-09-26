@@ -377,6 +377,24 @@ td {
   color: var(--text-dim);
 }
 
+/* Стратегический флаг — единственный, что двигает тир: выделяем его. */
+.flag-scored {
+  border-color: var(--accent);
+  color: var(--text);
+}
+
+/* Маркер архетипа (OC 3+, Move 10", FLY) — видно, но в скоре не участвует. */
+.flag-plain {
+  opacity: 0.72;
+  border-style: dashed;
+}
+
+/* Уже смоделировано в бою (FNP, Stealth) — вторично платить нельзя. */
+.flag-modeled {
+  opacity: 0.5;
+  border-style: dotted;
+}
+
 .empty {
   padding: 30px;
   text-align: center;

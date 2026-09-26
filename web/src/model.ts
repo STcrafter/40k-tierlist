@@ -108,9 +108,15 @@ export interface UnitEntry {
   points: number;
   models: number;
   archetype: string;
-  /** Чувствительность ранга к ±20% числа моделей в эталонных целях. */
-  sensitivity?: { spread: number; high: boolean };
-  utilityFlags: Array<{ id: string; points: number; reason: string }>;
+  /** Чувствительность тира к произвольным допущениям модели. */
+  sensitivity?: {
+    spread: number;
+    high: boolean;
+    medium: boolean;
+    /** Доля сценариев возмущения, в которых юнит сменил тир (0–1). */
+    tierChangeProbability: number;
+  };
+  utilityFlags: Array<{ id: string; points: number; reason: string; category: string }>;
   utilityScore: number;
   unit: UnitProfile;
   metrics: Record<CombatMode, UnitMetrics>;
@@ -180,7 +186,7 @@ export interface ScoredRow {
   tier: Tier;
 }
 
-export const SCORE_WEIGHTS = { damage: 0.4, survivability: 0.35, utility: 0.25 } as const;
+export const SCORE_WEIGHTS = { damage: 0.55, survivability: 0.35, utility: 0.1 } as const;
 
 /**
  * Min-Max нормализация на шкалу 0–100. При Max == Min все получают 50 —
@@ -468,7 +474,11 @@ export function rebuildTierlist<T extends {
   const defense = rankVector(defenseKeys, (raw, key) => raw.defenseVector[key] ?? 0, true);
   const normDamage = offense.scores;
   const normSurvivability = defense.scores;
-  const normUtility = minMaxNormalize(units.map((unit) => unit.raw.utilityScore));
+  // Utility нормируется РАНГОМ, как на сервере: при грубой дискретной шкале
+  // min-max давал ±25 итоговых баллов и двигал тир у 42% набора.
+  const utilityValues = units.map((unit) => unit.raw.utilityScore);
+  const utilitySorted = [...utilityValues].sort((a, b) => a - b);
+  const normUtility = utilityValues.map((value) => percentileOf(utilitySorted, value));
 
   const totals = units.map((unit, index) => ({
     id: unit.id,

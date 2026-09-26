@@ -22,7 +22,14 @@ import {
   tierList,
   tierOf,
 } from './scoring.ts';
-import { detectUtilityFlags, utilityScoreOf, UTILITY_MAX, UTILITY_POINTS } from './utility.ts';
+import {
+  detectUtilityFlags,
+  isScoredFlag,
+  utilityScoreOf,
+  UTILITY_MAX,
+  UTILITY_POINTS,
+  type UtilityFlag,
+} from './utility.ts';
 import { attachLeaderToUnit, leaderDefinitionsOf } from './leaders.ts';
 import type { BsDatasheet } from '../bsdata/types.ts';
 
@@ -139,23 +146,34 @@ describe('utility-флаги', () => {
     );
   });
 
-  it('сумма ограничена потолком 20', () => {
-    // Баллы намеренно копим выше потолка, чтобы проверить обрезку.
-    const flags = [
-      { id: 'Deep_Strike' as const, points: 3, reason: '' },
-      { id: 'Infiltrator' as const, points: 3, reason: '' },
-      { id: 'Scouts' as const, points: 3, reason: '' },
-      { id: 'Reserves' as const, points: 2, reason: '' },
-      { id: 'FNP_6+' as const, points: 2, reason: '' },
-      { id: 'FNP_5+' as const, points: 2, reason: '' },
-      { id: 'Stealth' as const, points: 2, reason: '' },
-      { id: 'Smoke' as const, points: 2, reason: '' },
-      { id: 'Screening' as const, points: 3, reason: '' },
-      { id: 'OC_3+' as const, points: 1, reason: '' },
+  it('сумма ограничена потолком 20, а в скор идут только стратегические флаги', () => {
+    // Баллы намеренно копим выше потолка, чтобы проверить обрезку. Флаги
+    // `modeled` (FNP) и `archetype` (OC 3+) в utility_score не входят: они уже
+    // учтены в симуляции или описывают тип юнита, а не его ценность.
+    const flags: UtilityFlag[] = [
+      { id: 'Deep_Strike', points: 3, reason: '', category: 'strategic' },
+      { id: 'Infiltrator', points: 3, reason: '', category: 'strategic' },
+      { id: 'Scouts', points: 3, reason: '', category: 'strategic' },
+      { id: 'Reserves', points: 2, reason: '', category: 'strategic' },
+      { id: 'Smoke', points: 2, reason: '', category: 'strategic' },
+      { id: 'Screening', points: 3, reason: '', category: 'strategic' },
+      { id: 'Aura_Ward', points: 2, reason: '', category: 'strategic' },
+      { id: 'Aura_Re_roll_1s', points: 2, reason: '', category: 'strategic' },
+      // Не должны попасть в скоринговую сумму:
+      { id: 'FNP_6+', points: 2, reason: '', category: 'modeled' },
+      { id: 'FNP_5+', points: 2, reason: '', category: 'modeled' },
+      { id: 'Stealth', points: 2, reason: '', category: 'modeled' },
+      { id: 'OC_3+', points: 1, reason: '', category: 'archetype' },
+      { id: 'Fly', points: 1, reason: '', category: 'archetype' },
     ];
-    const sum = flags.reduce((total, flag) => total + flag.points, 0);
-    expect(sum).toBeGreaterThan(UTILITY_MAX);
+    const scored = flags.filter((flag) => isScoredFlag(flag.id));
+    const raw = (list: UtilityFlag[]): number => list.reduce((total, flag) => total + flag.points, 0);
+    // 3+3+3+2+2+3+2+2 = 20, ровно потолок; нескоренные 8 баллов отброшены.
+    expect(raw(scored)).toBe(UTILITY_MAX);
     expect(utilityScoreOf(flags)).toBe(UTILITY_MAX);
+    // Полная сумма по всем флагам выше: 20 стратегических + 8 прочих, но в
+    // Total попадают только первые, и потолок их не срезает.
+    expect(raw(flags)).toBeGreaterThan(utilityScoreOf(flags));
   });
 
   it('без флагов utility равен нулю', () => {
