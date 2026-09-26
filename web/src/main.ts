@@ -14,6 +14,7 @@
 import { ARCHETYPES } from '../../src/combat/archetypes.ts';
 import { withinCalculationBudget } from '../../src/combat/budget.ts';
 import {
+  isTargetParadigm,
   type CombatMode,
   type TargetParadigm,
   type Tier,
@@ -405,13 +406,13 @@ function cellOf(
   paradigm: string,
   mode: CombatMode
 ): UnitMetrics | null {
-  if (!isTargetParadigm(paradigm)) return null;
+  if (!isKnownParadigm(paradigm)) return null;
   return unit.metricsByParadigm?.[paradigm]?.[mode] ?? null;
 }
 
 /** Отсекает значения, которых нет в типе: внешние ключи из JSON. */
-function isTargetParadigm(value: string): value is TargetParadigm {
-  return (Object.keys(state.data?.paradigms ?? PARADIGM_FALLBACK) as string[]).includes(value);
+function isKnownParadigm(value: string): value is TargetParadigm {
+  return isTargetParadigm(value, state.data?.paradigms ?? PARADIGM_FALLBACK);
 }
 
 /** Парадигмы по умолчанию, если данные ещё не загружены. */

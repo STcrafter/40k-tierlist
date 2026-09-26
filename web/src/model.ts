@@ -167,3 +167,21 @@ export interface TierlistData {
   attached: Record<TargetParadigm, Record<CombatMode, AttachedRow[]>>;
 }
 
+/**
+ * Принадлежит ли строка типу TargetParadigm.
+ *
+ * Существует из-за одного бага: проверка стояла на Object.keys по массиву
+ * парадигм, а Object.keys(['all']) — это ['0'], а не ['all']. Проверка всегда
+ * была ложна, `cellOf` отдавал null, и выбор парадигмы цели молча показывал
+ * данные парадигмы all: 3279 из 4372 ячеек в сборке отличаются от all.
+ *
+ * Список берётся из данных, а не из типа: набор парадигм задаёт сборщик, и
+ * TypeScript ничего не знает о его содержимом.
+ */
+export function isTargetParadigm(
+  value: string,
+  paradigms: readonly TargetParadigm[]
+): value is TargetParadigm {
+  return paradigms.includes(value as TargetParadigm);
+}
+
