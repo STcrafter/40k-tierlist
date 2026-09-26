@@ -17,6 +17,7 @@ import {
   createDefenderState,
   damageNextModel,
   damageSpill,
+  distinctMeleeWeapons,
   meleeWeaponsOf,
   monteCarlo,
   nextTargetIndex,
@@ -621,5 +622,57 @@ describe('кейворды: регрессии', () => {
     simulateRound(gunner(gun), state, resolveCombatOptions({ rng: die(1) }), usages);
     // 1 базовый кубик + 2 от Blast (10 моделей в отряде) = 3, несмотря на 5 смертей.
     expect(usages.get(gun.id)?.attacks).toBe(3);
+  });
+});
+
+
+describe('одинаковые оружия в рукопашной фазе', () => {
+  const sword = (id: string, keywords: string[] = []): CombatWeapon => ({
+    id,
+    name: 'Chainsword',
+    kind: 'melee',
+    range: null,
+    attacks: { count: 4, sides: 1, plus: 0 },
+    skill: 3,
+    strength: 4,
+    ap: -1,
+    damage: { count: 1, sides: 1, plus: 0 },
+    keywords: parseKeywords(keywords),
+  });
+
+  it('два одинаковых без [EXTRA ATTACKS] в ближнем бью схлопываются в одно', () => {
+    // Правило 11-й редакции: бить несколькими одинаковыми оружиями можно
+    // только при наличии [EXTRA ATTACKS]. Замер по базе нашёл 4 такие модели.
+    expect(distinctMeleeWeapons([sword('a'), sword('b')])).toHaveLength(1);
+  });
+
+  it('с [EXTRA ATTACKS] одинаковые оружия остаются оба', () => {
+    expect(
+      distinctMeleeWeapons([sword('a', ['Extra Attacks']), sword('b', ['Extra Attacks'])])
+    ).toHaveLength(2);
+  });
+
+  it('разные оружия не схлопываются', () => {
+    const hammer = { ...sword('b'), strength: 8, damage: { count: 2, sides: 1, plus: 0 } };
+    expect(distinctMeleeWeapons([sword('a'), hammer])).toHaveLength(2);
+  });
+
+  it('дальнобойные дубли правилом не ограничены', () => {
+    // Двумя одинаковыми стволами стрелять можно всегда — правило касается
+    // только рукопашной фазы.
+    const gun = (id: string): CombatWeapon => ({ ...sword(id), kind: 'ranged', range: 24 });
+    const model: CombatModel = {
+      id: 'm',
+      name: 'M',
+      toughness: 6,
+      wounds: 6,
+      save: 3,
+      invuln: null,
+      fnp: null,
+      fnpScope: 'all',
+      keywords: [],
+      weapons: [gun('a'), gun('b')],
+    };
+    expect(rangedWeaponsOf(model, 'auto', false)).toHaveLength(2);
   });
 });

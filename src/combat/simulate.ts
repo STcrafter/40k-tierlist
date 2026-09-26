@@ -189,7 +189,66 @@ export function meleePhaseWeaponsOf(
 ): CombatWeapon[] {
   const weapons = [...meleeWeaponsOf(model, strategy)];
   if (includeCloseQuarters) weapons.push(...closeQuartersWeaponsOf(model));
-  return weapons;
+  return distinctMeleeWeapons(weapons);
+}
+
+/**
+ * Правило 11-й редакции: в рукопашном бою модель может бить НЕСКОЛЬКИМИ
+ * одинаковыми оружиями, только если хотя бы одно из них имеет [EXTRA ATTACKS].
+ * Без этого бонуса бьёт лишь одним.
+ *
+ * Зачем: у части моделей в BSData профиль повторяется дважды — это два
+ * одинаковых ствола, а не два разных оружия. Замер по базе: 6 моделей с
+ * дублями, из них 4 рукопашных и без [EXTRA ATTACKS] (Devastator Sergeant,
+ * Aspiring Champion, Tactical Sergeant, Talos) — они били вдвое чаще, чем
+ * позволяют правила.
+ *
+ * Дальнобойные дубли правилом НЕ ограничены: двумя одинаковыми стволами
+ * стрелять можно всегда, поэтому `rangedWeaponsOf` их не трогает.
+ */
+export function distinctMeleeWeapons(weapons: CombatWeapon[]): CombatWeapon[] {
+  if (weapons.length < 2) return weapons;
+  const kept: CombatWeapon[] = [];
+  const used = new Set<string>();
+  for (const weapon of weapons) {
+    // [PISTOL] / [CLOSE-QUARTERS] — не «ручное оружие», дубли не схлопываем.
+    const isHandToHand = weapon.kind === 'melee';
+    if (!isHandToHand) {
+      kept.push(weapon);
+      continue;
+    }
+    const key = weaponSignature(weapon);
+    if (!used.has(key)) {
+      used.add(key);
+      kept.push(weapon);
+      continue;
+    }
+    // Повтор: оставляем, только если у этой пары есть [EXTRA ATTACKS].
+    const first = kept.find((candidate) => weaponSignature(candidate) === key);
+    if (first && first.keywords.some((keyword) => keyword.name === 'extra-attacks')) {
+      kept.push(weapon);
+    }
+  }
+  return kept;
+}
+
+/** Подпись профиля для поиска «того же самого» оружия. */
+function weaponSignature(weapon: CombatWeapon): string {
+  const dice = (spec: DiceSpec | null): string =>
+    spec === null ? '-' : `${spec.count}x${spec.sides}+${spec.plus}`;
+  return [
+    weapon.kind,
+    weapon.range ?? '-',
+    dice(weapon.attacks),
+    weapon.skill ?? '-',
+    weapon.strength ?? '-',
+    weapon.ap,
+    dice(weapon.damage),
+    weapon.keywords
+      .map((keyword) => `${keyword.name}${keyword.value ? ':' + keyword.value.count : ''}`)
+      .sort()
+      .join(','),
+  ].join('|');
 }
 
 /** Оружие модели для дальнобойной фазы. */

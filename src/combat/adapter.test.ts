@@ -117,11 +117,26 @@ describe('пригодность к бою', () => {
     const hellblaster = adaptUnit(find('Hellblaster Squad'), { size: 'min' });
     const oneModel = hellblaster.unit.models.find((model) => /Hellblaster Sergeant/.test(model.name));
     expect(oneModel).toBeDefined();
+    // Инвариант теста: у Plasma Incinerator два РЕЖИМА, но это одно оружие —
+    // в отряд оно попадает стволом, а не двумя.
     expect(
       oneModel?.weapons.filter((weapon) => /Plasma Incinerator/i.test(weapon.name)).length
     ).toBe(1);
-    expect(oneModel?.weapons.some((weapon) => /Standard/i.test(weapon.name))).toBe(true);
-    expect(oneModel?.weapons.some((weapon) => /Supercharge/i.test(weapon.name))).toBe(false);
+    // Раньше здесь проверялось, что берётся Standard, а не Supercharge. Это
+    // устаревшая политика выбора: по правилам игрок выбирает режим сам, и
+    // оценивать нужно лучший. Теперь Supercharge и выигрывает по
+    // ожидаемой ценности (атак × урон).
+    expect(oneModel?.weapons.some((weapon) => /Supercharge/i.test(weapon.name))).toBe(true);
+  });
+
+  it('режим выбирается по ожидаемой ценности, а не по числу атак', () => {
+    // У клинков профили — это РАЗНЫЕ удары, а не режимы: у Cerastus shock lance
+    // «sweep» бьёт A10, но «strike» — A5 с S20/AP-3, то есть 5×8=40 против
+    // 10×3=30. Выбор по одним атакам взял бы здесь худший вариант.
+    const lancer = adaptUnit(find('Cerastus Knight Lancer'), { size: 'min' });
+    const lance = lancer.unit.models[0]?.weapons.find((w) => /lance/i.test(w.name));
+    expect(lance, 'шоковый ланс должен распарситься').toBeDefined();
+    expect(lance?.name, 'ожидается strike (A5 S20), а не sweep (A10 S10)').toMatch(/strike/i);
   });
 
   it('группа с min=5 и вариантами min=0 всё равно собирает отряд', () => {

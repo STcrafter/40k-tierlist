@@ -21,7 +21,7 @@
  *    так лишены профиля, например, Necron Warriors.
  */
 
-import { parseDice } from './dice.ts';
+import { diceMean, parseDice } from './dice.ts';
 import { parseKeywords } from './keywords.ts';
 import { pointsFor } from '../bsdata/points.ts';
 import type {
@@ -99,17 +99,58 @@ function containsWeapon(item: BsWargear): boolean {
 }
 
 /**
- * У одной записи может быть несколько профилей режима (Standard/Supercharge,
- * Frag/Krak). Это не несколько оружий: модель атакует одним выбранным режимом.
- * Для базовой оценки выбираем Standard/обычный режим, чтобы не завышать урон
- * заряженным вариантом. Если обычного режима нет, берём первый профиль.
+ * Ожидаемая «ценность» профиля: среднее число атак × средний урон за атаку.
+ *
+ * Одних атак мало: у Cerastus shock lance «sweep» бьёт A10, но «strike» —
+ * A5 с S20/AP-3, и 5×8=40 заведомо лучше, чем 10×3=30. Наоборот, у The
+ * Wailing Doom A1 против A12 выигрывает именно число атак. Поэтому считаем
+ * произведение — оно покрывает оба случая.
+ */
+function profileValue(profile: BsWeaponProfile): number {
+  if (profile.attacks === null) return 0;
+  const attacks = parseDice(profile.attacks);
+  if (attacks === null) return 0;
+  const damage = profile.damage === null ? null : parseDice(profile.damage);
+  const perHit = damage === null ? 1 : diceMean(damage);
+  return diceMean(attacks) * perHit;
+}
+
+/**
+ * Профиль режима для одной записи снаряжения (Standard/Supercharge, Frag/Krak,
+ * а также strike/sweep у клинков).
+ *
+ * Это НЕ несколько оружий: запись — одно оружие с набором режимов, и модель
+ * атакует ОДНИМ выбранным режимом. Если у модели несколько ЭКЗЕМПЛЯРОВ такого
+ * оружия (2 плазменных пистолета), каждый выбирает режим сам — это работает,
+ * потому что рекурсия обходит вложенные записи по отдельности.
+ *
+ * Раньше брался «обычный» режим (Standard/uncharged), и у 142 записей он
+ * оказывался заведомо слабее доступного: у Talon of Horus A=4 против A=14, у
+ * The Wailing Doom A=1 против A=12, у Cerastus shock lance — 6×2=12 против
+ * strike 5×8=40. Теперь выбирается профиль с наибольшей ожидаемой ценностью;
+ * при равенстве остаётся обычный, чтобы поведение не менялось без нужды.
+ *
+ * Вид оружия (дальнобойное/рукопашное) определяется обычным режимом, и поиск
+ * ведётся ТОЛЬКО среди профилей того же вида: иначе запись с режимами разных
+ * видов (ствол + клинок) выбрала бы чужой.
  */
 function selectWeaponProfile(item: BsWargear): BsWeaponProfile | null {
   if (item.profiles.length === 0) return null;
   const ordinary = item.profiles.find((profile) =>
     /standard|uncharged|normal|кредит/i.test(`${profile.name} ${profile.keywords.join(' ')}`)
   );
-  return ordinary ?? item.profiles[0];
+  const base = ordinary ?? item.profiles[0];
+  let best = base;
+  let bestValue = profileValue(base);
+  for (const profile of item.profiles) {
+    if (profile.kind !== base.kind) continue;
+    const value = profileValue(profile);
+    if (value > bestValue) {
+      best = profile;
+      bestValue = value;
+    }
+  }
+  return best;
 }
 
 /**
