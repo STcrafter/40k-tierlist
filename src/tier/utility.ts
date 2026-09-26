@@ -19,6 +19,7 @@
  */
 
 import type { BsDatasheet, BsModelVariant } from '../bsdata/types.ts';
+import { manualAbilityOf, type ManualUtilityFlagId } from '../manual/abilities.ts';
 
 /** Идентификатор флага полезности. */
 export type UtilityFlagId =
@@ -36,7 +37,9 @@ export type UtilityFlagId =
   | 'OC_3+'
   | 'Aura_Re_roll_1s'
   | 'Aura_Ward'
-  | 'Screening';
+  | 'Screening'
+  // Ручной слой (src/manual/abilities.ts) — см. ManualUtilityFlagId.
+  | ManualUtilityFlagId;
 
 /**
  * Категория флага: смоделирован в бою / маркер архетипа / стратегическая ценность.
@@ -68,6 +71,31 @@ export const UTILITY_CATEGORY: Record<UtilityFlagId, UtilityCategory> = {
   Smoke: 'strategic',
   Aura_Re_roll_1s: 'strategic',
   Aura_Ward: 'strategic',
+  // Ручные способности Sororitas — внебоевая ценность, но часть эффектов
+  // (Devastating Wounds, регенерация) уже смоделирована в бою. Флаг отражает
+  // СТРАТЕГИЧЕСКУЮ часть: способность менять игру, а не дублирует урон.
+  Sororitas_Devastating_Aura: 'strategic',
+  Sororitas_Anti_Warp: 'strategic',
+  Saint_Celestine_Blessing: 'strategic',
+  Triumph_Relic_Blessing: 'strategic',
+  Sororitas_Stealth_Aura: 'strategic',
+  Sororitas_Extra_Attacks: 'strategic',
+  Sororitas_Canoness_Aura: 'strategic',
+  Sororitas_Canoness_Jump_Aura: 'strategic',
+  Sororitas_Dialogus: 'strategic',
+  Sororitas_Dogmata: 'strategic',
+  Sororitas_Imagifier: 'strategic',
+  Sororitas_Battle_Sisters: 'strategic',
+  Sororitas_Immolator: 'strategic',
+  Sororitas_Celestian_Insidiants: 'strategic',
+  Sororitas_Dominion: 'strategic',
+  Sororitas_Retributors: 'strategic',
+  Sororitas_Sanctifiers: 'strategic',
+  Sororitas_Seraphim: 'strategic',
+  Sororitas_Novitiates: 'strategic',
+  Sororitas_Castigator: 'strategic',
+  Sororitas_Exorcist: 'strategic',
+  Sororitas_Penitent_Engines: 'strategic',
 };
 
 /** Флаги, которые реально входят в итоговый скор. */
@@ -111,6 +139,28 @@ export const UTILITY_POINTS: Record<UtilityFlagId, number> = {
   Aura_Re_roll_1s: 2,
   Aura_Ward: 2,
   Screening: 3,
+  Sororitas_Devastating_Aura: 2,
+  Sororitas_Anti_Warp: 2,
+  Saint_Celestine_Blessing: 3,
+  Triumph_Relic_Blessing: 4,
+  Sororitas_Stealth_Aura: 2,
+  Sororitas_Extra_Attacks: 2,
+  Sororitas_Canoness_Aura: 2,
+  Sororitas_Canoness_Jump_Aura: 2,
+  Sororitas_Dialogus: 2,
+  Sororitas_Dogmata: 2,
+  Sororitas_Imagifier: 1,
+  Sororitas_Battle_Sisters: 3,
+  Sororitas_Immolator: 2,
+  Sororitas_Celestian_Insidiants: 1,
+  Sororitas_Dominion: 2,
+  Sororitas_Retributors: 1,
+  Sororitas_Sanctifiers: 2,
+  Sororitas_Seraphim: 1,
+  Sororitas_Novitiates: 2,
+  Sororitas_Castigator: 1,
+  Sororitas_Exorcist: 1,
+  Sororitas_Penitent_Engines: 2,
 };
 
 /** Потолок utility_score. */
@@ -274,6 +324,14 @@ export function detectUtilityFlags(datasheet: BsDatasheet): UtilityFlag[] {
   // флаг означает только настоящее «нельзя вступить в бой».
   if (texts.some((t) => t.includes('cannot be engaged') || t.includes('cannot engage'))) {
     add('Screening', 'не даёт врагу вступить в ближний бой рядом');
+  }
+
+  // --- Ручной слой (src/manual/abilities.ts). ---
+  // Эффекты, которые не выводятся из профилей и кейвордов: Devastating Wounds
+  // от способности, регенерация и воскрешение, бонус к мортидам. Флаги
+  // добавляются в конце, чтобы обычный разбор не мог их затмить.
+  for (const flag of manualAbilityOf(datasheet.id)?.utilityFlags ?? []) {
+    add(flag.id, flag.reason);
   }
 
   return flags;

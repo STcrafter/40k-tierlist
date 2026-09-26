@@ -11,6 +11,7 @@ import type { CombatUnit, ParsedKeyword } from '../combat/types.ts';
 import type { BsAbility, BsDatasheet } from '../bsdata/types.ts';
 import { adaptUnit } from '../combat/adapter.ts';
 import { isEligibleForCalculations } from '../combat/budget.ts';
+import { manualAbilityOf, applyAuraToModels } from '../manual/abilities.ts';
 
 export interface LeaderBonuses {
   toughness: number;
@@ -177,12 +178,87 @@ export function applyLeaderBonuses(unit: CombatUnit, leader: LeaderDefinition): 
 /** Объединяет отряд и присоединённого лидера в один боевой отряд. */
 export function attachLeaderToUnit(unit: CombatUnit, leader: LeaderDefinition): CombatUnit {
   const bodyguard = applyLeaderBonuses(unit, leader);
+  const conditional = applyLeaderConditional(bodyguard, leader);
   return {
-    ...bodyguard,
+    ...conditional.bodyguard,
     id: `${unit.id}+${leader.id}`,
     name: `${unit.name} + ${leader.name}`,
-    models: [...bodyguard.models, ...leader.unit.models],
+    // Способность лидера может давать кейворды ПРИСОЕДИНЁННОМУ юниту (у Thurga
+    // и Dolan это Devastating Wounds). Ручной слой накладывается здесь, потому
+    // что сам юнит-телохранитель проходит через applyLeaderBonuses, а не через
+    // adaptUnit, и кейворд от способности иначе потерялся бы.
+    models: [...withLeaderAura(conditional.bodyguard.models, leader), ...conditional.leader],
   };
+}
+
+/**
+ * Способности юнита, которые действуют только с присоединённым лидером.
+ *
+ * Два противоположных случая в одном месте:
+ *  - Celestian Sacresants ТЕРЯЮТ 1 рану от любого лидера;
+ *  - Sanctifiers с Святым Министорумом получают Sustained Hits 1 на
+ *    рукопашное, а сам Министорум начинает возвращать D3 моделей за раунд.
+ *
+ * Последнее ставится на модели ЛИДЕРА, потому что способность держится на его
+ * живости: погибший Министорум ничего не возвращает.
+ *
+ * Возвращает обе половины по отдельности: телохранителя и лидера. Собирать их
+ * здесь нельзя — вызывающая функция добавляет модели лидера сама, иначе они
+ * задвоились бы.
+ */
+function applyLeaderConditional(
+  unit: CombatUnit,
+  leader: LeaderDefinition
+): { bodyguard: CombatUnit; leader: CombatUnit['models'] } {
+  const rule = manualAbilityOf(unit.id)?.withLeader;
+  if (rule === undefined) return { bodyguard: unit, leader: leader.unit.models };
+  if (rule.leaderIds !== null && !rule.leaderIds.includes(leader.id)) {
+    return { bodyguard: unit, leader: leader.unit.models };
+  }
+
+  const models = unit.models.map((model) => {
+    const next = { ...model };
+    if (rule.woundsPenalty !== undefined) {
+      // Пенальть не убивает модель: иначе юнит терял бы бойца ещё при
+      // постановке, и −1 рана превратилась бы в потерю юнита.
+      next.wounds = Math.max(1, model.wounds - rule.woundsPenalty);
+    }
+    if ((rule.meleeWeaponKeywords ?? []).length > 0) {
+      next.weapons = model.weapons.map((weapon) => {
+        if (weapon.kind !== 'melee') return weapon;
+        const extra = parseKeywords(rule.meleeWeaponKeywords!).filter(
+          (keyword) => !weapon.keywords.some((existing) => existing.name === keyword.name)
+        );
+        return extra.length === 0 ? weapon : { ...weapon, keywords: [...weapon.keywords, ...extra] };
+      });
+    }
+    return next;
+  });
+
+  const leaderModels =
+    rule.reviveCount === undefined
+      ? leader.unit.models
+      : leader.unit.models.map((model) => ({
+          ...model,
+          reviveLeader: true,
+          reviveCount: rule.reviveCount,
+        }));
+
+  return { bodyguard: { ...unit, models }, leader: leaderModels };
+}
+
+/**
+ * Аура лидера на ПРИСОЕДИНЁННЫЙ юнит.
+ *
+ * Телохранитель идёт через `applyLeaderBonuses`, а не через `adaptUnit`, поэтому
+ * ручной слой к нему не применяется автоматически — здесь добавляется ровно
+ * то, что в BSData записано прозой: STEALTH, FNP, save/invsv, +1 к попаданию,
+ * перебросы. Лидер получает то же самое сам (см. applyManualAbilities).
+ */
+function withLeaderAura(models: CombatUnit['models'], leader: LeaderDefinition): CombatUnit['models'] {
+  const aura = manualAbilityOf(leader.id)?.aura;
+  if (aura === undefined) return models;
+  return applyAuraToModels(models, aura).models;
 }
 
 /** Опции симуляции для reroll-бонусов лидера. */

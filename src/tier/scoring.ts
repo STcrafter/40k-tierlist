@@ -49,6 +49,7 @@ import { isEligibleForCalculations } from '../combat/budget.ts';
 import type { BsDatasheet } from '../bsdata/types.ts';
 import { detectUtilityFlags, utilityScoreOf, type UtilityFlag } from './utility.ts';
 import { attachLeaderToUnit, leaderCombatOptionsOf, type LeaderDefinition } from './leaders.ts';
+import { rerollOptionsOf } from '../manual/abilities.ts';
 
 /** Тип отряда по тому, что он умеет лучше. */
 export type UnitType = 'Ranged' | 'Melee';
@@ -276,12 +277,15 @@ export function rawScoreOf(
 ): RawScore {
   const baseUnit = options.leader ? attachLeaderToUnit(unit, options.leader) : unit;
   const leaderOptions = options.leader ? leaderCombatOptionsOf(options.leader) : {};
-  const combat = { ...(options.combat ?? {}), ...leaderOptions };
+  // Перебросы самого юнита (Repentia, Retributor, Insidiants, Novitiate) —
+  // отдельный источник помимо бонусов лидера. У большинства юнитов пусто.
   const mode = options.mode ?? 'combined';
+  const ownOptions = rerollOptionsOf(datasheet.id, mode);
+  const combat = { ...(options.combat ?? {}), ...ownOptions, ...leaderOptions };
   const targets = options.targetParadigm === undefined && options.targets === undefined
     ? targetsForParadigm('all')
     : options.targets ?? targetsForParadigm(options.targetParadigm);
-  const survival = { ...(options.survival ?? {}), phase: phaseOf(mode), ...leaderOptions };
+  const survival = { ...(options.survival ?? {}), phase: phaseOf(mode), ...ownOptions, ...leaderOptions };
   const damage = damagePerRound(baseUnit, {
     ...combat,
     targets,

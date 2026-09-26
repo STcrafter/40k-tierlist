@@ -49,6 +49,24 @@ export interface CombatWeapon {
   ap: number;
   damage: DiceSpec | null;
   keywords: ParsedKeyword[];
+  /**
+   * +N мортид от способности, действующие ТОЛЬКО в своей фазе.
+   *
+   * Нужен для ручных исключений (см. src/manual/abilities.ts): у Daemonifuge
+   * огонь по демонам даёт +1 мортиду, но только в дальнобойной фазе. Отдельное
+   * поле, а не кейворд, потому что величина — число, а не признак.
+   *
+   * Бонус вешается только на оружие своей фазы (см. applyManualAbilities),
+   * иначе он «провисал» бы на клинке, который всё равно стрелять не может.
+   */
+  mortalDamageBonus?: { amount: number; phase: 'ranged' | 'melee' };
+  /**
+   * +N мортид за каждое УСПЕШНОЕ ранение в своей фазе (Palatine).
+   *
+   * Отличается от mortalDamageBonus тем, что срабатывает на обычном ранении,
+   * а не только на критическом при Devastating Wounds.
+   */
+  mortalPerWound?: { amount: number; phase: 'ranged' | 'melee' };
 }
 
 /** Область действия Feel No Pain. */
@@ -78,6 +96,26 @@ export interface CombatModel {
    *               атаки идут мимо FNP (см. feelNoPain).
    */
   fnpScope: FnpScope;
+  /**
+   * Ран, восстанавливаемых в начале каждого раунда (ручной слой способностей).
+   * null — регенерации нет. Не больше исходного запаса ран модели.
+   */
+  regeneration?: number | null;
+  /**
+   * Модель один раз возвращается в бой с полным запасом ран (ручной слой).
+   * null — такого правила нет. Учитывается один раз за бой.
+   */
+  resurrectOnce?: boolean;
+  /**
+   * Модель-целитель: пока она жива, отряд возвращает убитые модели между
+   * раундами (Hospitaller). Сама целитель в бой не возвращается.
+   */
+  reviveLeader?: boolean;
+  /**
+   * Сколько моделей целитель возвращает за раунд. По умолчанию 1
+   * (Hospitaller); у Ministorum Priest при Sanctifiers — D3, то есть 3.
+   */
+  reviveCount?: number;
   keywords: string[];
   weapons: CombatWeapon[];
 }

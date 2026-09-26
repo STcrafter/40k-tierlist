@@ -24,6 +24,7 @@
 import { diceMean, parseDice } from './dice.ts';
 import { parseKeywords } from './keywords.ts';
 import { pointsFor } from '../bsdata/points.ts';
+import { manualAbilityOf, applyAuraToModels } from '../manual/abilities.ts';
 import type {
   BsDatasheet,
   BsModelGroup,
@@ -31,7 +32,13 @@ import type {
   BsWargear,
   BsWeaponProfile,
 } from '../bsdata/types.ts';
-import type { CombatModel, CombatUnit, CombatWeapon, FnpScope } from './types.ts';
+import type {
+  CombatModel,
+  CombatUnit,
+  CombatWeapon,
+  FnpScope,
+  ParsedKeyword,
+} from './types.ts';
 
 /** Как собирать отряд из ограничений даташита. */
 export interface AdaptOptions {
@@ -68,6 +75,29 @@ export interface LoadoutCandidate {
   name: string;
   unit: CombatUnit;
   points: number;
+}
+
+/**
+ * Кейворд улучшения против MONSTER/VEHICLE (Paragon Warsuits).
+ *
+ * Живёт на оружии, а не в отдельном поле, потому что решение «применить ли
+ * его» принимается в `rules.ts` по кейвордам конкретной цели в момент броска.
+ */
+function withAntiBonus(
+  keywords: ParsedKeyword[],
+  bonus: { hits: number; wounds: number }
+): ParsedKeyword[] {
+  if (keywords.some((keyword) => keyword.name === 'anti-bonus')) return keywords;
+  return [
+    ...keywords,
+    {
+      name: 'anti-bonus',
+      raw: `Anti-Bonus ${bonus.hits}/${bonus.wounds}`,
+      value: parseDice('1'),
+      target: ['MONSTER', 'VEHICLE'],
+      condition: null,
+    },
+  ];
 }
 
 /** '5+' → 5; '3' → 3; null/'-'/'' → null. */
@@ -116,41 +146,42 @@ function profileValue(profile: BsWeaponProfile): number {
 }
 
 /**
- * Профиль режима для одной записи снаряжения (Standard/Supercharge, Frag/Krak,
- * а также strike/sweep у клинков).
+ * Профили режима для одной записи снаряжения — по ОДНОМУ лучшему на каждый вид.
  *
- * Это НЕ несколько оружий: запись — одно оружие с набором режимов, и модель
- * атакует ОДНИМ выбранным режимом. Если у модели несколько ЭКЗЕМПЛЯРОВ такого
- * оружия (2 плазменных пистолета), каждый выбирает режим сам — это работает,
- * потому что рекурсия обходит вложенные записи по отдельности.
+ * Запись — одно оружие, но у неё бывает НЕСКОЛЬКО профилей, и они не всегда
+ * одного вида. Пример из BSData: у Abaddon «Talon of Horus» есть дальнобойный
+ * профиль (Sustained Hits 1) И рукопашный (Devastating Wounds); у Cerastus
+ * shock lance — дальнобойный (Assault, Sustained Hits 2) и два рукопашных
+ * (strike со [LANCE] и sweep). Раньше выбор шёл по всей записи сразу, и
+ * профиль второго вида ТЕРЯЛСЯ вместе со своими кейвордами: 58 таких записей,
+ * из них в 39 юнитах один из видов не доезжал до боевого отряда вовсе.
  *
- * Раньше брался «обычный» режим (Standard/uncharged), и у 142 записей он
- * оказывался заведомо слабее доступного: у Talon of Horus A=4 против A=14, у
- * The Wailing Doom A=1 против A=12, у Cerastus shock lance — 6×2=12 против
- * strike 5×8=40. Теперь выбирается профиль с наибольшей ожидаемой ценностью;
- * при равенстве остаётся обычный, чтобы поведение не менялось без нужды.
- *
- * Вид оружия (дальнобойное/рукопашное) определяется обычным режимом, и поиск
- * ведётся ТОЛЬКО среди профилей того же вида: иначе запись с режимами разных
- * видов (ствол + клинок) выбрала бы чужой.
+ * Поэтому: внутри каждого вида берётся профиль с наибольшей ожидаемой
+ * ценностью, а сами виды не схлопываются. При равенстве остаётся обычный
+ * режим (Standard/uncharged), чтобы поведение не менялось без нужды.
  */
-function selectWeaponProfile(item: BsWargear): BsWeaponProfile | null {
-  if (item.profiles.length === 0) return null;
-  const ordinary = item.profiles.find((profile) =>
-    /standard|uncharged|normal|кредит/i.test(`${profile.name} ${profile.keywords.join(' ')}`)
-  );
-  const base = ordinary ?? item.profiles[0];
-  let best = base;
-  let bestValue = profileValue(base);
-  for (const profile of item.profiles) {
-    if (profile.kind !== base.kind) continue;
-    const value = profileValue(profile);
-    if (value > bestValue) {
-      best = profile;
-      bestValue = value;
+function selectWeaponProfiles(item: BsWargear): BsWeaponProfile[] {
+  if (item.profiles.length === 0) return [];
+  const selected: BsWeaponProfile[] = [];
+  for (const kind of ['ranged', 'melee'] as const) {
+    const ofKind = item.profiles.filter((profile) => profile.kind === kind);
+    if (ofKind.length === 0) continue;
+    const ordinary = ofKind.find((profile) =>
+      /standard|uncharged|normal|кредит/i.test(`${profile.name} ${profile.keywords.join(' ')}`)
+    );
+    const base = ordinary ?? ofKind[0];
+    let best = base;
+    let bestValue = profileValue(base);
+    for (const profile of ofKind) {
+      const value = profileValue(profile);
+      if (value > bestValue) {
+        best = profile;
+        bestValue = value;
+      }
     }
+    selected.push(best);
   }
-  return best;
+  return selected;
 }
 
 /**
@@ -173,8 +204,9 @@ function selectWeaponProfile(item: BsWargear): BsWeaponProfile | null {
  */
 function weaponsOf(item: BsWargear, ownerId: string, choices: Record<string, number> = {}): CombatWeapon[] {
   if (item.kind === 'roster') return [];
-  const profile = selectWeaponProfile(item);
-  const weapons = profile === null ? [] : [toCombatWeapon(profile, ownerId)];
+  // Запись может нести профили ОБОИХ видов (ствол + клинок), поэтому берём
+  // по одному лучшему на вид, а не один профиль на всю запись.
+  const weapons = selectWeaponProfiles(item).map((profile) => toCombatWeapon(profile, ownerId));
 
   if (item.kind !== 'choice') {
     for (const child of item.nested) {
@@ -486,10 +518,116 @@ export function adaptUnit(datasheet: BsDatasheet, options: AdaptOptions = {}): A
     }
   }
   return {
-    unit: { id: datasheet.id, name: datasheet.name, keywords: unitKeywords, models },
+    unit: applyManualAbilities(
+      { id: datasheet.id, name: datasheet.name, keywords: unitKeywords, models },
+      datasheet.id
+    ),
     counts,
     points: pointsFor(datasheet, counts).points,
   };
+}
+
+/**
+ * Накладывает ручной слой способностей (src/manual/abilities.ts) на готовый
+ * боевой отряд.
+ *
+ * Слой применяется ПОСЛЕ сборки отряда, а не внутри expandVariant: так он
+ * работает одинаково для обычного юнита и для юнита с лидером, и не требует
+ * знать про ручные правила на каждом шаге построения.
+ */
+function applyManualAbilities(unit: CombatUnit, datasheetId: string): CombatUnit {
+  const ability = manualAbilityOf(datasheetId);
+  if (ability === null) return unit;
+
+  // Аура накладывается на собственные модели лидера: способности Sororitas
+  // действуют «себе и юниту», и половина (себе) достаётся тут, вторая — при
+  // присоединении лидера (см. leaders.ts).
+  const auraApplied =
+    ability.aura === undefined
+      ? { models: unit.models, keywords: unit.keywords }
+      : applyAuraToModels(unit.models, ability.aura, unit.keywords);
+  const models = auraApplied.models.map((model) => {
+    const grant = ability.weaponKeywords?.find((entry) =>
+      entry.models === null || entry.models.includes(model.name)
+    );
+    const bonus = ability.mortalDamageBonus;
+    // FNP/атаки/сейв/кейворды в рукопашной — все причины пересобрать оружие
+    // и профиль. Полный список обязателен: проверка по неполному молча
+    // теряла эффекты (см. регрессию с meleeMortalPerWound у Palatine).
+    const needsWeapons =
+      grant !== undefined ||
+      bonus !== undefined ||
+      ability.meleeMortalPerWound !== undefined ||
+      ability.extraAttacks !== undefined ||
+      (ability.meleeWeaponKeywords ?? []).length > 0 ||
+      ability.antiBonus !== undefined;
+    const weapons = !needsWeapons
+      ? model.weapons
+      : model.weapons.map((weapon) => {
+            const next = { ...weapon };
+            if (grant !== undefined) {
+              const extra = parseKeywords(grant.keywords).filter(
+                (keyword) => !weapon.keywords.some((existing) => existing.name === keyword.name)
+              );
+              if (extra.length > 0) next.keywords = [...weapon.keywords, ...extra];
+            }
+            if (bonus !== undefined) {
+              // Бонус вешается только на оружие своей фазы: способность
+              // Daemonifuge про стрельбу не должна висеть на клинке.
+              if (bonus.phase === weapon.kind) next.mortalDamageBonus = { ...bonus };
+            }
+            if (ability.meleeMortalPerWound !== undefined && weapon.kind === 'melee') {
+              // Palatine: мортида за обычное ранение в рукопашной, а не за
+              // критическое — поэтому это отдельное поле от mortalDamageBonus.
+              next.mortalPerWound = { amount: ability.meleeMortalPerWound, phase: 'melee' };
+            }
+            if (ability.extraAttacks !== undefined && weapon.attacks !== null) {
+              // Arco-Flagellants: +2 атаки всему оружию.
+              next.attacks = { ...weapon.attacks, count: weapon.attacks.count + ability.extraAttacks };
+            }
+            if (ability.antiBonus !== undefined) {
+              // Paragon Warsuits: улучшение против монстров/техники. Переносится
+              // на оружие кейвордом: условие на цель проверяется в rules.ts.
+              next.keywords = withAntiBonus(next.keywords, ability.antiBonus);
+            }
+            if (weapon.kind === 'melee' && (ability.meleeWeaponKeywords ?? []).length > 0) {
+              // Zephyrim: кейворды только на рукопашном оружии.
+              const extra = parseKeywords(ability.meleeWeaponKeywords!).filter(
+                (keyword) => !weapon.keywords.some((existing) => existing.name === keyword.name)
+              );
+              if (extra.length > 0) next.keywords = [...next.keywords, ...extra];
+            }
+            return next;
+          });
+    const next: CombatModel = { ...model, weapons };
+    // FNP из ручного слоя (Arco-Flagellants, Penitent Engines): в BSData его
+    // нет, он идёт от способности. Уже имеющийся FNP не ухудшается.
+    if (ability.fnp !== undefined) {
+      const granted = ability.fnp.value;
+      next.fnp = model.fnp === null ? granted : Math.max(model.fnp, granted);
+      // Область из способности важнее: 'mortals' ограничивает и не защищает.
+      next.fnpScope = ability.fnp.scope ?? 'all';
+    }
+    if (ability.saveAtLeast !== undefined) {
+      // Mortifiers: save 4+ из BSData ухудшается до 3+ (меньше = лучше).
+      next.save = model.save === null ? ability.saveAtLeast : Math.min(model.save, ability.saveAtLeast);
+    }
+    // Регенерация задаётся отряду целиком. Воскрешение — только модели, у которой
+    // оно описано: у Celestine это СВЯТАЯ, а не её спутницы. Иначе погибшая
+    // Geminae Superia тоже возвращалась бы в бой.
+    if (ability.regeneration !== undefined) next.regeneration = ability.regeneration;
+    if (ability.resurrectOnceModels !== undefined) {
+      next.resurrectOnce = (ability.resurrectOnceModels ?? []).includes(model.name);
+    }
+    if (ability.reviveModelPerRound !== undefined && ability.reviveModelPerRound > 0) {
+      // Целитель: возврат павших моделей в присоединённый юнит. Отмечается
+      // МОДЕЛЬ, а не отряд, потому что способность держится на живости
+      // самого целителя: погибший Hospitaller ничего не возвращает.
+      next.reviveLeader = true;
+    }
+    return next;
+  });
+  return { ...unit, models, keywords: auraApplied.keywords };
 }
 
 /**

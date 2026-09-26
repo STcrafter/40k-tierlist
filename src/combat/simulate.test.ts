@@ -25,6 +25,7 @@ import {
   resolveCombatOptions,
   simulateRound,
   simulateTrial,
+  upkeepBetweenRounds,
 } from './simulate.ts';
 import type { CombatModel, CombatUnit, CombatWeapon, Rng } from './types.ts';
 
@@ -674,5 +675,63 @@ describe('одинаковые оружия в рукопашной фазе', (
       weapons: [gun('a'), gun('b')],
     };
     expect(rangedWeaponsOf(model, 'auto', false)).toHaveLength(2);
+  });
+});
+
+
+describe('регенерация и воскрешение (ручной слой)', () => {
+  it('восстанавливает раны между раундами, но не выше запаса', () => {
+    const state = createDefenderState(unit([model({ wounds: 3, regeneration: 1 })]));
+    damageNextModel(state, 2);
+    expect(state.woundsLeft[0]).toBe(1);
+    upkeepBetweenRounds(state);
+    expect(state.woundsLeft[0]).toBe(2);
+    // Раны восстанавливаются до ПОЛНОГО запаса, а не останавливаются на нём.
+    upkeepBetweenRounds(state);
+    expect(state.woundsLeft[0]).toBe(3);
+  });
+
+  it('модель без регенерации не лечится', () => {
+    const state = createDefenderState(unit([model({ wounds: 3 })]));
+    damageNextModel(state, 2);
+    upkeepBetweenRounds(state);
+    expect(state.woundsLeft[0]).toBe(1);
+  });
+
+  it('воскрешение возвращает модель в бой с полными ранами', () => {
+    const state = createDefenderState(
+      unit([model({ id: 'a', wounds: 2 }), model({ id: 'b', wounds: 2, resurrectOnce: true })])
+    );
+    damageNextModel(state, 2);
+    damageNextModel(state, 2);
+    expect(state.aliveCount).toBe(0);
+    expect(upkeepBetweenRounds(state), 'ожидается воскрешение').toBe(true);
+    expect(state.aliveCount).toBe(1);
+    expect(state.woundsLeft[1]).toBe(2);
+    // Убийство возвращено в счётчик: воскресшая модель снова жива.
+    expect(state.kills).toBe(1);
+  });
+
+  it('воскрешение срабатывает ровно один раз за бой', () => {
+    const state = createDefenderState(
+      unit([model({ id: 'a', wounds: 1 }), model({ id: 'b', wounds: 1, resurrectOnce: true })])
+    );
+    damageNextModel(state, 1);
+    damageNextModel(state, 1);
+    expect(upkeepBetweenRounds(state)).toBe(true);
+    damageNextModel(state, 1);
+    damageNextModel(state, 1);
+    expect(upkeepBetweenRounds(state), 'второго воскрешения быть не должно').toBe(false);
+    expect(state.aliveCount).toBe(0);
+  });
+
+  it('отряд без таких способностей не воскресает', () => {
+    const state = createDefenderState(
+      unit([model({ id: 'a', wounds: 1 }), model({ id: 'b', wounds: 1 })])
+    );
+    damageNextModel(state, 1);
+    damageNextModel(state, 1);
+    expect(upkeepBetweenRounds(state)).toBe(false);
+    expect(state.aliveCount).toBe(0);
   });
 });

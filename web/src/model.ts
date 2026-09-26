@@ -52,6 +52,12 @@ export interface UnitMetrics {
   totalScore: number;
   percentile: number;
   tier: Tier;
+  /**
+   * Дельта одноразовых способностей: насколько юнит дороже стал бы с
+   * одноразовым баффом. Справочное поле — в Total и норму урона оно не входит,
+   * потому что «once per battle» не действует постоянно.
+   */
+  onceEffectDelta?: number;
   /** Опциональные варианты снаряжения, посчитанные на сервере. */
   loadouts?: Array<{
     id: string;
@@ -108,6 +114,11 @@ export interface UnitEntry {
   points: number;
   models: number;
   archetype: string;
+  /**
+   * Дельта одноразовых способностей: насколько юнит дороже стал бы с
+   * одноразовым баффом. Справочное поле — в Total и норму урона не входит.
+   */
+  onceEffectDelta?: number;
   /** Чувствительность тира к произвольным допущениям модели. */
   sensitivity?: {
     spread: number;

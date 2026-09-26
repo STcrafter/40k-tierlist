@@ -19,12 +19,14 @@ import { isEligibleForCalculations } from '../src/combat/budget.ts';
 import { leaderDefinitionsOf } from '../src/tier/leaders.ts';
 import { ARCHETYPES, archetypeOf } from '../src/combat/archetypes.ts';
 import {
+  rawScoreOf,
   sensitivityAnalysis,
   tierList,
   type CombatMode,
   type TargetParadigm,
   type TierRow,
 } from '../src/tier/scoring.ts';
+import { withOnceEffects } from '../src/manual/abilities.ts';
 import type { BsDatasheet } from '../src/bsdata/types.ts';
 import type { CombatUnit } from '../src/combat/types.ts';
 
@@ -44,6 +46,36 @@ const started = Date.now();
 const { datasheets } = parseBsDatabase(loadBsData(bsFilesFromDir('public/BSData/wh40k-11e')));
 console.log(`Даташитов: ${datasheets.length}, прогонов: ${trials}`);
 
+/**
+ * Дельта одноразовых способностей: «сколько очков стоит бафф».
+ *
+ * Считается двумя прогонами по одним и тем же шаблонным целям: с
+ * включёнными одноразовыми эффектами и без них. Разница и есть дельта.
+ *
+ * Результат — справочный: в тир и норму урона он не попадает, потому что
+ * «once per battle» не действует постоянно. У юнитов без таких способностей
+ * (а их подавляющее большинство) дельта равна 0, и прогоны не выполняются
+ * вовсе — иначе сборка платила бы лишний Monte-Carlo на каждого юнита.
+ */
+function onceEffectDeltaOf(datasheet: BsDatasheet, unit: CombatUnit, points: number): number {
+  const boosted = withOnceEffects(unit);
+  // Нет эффекта — тот же объект, дельта нулевая по построению.
+  if (boosted === unit) return 0;
+
+  const options = { mode: 'combined' as const, targetParadigm: 'all' as const };
+  // Считается для единиц юнитов, но дельта — справочная величина: сбой
+  // расчёта не должен ронять всю сборку тирлиста, поэтому перехватываем.
+  try {
+    const plain = rawScoreOf(datasheet, unit, points, options);
+    const buffed = rawScoreOf(datasheet, boosted, points, options);
+    const value = buffed.rawMaxDamage - plain.rawMaxDamage;
+    return Math.round(value * 100) / 100;
+  } catch (error) {
+    console.error(`  дельта не посчитана для «${datasheet.name}»:`, error);
+    return 0;
+  }
+}
+
 const prepared: Array<{ datasheet: BsDatasheet; unit: CombatUnit; points: number; loadouts: LoadoutCandidate[] }> = [];
 for (const datasheet of datasheets) {
   const adapted = adaptUnit(datasheet, { size: 'min' });
@@ -58,6 +90,7 @@ console.log(`Пригодных юнитов: ${prepared.length} (${Date.now() -
 
 const leaders = leaderDefinitionsOf(datasheets);
 if (leaders.length === 0) throw new Error('BSData: не найдено ни одного Leader/Support с допустимыми отрядами');
+console.log(`Лидеров: ${leaders.length} (${Date.now() - started} мс)`);
 
 /**
  * Эталоны целей берутся из clusters.generated.ts — они выведены k-means из
@@ -299,6 +332,18 @@ const payload = {
       models: unit.models.length,
       archetype: archetypeOf(unit, points)?.id ?? 'unknown',
       /**
+       * ДЕЛЬТА ОДНОРАЗОВЫХ СПОСОБНОСТЕЙ — справочный столбец.
+       *
+       * Считается как «уничтоженные очки с одноразовым баффом минус без него»
+       * против шаблонных целей, в тех же единицах, что destroyedPointsByTarget.
+       *
+       * В расчёт тира и нормы урона она НЕ входит намеренно: способность
+       * «once per battle» не действует постоянно, и включение её в бой дало бы
+       * юниту постоянный бафф и сдвинуло бы норму для всего набора. Здесь это
+       * просто число в строке юнита, чтобы видеть цену способности глазами.
+       */
+      onceEffectDelta: onceEffectDeltaOf(datasheet, unit, points),
+      /**
        * Чувствительность ранга к размеру эталонных целей (±20% моделей).
        * Считается только для all/combined — это единственный вид, для которого
        * прогон делается; в остальных полях флаг не переносится.
@@ -323,6 +368,9 @@ const payload = {
 };
 
 mkdirSync(dirname(outPath), { recursive: true });
-writeFileSync(outPath, JSON.stringify(payload), 'utf8');
-const sizeMb = (JSON.stringify(payload).length / 1024 / 1024).toFixed(1);
+// Сериализуем ОДИН раз: файл крупный (десятки МБ), а повторный JSON.stringify
+// держал бы в памяти вторую такую же строку и мог уронить процесс на записи.
+const json = JSON.stringify(payload);
+writeFileSync(outPath, json, 'utf8');
+const sizeMb = (json.length / 1024 / 1024).toFixed(1);
 console.log(`\nГотово за ${((Date.now() - started) / 1000).toFixed(1)} с → ${outPath} (${sizeMb} МБ)`);

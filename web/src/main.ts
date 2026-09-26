@@ -368,6 +368,12 @@ const COLUMNS: Array<{ key: string; title: string; numeric: boolean; hint?: stri
   { key: 'damagePer100', title: 'Урон/100', numeric: true },
   { key: 'absorbedPer100', title: 'Прочность/100', numeric: true, hint: 'Сколько урона противник обязан потратить, чтобы удалить юнит, на 100 его очков' },
   { key: 'utilityScore', title: 'Полезн.', numeric: true, hint: 'Utility, максимум 20' },
+  {
+    key: 'onceEffectDelta',
+    title: 'Δ однораз.',
+    numeric: true,
+    hint: 'Дельта одноразовых способностей: насколько больше юнит уничтожил бы с одноразовым баффом. В TOTAL и норму урона НЕ входит — «once per battle» не действует постоянно',
+  },
   { key: 'normDamage', title: 'Норм.урон', numeric: true },
   { key: 'normSurvivability', title: 'Норм.живуч.', numeric: true },
   { key: 'normUtility', title: 'Норм.пол.', numeric: true },
@@ -389,6 +395,11 @@ function cellValue(unit: UnitEntry, key: string): string | number {
       return metrics.unitType === 'Melee' ? 'Ближний' : 'Дальний';
     case 'bestTargetName':
       return metrics.bestTargetName;
+    case 'onceEffectDelta':
+      // Дельта лежит на юните, а не в метриках: она справочная и не
+      // пересчитывается на клиенте при правке характеристик — пересчитывать
+      // её было бы некорректно, бафф одноразовый.
+      return unit.onceEffectDelta ?? 0;
     default:
       return (metrics as unknown as Record<string, number>)[key] ?? 0;
   }

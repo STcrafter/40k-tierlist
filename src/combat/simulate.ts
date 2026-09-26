@@ -290,6 +290,79 @@ export interface DefenderState {
   kills: number;
   /** Урон, доведённый до моделей (без избытка по «убитым» ранам). */
   damage: number;
+  /** Воскрешение уже израсходовано (одноразовые способности, ручной слой). */
+  resurrectUsed: boolean;
+}
+
+/**
+ * Возврат убитых моделей целителем (Hospitaller), который остаётся в строю.
+ *
+ * Возвращается столько моделей, сколько живых целителей в отряде: один
+ * Hospitaller — одну модель за раунд. Модель встаёт с полным запасом ран, а её
+ * убийство вычитается из счётчика, потому что она снова в строю.
+ *
+ * @returns true, если хотя бы одна модель вернулась в бой.
+ */
+function reviveFallenByLeader(state: DefenderState): boolean {
+  const healers = state.unit.models
+    .map((model, index) => ({ model, index }))
+    .filter(({ model, index }) => model.reviveLeader === true && state.woundsLeft[index] > 0);
+  if (healers.length === 0) return false;
+  const fallen = state.woundsLeft
+    .map((wounds, index) => ({ wounds, index }))
+    .filter(({ wounds, index }) => wounds <= 0 && !state.unit.models[index].reviveLeader)
+    .sort((a, b) => a.index - b.index);
+  if (fallen.length === 0) return false;
+  const limit = fallen.length;
+  let revived = 0;
+  for (const healer of healers) {
+    // Один целитель возвращает reviveCount моделей за раунд (Hospitaller — 1,
+    // Ministorum Priest при Sanctifiers — D3, то есть 3).
+    const quota = healer.model.reviveCount ?? 1;
+    for (let i = 0; i < quota && revived < limit; i += 1) {
+      const target = fallen[revived];
+      state.woundsLeft[target.index] = state.unit.models[target.index].wounds;
+      state.aliveCount += 1;
+      state.kills -= 1;
+      revived += 1;
+    }
+  }
+  return revived > 0;
+}
+
+/**
+ * Регенерация и одноразовое воскрешение между раундами (ручной слой).
+ *
+ * Вызывается в начале каждого раунда, пока жив хоть кто-то:
+ *  - раны восстанавливаются, но не выше исходного запаса модели;
+ *  - если ВСЕ модели мертвы, но у отряда есть модель с `resurrectOnce`, она
+ *    возвращается в бой с полными ранами. Происходит это не чаще одного раза
+ *    за бой: иначе «одноразовое» воскрешение стало бы бесконечным.
+ *
+ * @returns true, если отряд был возвращён в бой воскрешением.
+ */
+export function upkeepBetweenRounds(state: DefenderState): boolean {
+  // Целитель (Hospitaller): пока он жив, возвращаем убитые модели. Идёт
+  // ПЕРВЫМ, чтобы лечение было на «свежей» бою: сначала поднимаем павших,
+  // потом лечим — иначе очередь возврата съедала бы лечение.
+  if (reviveFallenByLeader(state)) return true;
+  for (let index = 0; index < state.woundsLeft.length; index += 1) {
+    const model = state.unit.models[index];
+    if (state.woundsLeft[index] <= 0) continue;
+    const regen = model.regeneration ?? 0;
+    if (regen <= 0) continue;
+    const max = model.wounds;
+    const healed = Math.min(regen, max - state.woundsLeft[index]);
+    if (healed > 0) state.woundsLeft[index] += healed;
+  }
+  if (state.aliveCount > 0 || state.resurrectUsed) return false;
+  const revivable = state.unit.models.findIndex((model) => model.resurrectOnce === true);
+  if (revivable < 0) return false;
+  state.woundsLeft[revivable] = state.unit.models[revivable].wounds;
+  state.aliveCount += 1;
+  state.kills -= 1;
+  state.resurrectUsed = true;
+  return true;
 }
 
 /** Копия состояния защитника под конкретный прогон. */
@@ -310,6 +383,7 @@ export function createDefenderState(
     initialModelCount: unit.models.length,
     kills: 0,
     damage: 0,
+    resurrectUsed: false,
   };
 }
 
@@ -549,7 +623,15 @@ export function resolveWeapon(
     const killsBefore = state.kills;
 
     if (critical && devastating) {
-      const mortals = rollDice(damageSpecOf(hitCtx, rules), rng);
+      const base = rollDice(damageSpecOf(hitCtx, rules), rng);
+      // Ручной бонус к мортидам (Daemonifuge): действует только в своей фазе,
+      // поэтому прибавляется здесь, а не в damageSpecOf — там нет доступа к фазе.
+      const bonus =
+        weapon.mortalDamageBonus !== undefined &&
+        weapon.mortalDamageBonus.phase === hitCtx.phase
+          ? weapon.mortalDamageBonus.amount
+          : 0;
+      const mortals = base + bonus;
       const dealt = damageSpill(state, mortals, rng, isPsychic);
       usage.unsaved += 1;
       usage.mortals += dealt;
@@ -572,6 +654,19 @@ export function resolveWeapon(
     const dealt = damageNextModel(state, damage, rng, isPsychic);
     usage.damage += dealt;
     usage.kills += state.kills - killsBefore;
+    // Palatine: +N мортид за успешное ранение. Мортиды идут СВЕРХ обычного урона
+    // и переносятся на другие модели (как damageSpill, а не как оверфлоу).
+    const perWound =
+      weapon.mortalPerWound !== undefined && weapon.mortalPerWound.phase === hitCtx.phase
+        ? weapon.mortalPerWound.amount
+        : 0;
+    if (perWound > 0) {
+      const killsAfterWound = state.kills;
+      const extra = damageSpill(state, perWound, rng, isPsychic);
+      usage.mortals += extra;
+      usage.damage += extra;
+      usage.kills += state.kills - killsAfterWound;
+    }
   }
 }
 
@@ -742,6 +837,9 @@ export function simulateBattle(
   while (state.aliveCount > 0 && rounds < maxRounds) {
     damageByRound.push(simulateRound(attacker, state, opts));
     rounds += 1;
+    // Регенерация и воскрешение (ручной слой) — между раундами, поэтому
+    // вызываются ПОСЛЕ атаки: иначе лечение шло бы в том же раунде, что и урон.
+    upkeepBetweenRounds(state);
   }
 
   return {

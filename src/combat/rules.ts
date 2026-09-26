@@ -92,6 +92,26 @@ export function standardRules(): CombatRules {
       // Стрельба вслепую: −1 к попаданию (включается опцией indirect).
       (ctx, base) =>
         ctx.indirect && base !== null && !isPsychicAttack(ctx.weapon) ? base + 1 : base,
+      // [ANTI-BONUS X/Y]: +X к попаданию и +Y к ранению против MONSTER/VEHICLE
+      // (Paragon Warsuits). Отличается от [ANTI-X Y+]: тот даёт критическое
+      // ранение, а этот — просто улучшение порогов.
+      (ctx, base) => {
+        if (base === null) return base;
+        const bonus = ctx.weapon.keywords.find((k) => k.name === 'anti-bonus');
+        if (!bonus || bonus.target === null) return base;
+        const matches = bonus.target.some((required) => targetKeywordsOf(ctx).includes(required));
+        return matches ? base - (bonus.value?.count ?? 0) : base;
+      },
+      // MELEE_EVASION: −1 к попаданию РУКОПАШНОЙ атакой по цели с этим
+      // кейвордом (Junith Eruita даёт его себе и присоединённому юниту).
+      // Зеркало Stealth, только наоборот: здесь ухудшается рукопашная, а не
+      // дальнобойная. Кейворд ставится ручным слоем, а не разбором текста.
+      (ctx, base) => {
+        if (base === null || ctx.phase !== 'melee' || isPsychicAttack(ctx.weapon)) return base;
+        const evasive =
+          ctx.target.keywords.includes('MELEE_EVASION') || ctx.defender.keywords.includes('MELEE_EVASION');
+        return evasive ? base + 1 : base;
+      },
     ],
 
     extraHits: [
