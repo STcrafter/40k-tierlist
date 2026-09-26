@@ -1,32 +1,32 @@
-/**
+﻿/**
  * Сборщик данных для веб-тирлиста.
  *
- * Считает метрики всех юнитов один раз и выгружает готовый JSON: считать их
- * в браузере при загрузке слишком долго (~90 с), а пересчёт одного юнита
- * после правки характеристик — быстро, поэтому в JSON кладутся и «сырые»
- * метрики, и полный боевой профиль для пересчёта на клиенте.
+ * Считает метрики всех юнитов один раз и выгружает готовый JSON. Считать их в
+ * браузере при загрузке слишком долго (~90 с), поэтому в JSON кладутся и «сырые»
+ * метрики, и полный боевой профиль — второй нужен панели деталей, чтобы показать
+ * состав отряда и оружие.
+ *
+ * Клиент ничего не досчитывает: нормы, Total, перцентили и тиры уже посчитаны
+ * здесь. Один источник правды — иначе сайт и отчёты разойдутся.
  *
  *   npm run build:data
  *   node scripts/build-tierlist.ts --trials=40 --out=web/public/data/tierlist.json
  */
 
 import { mkdirSync, writeFileSync } from 'node:fs';
+import { cpus } from 'node:os';
 import { dirname, resolve } from 'node:path';
-import { bsFilesFromDir } from '../src/bsdata/node-source.ts';
-import { loadBsData, parseBsDatabase } from '../src/bsdata/index.ts';
-import { adaptUnit, loadoutVariantsOf, type LoadoutCandidate } from '../src/combat/adapter.ts';
-import { isEligibleForCalculations } from '../src/combat/budget.ts';
-import { leaderDefinitionsOf } from '../src/tier/leaders.ts';
+import { fork } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { ARCHETYPES, archetypeOf } from '../src/combat/archetypes.ts';
 import {
   rawScoreOf,
-  sensitivityAnalysis,
-  tierList,
   type CombatMode,
   type TargetParadigm,
-  type TierRow,
 } from '../src/tier/scoring.ts';
 import { withOnceEffects } from '../src/manual/abilities.ts';
+import { emptyParadigmGrid, prepareUnits, type AttachedPayload, type TrimmedRow } from './prepare-units.ts';
+import type { ComboResult, SensitivityResult, TierJob, TierWorkerResult } from './tier-worker.ts';
 import type { BsDatasheet } from '../src/bsdata/types.ts';
 import type { CombatUnit } from '../src/combat/types.ts';
 
@@ -35,16 +35,62 @@ const flagValue = (name: string): string | null => {
   const found = argv.find((arg) => arg.startsWith(`--${name}=`));
   return found === undefined ? null : found.slice(name.length + 3);
 };
+const hasFlag = (name: string): boolean => argv.includes(`--${name}`);
 
-const trials = Number(flagValue('trials') ?? 40);
+const bsDataDir = flagValue('bs-data') ?? 'public/BSData/wh40k-11e';
 const distance = Number(flagValue('distance') ?? 12);
 const outPath = resolve(flagValue('out') ?? 'web/public/data/tierlist.json');
 const modes: CombatMode[] = ['ranged', 'melee', 'combined'];
 const paradigms: TargetParadigm[] = ['all', 'infantry', 'elite', 'armor'];
 
+/**
+ * Пресет для повседневных правок: меньше прогонов и без sensitivity.
+ *
+ * Числа прогонов подобраны так, чтобы ранжирование оставалось тем же самым:
+ * ранги устойчивы уже на 15 прогонах, а sensitivity (третий полный прогон
+ * тирлиста) влияет только на один диагностический столбец. Полная сборка с
+ * 40 прогонами остаётся для финальной выгрузки на сайт.
+ */
+const QUICK = hasFlag('quick');
+const trials = Number(flagValue('trials') ?? (QUICK ? 15 : 40));
+const skipSensitivity = hasFlag('skip-sensitivity') || QUICK;
+
+/**
+ * Число дочерних процессов.
+ *
+ * По умолчанию 6, а не по числу ядер: каждый процесс держит свою копию
+ * разобранной BSData, и 12 копий на 16 ГБ начинают давить по памяти. 6 берёт
+ * верхнюю границу для 12 комбинаций — длиннейшая задача и так определяет
+ * финальное время.
+ */
+const jobs = Number(flagValue('jobs') ?? Math.min(6, cpus().length));
+
 const started = Date.now();
-const { datasheets } = parseBsDatabase(loadBsData(bsFilesFromDir('public/BSData/wh40k-11e')));
-console.log(`Даташитов: ${datasheets.length}, прогонов: ${trials}`);
+const { prepared, leaders } = prepareUnits(bsDataDir);
+console.log(
+  `Пригодных юнитов: ${prepared.length}, лидеров: ${leaders.length} ` +
+    `(${Date.now() - started} мс на подготовку)`
+);
+console.log(
+  `Прогонов: ${trials}, воркеров: ${jobs}, sensitivity: ${skipSensitivity ? 'выключен' : 'включён'}` +
+    `${QUICK ? ' (--quick)' : ''}`
+);
+
+console.log(`Эталоны целей: ${ARCHETYPES.length} (выведены из данных)`);
+for (const archetype of ARCHETYPES) {
+  console.log(
+    `  ${archetype.id.padEnd(11)} ${archetype.name.padEnd(26)} n=${String(archetype.sample).padStart(4)} ` +
+      `T${archetype.toughness} W${archetype.wounds} Sv${archetype.save ?? '-'} models=${archetype.models} ` +
+      `pts=${archetype.points} [${archetype.group}]`
+  );
+}
+
+const byParadigm = emptyParadigmGrid(paradigms, modes, () => [] as TrimmedRow[]);
+const attachedByParadigm = emptyParadigmGrid(
+  paradigms,
+  modes,
+  () => [] as AttachedPayload[]
+);
 
 /**
  * Дельта одноразовых способностей: «сколько очков стоит бафф».
@@ -76,147 +122,91 @@ function onceEffectDeltaOf(datasheet: BsDatasheet, unit: CombatUnit, points: num
   }
 }
 
-const prepared: Array<{ datasheet: BsDatasheet; unit: CombatUnit; points: number; loadouts: LoadoutCandidate[] }> = [];
-for (const datasheet of datasheets) {
-  const adapted = adaptUnit(datasheet, { size: 'min' });
-  if (
-    adapted.unit.models.length === 0 ||
-    !isEligibleForCalculations(datasheet.name, adapted.points)
-  ) continue;
-  const loadouts = loadoutVariantsOf(datasheet, { size: 'min', limit: 4 });
-  prepared.push({ datasheet, unit: adapted.unit, points: adapted.points, loadouts });
-}
-console.log(`Пригодных юнитов: ${prepared.length} (${Date.now() - started} мс на адаптацию)`);
-
-const leaders = leaderDefinitionsOf(datasheets);
-if (leaders.length === 0) throw new Error('BSData: не найдено ни одного Leader/Support с допустимыми отрядами');
-console.log(`Лидеров: ${leaders.length} (${Date.now() - started} мс)`);
-
 /**
- * Эталоны целей берутся из clusters.generated.ts — они выведены k-means из
- * реальных даташитов (scripts/build-clusters.ts). Отчёт ниже нужен, чтобы было
- * видно состав типов и их наполненность, а не чтобы что-то проверять: раньше
- * здесь сверялись медианы по РУЧНЫМ корзинам, и почти все расходились.
+ * Задачи раздаются воркерам по кругу.
+ *
+ * Порядок не влияет на результат: сиды Монте-Карло зависят только от юнита и
+ * индекса цели (`(seed + index * 7919)`), а не от того, какой воркер и в каком
+ * порядке считал. Поэтому распараллеливание не меняет ни одной цифры.
  */
-console.log(`Эталоны целей: ${ARCHETYPES.length} (выведены из данных)`);
-for (const archetype of ARCHETYPES) {
-  console.log(
-    `  ${archetype.id.padEnd(11)} ${archetype.name.padEnd(26)} n=${String(archetype.sample).padStart(4)} ` +
-      `T${archetype.toughness} W${archetype.wounds} Sv${archetype.save ?? '-'} models=${archetype.models} ` +
-      `pts=${archetype.points} [${archetype.group}]`
-  );
-}
-
-interface AttachedPayload {
-  unitId: string;
-  leaderId: string | null;
-  name: string;
-  faction: string;
-  factions: string[];
-  models: number;
-  points: number;
-  tier: TierRow['tier'];
-  totalScore: number;
-  rawMaxDamage: number;
-  bestTarget: string;
-  bestTargetName: string;
-  effectiveSurvivability: number;
-  utilityScore: number;
-  utilityFlags: TierRow['utilityFlags'];
-}
-
-const byParadigm: Record<string, Record<string, TierRow[]>> = {};
-// Сразу сохраняем только компактные поля. Хранить 12 000 полных TierRow
-// одновременно не нужно и на практике расходовало всю heap-память процесса.
-const attachedByParadigm: Record<string, Record<string, AttachedPayload[]>> = {};
-/** Общий Astartes-юнит принадлежит каждому чаптеру через factions, а не через одну строку faction. */
-function sharesFaction(unit: BsDatasheet, leader: { factions: string[] }): boolean {
-  return leader.factions.some((faction) => unit.factions.includes(faction));
-}
-
-function pairFactions(id: string): string[] {
-  const [unitId, leaderId] = id.split('+');
-  const unit = prepared.find((item) => item.datasheet.id === unitId)?.datasheet;
-  const leader = leaders.find((item) => item.id === leaderId);
-  return [...new Set([...(unit?.factions ?? []), ...(leader?.factions ?? [])])];
-}
-
-for (const paradigm of paradigms) {
-  byParadigm[paradigm] = {};
-  attachedByParadigm[paradigm] = {};
-  // В BSData один отряд может принимать несколько Leader/Support. Сохраняем
-  // каждую пару, которую явно разрешает локальная база BSData; это отдельная
-  // вкладка, поэтому здесь не нужно искусственно выбирать одного лидера.
-  const attachedEntries = prepared.flatMap(({ datasheet, unit, points }) => {
-    const candidates = leaders
-      .filter((leader) => sharesFaction(datasheet, leader))
-      .filter((leader) => leader.allowedUnitIds.includes(datasheet.id))
-      .filter((leader) => points + leader.points <= 2000);
-    return candidates.map((leader) => ({
-      datasheet,
-      unit,
-      points,
-      leader,
-      rowId: `${datasheet.id}+${leader.id}`,
-      faction: leader.faction,
-      factions: [...new Set([...datasheet.factions, ...leader.factions])],
-    }));
+function runPool(tasks: TierJob[]): Promise<void> {
+  if (tasks.length === 0) return Promise.resolve();
+  const workerScript = fileURLToPath(new URL('./tier-worker.ts', import.meta.url));
+  const shards: TierJob[][] = Array.from({ length: Math.min(jobs, tasks.length) }, () => []);
+  tasks.forEach((task, index) => {
+    shards[index % shards.length].push(task);
   });
-  for (const mode of modes) {
-    const modeStarted = Date.now();
-    byParadigm[paradigm][mode] = tierList(prepared, {
-      mode,
-      targetParadigm: paradigm,
-      combat: { trials, distance },
-      survival: { trials, maxRounds: 15, distance },
-      archetypes: ARCHETYPES,
-    });
-    const attachedRows = tierList(attachedEntries, {
-      mode,
-      targetParadigm: paradigm,
-      combat: { trials: Math.min(trials, 4), distance },
-      survival: { trials: Math.min(trials, 3), maxRounds: 8, distance },
-      archetypes: ARCHETYPES,
-    });
-    attachedByParadigm[paradigm][mode] = attachedRows.map((row) => ({
-      unitId: row.id.split('+')[0],
-      leaderId: row.id.split('+')[1] ?? null,
-      name: row.name,
-      faction: row.faction,
-      factions: pairFactions(row.id),
-      models: row.models,
-      points: row.points,
-      tier: row.tier,
-      totalScore: row.totalScore,
-      rawMaxDamage: row.rawMaxDamage,
-      bestTarget: row.bestTarget,
-      bestTargetName: row.bestTargetName,
-      effectiveSurvivability: row.effectiveSurvivability,
-      utilityScore: row.utilityScore,
-      utilityFlags: row.utilityFlags,
-    }));
-    console.log(`Парадигма ${paradigm}/${mode}: ${byParadigm[paradigm][mode].length} юнитов, ${attachedRows.length} с лидерами (${Date.now() - modeStarted} мс)`);
-  }
+
+  return new Promise<void>((resolveAll, rejectAll) => {
+    let pending = shards.length;
+    const failed = new Error('воркер сборки завершился с ошибкой');
+
+    for (const [index, shard] of shards.entries()) {
+      const args = [
+        workerScript,
+        `--jobs=${JSON.stringify(shard)}`,
+        `--trials=${trials}`,
+        `--distance=${distance}`,
+        `--bs-data=${bsDataDir}`,
+      ];
+      const child = fork(workerScript, args, { stdio: ['ignore', 'inherit', 'inherit', 'ipc'] });
+
+      child.on('message', (message: { preparedMs: number; result: TierWorkerResult }) => {
+        if (message.preparedMs > 3000) {
+          console.log(`  воркер ${index + 1}: подготовка ${message.preparedMs} мс`);
+        }
+        const result = message.result;
+        if (result.kind === 'combo') {
+          const combo = result as ComboResult;
+          byParadigm[combo.paradigm][combo.mode] = combo.rows;
+          attachedByParadigm[combo.paradigm][combo.mode] = combo.attached;
+          console.log(
+            `Парадигма ${combo.paradigm}/${combo.mode}: ${combo.rows.length} юнитов, ` +
+              `${combo.attached.length} с лидерами (${combo.elapsedMs} мс, воркер ${index + 1})`
+          );
+          return;
+        }
+        const sensitivity = result as SensitivityResult;
+        sensitivityEntries = new Map(sensitivity.entries);
+        console.log(
+          `Sensitivity (all/combined): HIGH у ${sensitivity.high} из ${sensitivity.size} юнитов ` +
+            `(${sensitivity.elapsedMs} мс, воркер ${index + 1})`
+        );
+      });
+
+      child.on('error', (error) => {
+        failed.cause = error;
+        rejectAll(error);
+      });
+      child.on('exit', (code) => {
+        if (code !== 0) {
+          rejectAll(failed);
+          return;
+        }
+        pending -= 1;
+        if (pending === 0) resolveAll();
+      });
+    }
+  });
 }
 
-// Sensitivity-анализ только для основного вида (all/combined): это три полных
-// прогона тирлиста, и считать их для 11 остальных комбинаций означало бы
-// утроить время сборки ради второстепенных метрик.
-const sensitivityStarted = Date.now();
-const sensitivity = sensitivityAnalysis(
-  prepared,
-  {
-    mode: 'combined',
-    targetParadigm: 'all',
-    combat: { trials, distance },
-    survival: { trials, maxRounds: 15, distance },
-    archetypes: ARCHETYPES,
-  }
+// Sensitivity — это третий полный прогон тирлиста, и он ни от чего не зависит,
+// поэтому уходит в общий пул отдельной задачей, а не считается в конце.
+let sensitivityEntries = new Map<
+  string,
+  { spread: number; high: boolean; medium: boolean; tierChangeProbability: number }
+>();
+
+const tasks: TierJob[] = paradigms.flatMap((paradigm) =>
+  modes.map((mode) => ({ kind: 'combo', paradigm, mode } as TierJob))
 );
-const sensitivityHigh = [...sensitivity.values()].filter((item) => item.high).length;
-console.log(
-  `Sensitivity (all/combined): HIGH у ${sensitivityHigh} из ${sensitivity.size} юнитов (${Date.now() - sensitivityStarted} мс)`
-);
+if (!skipSensitivity) tasks.push({ kind: 'sensitivity' } as TierJob);
+
+const poolStarted = Date.now();
+await runPool(tasks);
+console.log(`Расчёт завершён за ${((Date.now() - poolStarted) / 1000).toFixed(1)} с`);
+
+const sensitivity = sensitivityEntries;
 
 /**
  * Боевой профиль юнита для пересчёта на клиенте: модель целиком, чтобы
@@ -315,8 +305,8 @@ const payload = {
     const metricsByParadigm = Object.fromEntries(
       paradigms.map((paradigm) => [paradigm, Object.fromEntries(modes.map((mode) => [mode, metricsFor(paradigm, mode)]))])
     ) as Record<TargetParadigm, Record<CombatMode, ReturnType<typeof metricsFor>>>;
-    // Профили loadout остаются в JSON, а числовые метрики пересчитываются в
-    // браузере при выборе варианта. Считать их здесь для тысяч юнитов не нужно.
+    // Профили loadout остаются в JSON без числовых метрик: считать их для
+    // тысяч юнитов дорого, а панели деталей достаточно состава и очков.
     const loadoutMetrics = loadouts.map((loadout) => ({
       id: loadout.id,
       name: loadout.name,

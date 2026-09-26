@@ -2,63 +2,28 @@
  * Главный модуль веб-тирлиста.
  *
  * Отвечает за: фильтры (фракция, режим боя, тир, поиск), таблицу со всеми
- * показателями и панель редактора характеристик. Пересчёт после правки
- * идёт в браузере тем же кодом, что и на сервере (src/tier + src/combat),
- * поэтому цифры на сайте и в отчётах совпадают.
+ * показателями и панель деталей по юниту.
+ *
+ * Ничего не пересчитывается: все метрики, нормы, Total и тиры приходят готовыми
+ * из web/public/data/tierlist.json, который собирает scripts/build-tierlist.ts.
+ * Дублировать нормализацию на клиенте было смысл только ради редактора — по
+ * правке одного юнита честный пересчёт всё равно давал бы другие числа, чем
+ * серверная сборка, и два источника правды расходились бы между собой.
  */
 
-import { damagePerRound } from '../../src/combat/perRound.ts';
-import { survivabilityAgainstUnit } from '../../src/combat/survival.ts';
 import { ARCHETYPES } from '../../src/combat/archetypes.ts';
-import { targetsForParadigm } from '../../src/tier/scoring.ts';
-import { CALCULATION_POINTS_LIMIT, withinCalculationBudget } from '../../src/combat/budget.ts';
-import type { CombatUnit, CombatWeapon } from '../../src/combat/types.ts';
+import { withinCalculationBudget } from '../../src/combat/budget.ts';
 import {
-  rebuildTierlist,
   type CombatMode,
   type TargetParadigm,
-  type ScoredRow,
   type Tier,
   type TierlistData,
   type UnitEntry,
+  type UnitMetrics,
   type UnitProfile,
 } from './model.ts';
 
 const DATA_URL = './data/tierlist.json';
-
-interface UnitMetricsLocal {
-  rawMaxDamage: number;
-  bestTarget: string;
-  bestTargetName: string;
-  destroyedPointsByTarget: Record<string, number>;
-  /** Вектор атаки после Melee Tax, по типам целей. */
-  effectiveOffenseVector: Record<string, number>;
-  /** Вектор защиты по группам оружия. */
-  defenseVector: Record<string, number>;
-  damagePer100: number;
-  universal: number;
-  /** Поглощённый до смерти урон на 100 очков — effective durability. */
-  absorbedPer100: number;
-  /** Запас ран на 100 очков — только диагностика. */
-  bulkPer100: number;
-  unitType: 'Ranged' | 'Melee';
-  taxDamage: number;
-  taxSurvivability: number;
-  effectiveDamage: number;
-  effectiveSurvivability: number;
-  utilityFlags: Array<{ id: string; points: number; reason: string; category: string }>;
-  utilityScore: number;
-  normDamage: number;
-  normSurvivability: number;
-  normUtility: number;
-  vectorDamageScore: number;
-  vectorSurvivabilityScore: number;
-  vectorDamageFloor: number;
-  vectorSurvivabilityFloor: number;
-  totalScore: number;
-  percentile: number;
-  tier: Tier;
-}
 
 const MODES: Array<{ id: CombatMode; title: string }> = [
   { id: 'ranged', title: 'Дальний бой' },
@@ -77,191 +42,28 @@ const state = {
   search: '',
   sortKey: 'totalScore',
   sortDesc: true,
-  edited: new Map<string, UnitProfile>(),
-  overrides: new Map<string, UnitMetricsLocal>(),
-  /** Пересчитанные строки тирлиста (id → строка). */
-  rows: new Map<string, ScoredRow>(),
   openUnit: null as UnitEntry | null,
   view: 'units' as 'units' | 'attached',
   attachedRows: [] as import('./model.ts').AttachedRow[],
-
 };
 
 
-/** Профиль юнита из JSON → боевой отряд для симулятора. */
-function toCombatUnit(profile: UnitProfile): CombatUnit {
-  return {
-    id: profile.id,
-    name: profile.name,
-    keywords: profile.keywords,
-    models: profile.models.map((model) => ({
-      id: model.id,
-      name: model.name,
-      toughness: model.toughness,
-      wounds: model.wounds,
-      save: model.save,
-      invuln: model.invuln,
-      // FNP и STEALTH не редактируются в панели, но должны долететь до симулятора.
-      fnp: model.fnp ?? null,
-      fnpScope: model.fnpScope ?? 'all',
-      keywords: model.keywords,
-      weapons: model.weapons.map(
-        (weapon): CombatWeapon => ({
-          id: weapon.id,
-          name: weapon.name,
-          kind: weapon.kind,
-          range: weapon.range,
-          attacks: weapon.attacks,
-          skill: weapon.skill,
-          strength: weapon.strength,
-          ap: weapon.ap,
-          damage: weapon.damage,
-          // Кейворды нужны для [LETHAL HITS]/[ANTI-X]; в JSON храним только
-          // имя и исходный текст, поэтому condition не восстанавливается.
-          keywords: weapon.keywords.map((keyword) => ({
-            name: keyword.name,
-            raw: keyword.raw,
-            value: null,
-            target: null,
-            condition: null,
-          })),
-        })
-      ),
-    })),
-  };
-}
+
+
+
 
 /**
- * Пересчитывает сырые метрики одного юнита в выбранном режиме боя.
- * Дублирует логику src/tier/scoring.ts (rawScoreOf), но по отредактированному
- * профилю: серверные цифры без повторного прогона пересчитать нельзя.
+ * Метрики юнита в выбранной паре «парадигма × режим».
+ *
+ * Всё приходит из сборки, включая нормы, Total и тир, поэтому клиент ничего не
+ * досчитывает. Запасной вариант — парадигма `all`: он есть в любой сборке, даже
+ * если `metricsByParadigm` не собралась.
  */
-function recomputeMetrics(
-  unit: UnitEntry,
-  profile: UnitProfile,
-  mode: CombatMode,
-  paradigm: TargetParadigm = state.targetParadigm
-): UnitMetricsLocal {
-  const combatUnit = toCombatUnit(profile);
-  const points = profile.points;
-  const scale = points > 0 ? 100 / points : 0;
-  const targetIds = targetsForParadigm(paradigm);
-  const targets = [...targetIds];
-  const phase = mode === 'ranged' ? 'ranged' : mode === 'melee' ? 'melee' : 'all';
-
-  // Прогонов меньше, чем при сборке: правка идёт в интерактиве, а на
-  // нормированный скор доли процента почти не влияют.
-  const damage = damagePerRound(combatUnit, {
-    trials: 24,
-    distance: state.data?.distance ?? 12,
-    phase,
-    targets,
-  });
-  const slice = mode === 'ranged' ? damage.ranged : mode === 'melee' ? damage.melee : damage.total;
-  const destroyedPer100 = (id: string): number =>
-    (slice.destroyedPoints.byArchetype[id]?.mean ?? 0) * scale;
-  const destroyedPointsByTarget = Object.fromEntries(
-    targets.map((id) => [id, destroyedPer100(id)])
-  );
-  const targetIdsForMetrics = Object.keys(destroyedPointsByTarget);
-  const [bestTarget, rawMaxDamage] = targetIdsForMetrics.reduce<[string, number]>(
-    (best, id) => (destroyedPer100(id) > best[1] ? [id, destroyedPer100(id)] : best),
-    [targetIdsForMetrics[0] ?? 'infantry', 0]
-  );
-  const universal = average(targetIdsForMetrics.map(destroyedPer100));
-  const damagePer100 = slice.overall.mean * scale;
-
-  // Живучесть = effective durability: сколько урона противник обязан потратить,
-  // чтобы удалить юнит, на 100 его очков. Больше = живучее, инверсии нет.
-  const surv = survivabilityAgainstUnit(combatUnit, points, {
-    trials: 16,
-    maxRounds: 12,
-    distance: state.data?.distance ?? 12,
-    phase,
-  });
-  const absorbedPer100 = surv.overall.absorbedPer100Points.mean;
-  const bulkPer100 = surv.overall.bulkPer100Points.mean;
-
-  const rangedPer100 = damage.ranged.overall.mean * scale;
-  const meleePer100 = damage.melee.overall.mean * scale;
-  const unitType: 'Ranged' | 'Melee' = meleePer100 > rangedPer100 ? 'Melee' : 'Ranged';
-  const hasFlyOrDeepStrike = combatUnit.keywords.includes('FLY');
-  // В режиме стрельбы рукопашная фаза не участвует — melee-штраф не применяем.
-  const tax =
-    mode === 'ranged' || unitType === 'Ranged'
-      ? { damage: 1, survivability: 1 }
-      : hasFlyOrDeepStrike
-        ? { damage: 0.85, survivability: 0.85 }
-        : { damage: 0.7, survivability: 0.6 };
-
-  // Вектор атаки: destroyed points по каждой цели с учётом melee-штрафа.
-  const effectiveOffenseVector = Object.fromEntries(
-    Object.entries(destroyedPointsByTarget).map(([id, value]) => [id, value * tax.damage])
-  );
-  // Вектор защиты: живучесть против каждой группы входящего оружия.
-  const defenseVector = Object.fromEntries(
-    Object.entries(surv.byGroup).map(([group, value]) => [
-      group,
-      value.roundsPer100Points.mean * tax.survivability,
-    ])
-  );
-
-  return {
-    rawMaxDamage,
-    bestTarget,
-    bestTargetName: TARGET_LABELS[bestTarget] ?? bestTarget,
-    destroyedPointsByTarget,
-    effectiveOffenseVector,
-    defenseVector,
-    universal,
-    damagePer100,
-    absorbedPer100,
-    bulkPer100,
-    unitType,
-    taxDamage: tax.damage,
-    taxSurvivability: tax.survivability,
-    effectiveDamage: rawMaxDamage * tax.damage,
-    effectiveSurvivability: surv.overall.roundsPer100Points.mean * tax.survivability,
-    utilityFlags: unit.utilityFlags,
-    // Utility не зависит от боевых характеристик — остаётся серверный.
-    utilityScore: unit.utilityScore,
-    normDamage: 0,
-    normSurvivability: 0,
-    normUtility: 0,
-    vectorDamageScore: 0,
-    vectorSurvivabilityScore: 0,
-    vectorDamageFloor: 0,
-    vectorSurvivabilityFloor: 0,
-    totalScore: 0,
-    percentile: 50,
-    tier: 'D',
-  };
-}
-
-
-/** Текущая стоимость юнита с учётом правок редактора. */
-function pointsOf(unit: UnitEntry): number {
-  return (state.edited.get(unit.id) ?? unit.unit).points;
-}
-
-/** Метрики юнита: отредактированные — из кэша, иначе из собранных данных. */
-function metricsOf(unit: UnitEntry): UnitMetricsLocal {
-  const override = state.overrides.get(`${unit.id}:${state.mode}:${state.targetParadigm}`);
-  if (override) return override;
-  const base = unit.metricsByParadigm?.[state.targetParadigm]?.[state.mode] ?? unit.metrics[state.mode];
-  return { ...base } as UnitMetricsLocal;
-}
-
-/**
- * Пересобирает тирлист целиком: сырые метрики → нормировка → Total → тиры.
- * Вызывается при смене режима боя, фильтров и после каждой правки юнита.
- */
-function rebuildRows(): void {
-  if (!state.data) return;
-  state.rows = rebuildTierlist(
-    state.data.units
-      .filter((unit) => withinCalculationBudget(pointsOf(unit)))
-      .map((unit) => ({ id: unit.id, raw: metricsOf(unit), points: pointsOf(unit) }))
+function metricsOf(unit: UnitEntry): UnitMetrics {
+  return (
+    cellOf(unit, state.targetParadigm, state.mode) ??
+    unit.metrics[state.mode] ??
+    (unit.metricsByParadigm?.all?.[state.mode] as UnitMetrics)
   );
 }
 
@@ -272,9 +74,9 @@ function visibleUnits(): UnitEntry[] {
   const needle = state.search.trim().toLowerCase();
   const rows = state.data.units.filter((unit) => {
     if (state.view === 'attached') return false;
-    if (!withinCalculationBudget(pointsOf(unit))) return false;
+    if (!withinCalculationBudget(unit.points)) return false;
     if (state.faction && !unit.factions.includes(state.faction)) return false;
-    if (state.tierFilter.size > 0 && !state.tierFilter.has(state.rows.get(unit.id)?.tier ?? 'D')) {
+    if (state.tierFilter.size > 0 && !state.tierFilter.has(metricsOf(unit).tier)) {
       return false;
     }
     if (needle && !unit.name.toLowerCase().includes(needle)) return false;
@@ -284,10 +86,12 @@ function visibleUnits(): UnitEntry[] {
   const key = state.sortKey;
   const dir = state.sortDesc ? -1 : 1;
   rows.sort((a, b) => {
-    const left = state.rows.get(a.id) as unknown as Record<string, number>;
-    const right = state.rows.get(b.id) as unknown as Record<string, number>;
-    const delta = (left[key] ?? 0) - (right[key] ?? 0);
-    return delta * dir || a.name.localeCompare(b.name);
+    const left = cellValue(a, key);
+    const right = cellValue(b, key);
+    if (typeof left === 'string' || typeof right === 'string') {
+      return String(left).localeCompare(String(right)) * dir || a.name.localeCompare(b.name);
+    }
+    return (left - right) * dir || a.name.localeCompare(b.name);
   });
   return rows;
 }
@@ -322,16 +126,12 @@ async function boot(): Promise<void> {
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     state.data = (await response.json()) as TierlistData;
     state.attachedRows = state.data.attached?.[state.targetParadigm]?.[state.mode] ?? [];
-    rebuildRows();
     render(app);
   } catch (error) {
     app.innerHTML = `<div class="empty">Не удалось загрузить данные тирлиста.<br />${String(error)}<br />
       Соберите их командой: <code>npm run build:data</code></div>`;
   }
 }
-
-const average = (values: number[]): number =>
-  values.length === 0 ? 0 : values.reduce((sum, value) => sum + value, 0) / values.length;
 
 /** Форматирование чисел для таблицы. */
 const num = (value: number, digits = 1): string => value.toFixed(digits);
@@ -357,6 +157,30 @@ const MODE_LABELS: Record<CombatMode, string> = {
   combined: 'Обе фазы',
 };
 
+/** Подписи парадигм цели: те же, что у кнопок фильтра. */
+const PARADIGM_LABELS: Record<string, string> = {
+  all: 'Все цели',
+  infantry: 'Пехота',
+  elite: 'Элита',
+  armor: 'Техника',
+};
+
+/**
+ * Подписи групп входящего оружия для defenseVector.
+ *
+ * Ключи приходят из данных, поэтому подписи вынесены в одну карту: новой группе
+ * без подписи строка в панели покажет голый ключ — это заметно и поправимо.
+ */
+const DEFENSE_GROUP_LABELS: Record<string, string> = {
+  'small-arms': 'Стрелковое оружие',
+  'heavy-infantry': 'Тяжёлая пехота',
+  'melee-infantry': 'Пехота в ближнем бою',
+  'monster-melee': 'Монстры в ближнем бою',
+  'vehicle-guns': 'Орудия техники',
+  'anti-armour': 'Антиброневое оружие',
+  'mortal-precision': 'Точный огонь мортидами',
+};
+
 /** Колонки таблицы: ключ сортировки → заголовок и форматтер. */
 const COLUMNS: Array<{ key: string; title: string; numeric: boolean; hint?: string }> = [
   { key: 'name', title: 'Юнит', numeric: false },
@@ -377,18 +201,18 @@ const COLUMNS: Array<{ key: string; title: string; numeric: boolean; hint?: stri
   { key: 'normDamage', title: 'Норм.урон', numeric: true },
   { key: 'normSurvivability', title: 'Норм.живуч.', numeric: true },
   { key: 'normUtility', title: 'Норм.пол.', numeric: true },
-  { key: 'totalScore', title: 'TOTAL', numeric: true, hint: '0.40·урон + 0.35·живучесть + 0.25·полезность' },
+  { key: 'totalScore', title: 'TOTAL', numeric: true, hint: '0.55·норм.урон + 0.35·норм.живучесть + 0.10·норм.полезность' },
   { key: 'percentile', title: 'Перц.', numeric: true },
 ];
 
-/** Значение ячейки: у отредактированных юнитов берём пересчитанные метрики. */
+/** Значение ячейки таблицы. Всё берётся из собранных данных. */
 function cellValue(unit: UnitEntry, key: string): string | number {
   const metrics = metricsOf(unit);
   switch (key) {
     case 'name':
       return unit.name;
     case 'points':
-      return (state.edited.get(unit.id) ?? unit.unit).points;
+      return unit.points;
     case 'models':
       return unit.models;
     case 'unitType':
@@ -413,8 +237,7 @@ function renderControls(): string {
       `<button data-mode="${mode.id}" class="${state.mode === mode.id ? 'active' : ''}">${mode.title}</button>`
   ).join('');
   const paradigmButtons = (state.data?.paradigms ?? ['all', 'infantry', 'elite', 'armor']).map((paradigm) => {
-    const labels = { all: 'Все цели', infantry: 'Пехота', elite: 'Элита', armor: 'Техника' } as const;
-    return `<button data-paradigm="${paradigm}" class="${state.targetParadigm === paradigm ? 'active' : ''}">${labels[paradigm]}</button>`;
+    return `<button data-paradigm="${paradigm}" class="${state.targetParadigm === paradigm ? 'active' : ''}">${PARADIGM_LABELS[paradigm] ?? paradigm}</button>`;
   }).join('');
   const tierButtons = TIERS.map(
     (tier) =>
@@ -425,8 +248,9 @@ function renderControls(): string {
     <header>
       <h1>40K Tier List</h1>
       <p class="subtitle">
-        Расчёт по правилам 11-й редакции. Клик по юниту открывает редактор характеристик —
-        тир и позиция пересчитываются сразу.
+        Расчёт по правилам 11-й редакции. Клик по юниту открывает подробности:
+        тир по всем видам боя, из чего сложились урон и живучесть, и разбор
+        способностей. Все числа посчитаны при сборке тирлиста.
       </p>
       <div class="controls">
         <div class="control">
@@ -484,9 +308,7 @@ function renderTable(): string {
 
   const rows = units
     .map((unit) => {
-      const row = state.rows.get(unit.id);
-      if (row === undefined) return '';
-      const edited = state.edited.has(unit.id);
+      const metrics = metricsOf(unit);
       const cells = COLUMNS.filter((column) => column.key !== 'name').map((column) => {
         const value = cellValue(unit, column.key);
         const numeric = column.numeric;
@@ -498,17 +320,16 @@ function renderTable(): string {
         return `<td class="${numeric ? 'num' : ''}">${text}</td>`;
       }).join('');
 
-      const tier = row.tier;
-      return `<tr class="${edited ? 'edited' : ''}">
+      const tier = metrics.tier;
+      return `<tr>
         <td>
           <span class="tier-badge" data-tier="${tier}">${tier}</span>
           <span class="unit-name" data-open="${unit.id}">${unit.name}</span>
-          ${edited ? '<span class="tag edited-mark">изменён</span>' : ''}
           ${
             unit.sensitivity?.high
-              ? `<span class="tag sens-mark" title="Тир меняется в ${(unit.sensitivity.tierChangeProbability * 100).toFixed(0)}% сценариев возмущения (±20% числа моделей в эталонных целях) — оценка держится на узком матчапе">Sensitivity: HIGH</span>`
+              ? `<span class="tag sens-mark" title="Тир меняется в ${(unit.sensitivity.tierChangeProbability * 100).toFixed(0)}% сценариев возмущения (±15% и ±30% числа моделей в эталонных целях) — оценка держится на узком матчапе">Sensitivity: HIGH</span>`
               : unit.sensitivity?.medium
-                ? `<span class="tag sens-mark" title="Тир меняется в ${(unit.sensitivity.tierChangeProbability * 100).toFixed(0)}% сценариев возмущения (±20% числа моделей в эталонных целях)">Sensitivity: MEDIUM</span>`
+                ? `<span class="tag sens-mark" title="Тир меняется в ${(unit.sensitivity.tierChangeProbability * 100).toFixed(0)}% сценариев возмущения (±15% и ±30% числа моделей в эталонных целях)">Sensitivity: MEDIUM</span>`
                 : ''
           }
         </td>
@@ -528,7 +349,7 @@ function renderStatus(): string {
   for (const unit of units) {
     const tier = attached
       ? (unit as import('./model.ts').AttachedRow).tier
-      : state.rows.get((unit as UnitEntry).id)?.tier;
+      : metricsOf(unit as UnitEntry).tier;
     if (tier) counts[tier] += 1;
   }
   const parts = TIERS.map((tier) => `${tier}:${counts[tier]}`).join('  ');
@@ -537,23 +358,6 @@ function renderStatus(): string {
 }
 
 
-/** Глубокая копия профиля: правки не должны мутировать исходные данные. */
-function cloneProfile(profile: UnitProfile): UnitProfile {
-  return {
-    ...profile,
-    keywords: [...profile.keywords],
-    models: profile.models.map((model) => ({
-      ...model,
-      keywords: [...model.keywords],
-      weapons: model.weapons.map((weapon) => ({
-        ...weapon,
-        attacks: weapon.attacks === null ? null : { ...weapon.attacks },
-        damage: weapon.damage === null ? null : { ...weapon.damage },
-        keywords: weapon.keywords.map((keyword) => ({ ...keyword })),
-      })),
-    })),
-  };
-}
 
 /** Человекочитаемый профиль оружия для карточки. */
 function weaponProfileText(weapon: UnitProfile['models'][number]['weapons'][number]): string {
@@ -573,137 +377,343 @@ function weaponProfileText(weapon: UnitProfile['models'][number]['weapons'][numb
   return parts.join(' · ');
 }
 
-/** Числовое поле редактора. */
-function numberField(label: string, value: number | null, path: string, min = 0, max = 99): string {
-  return `<div class="field">
-    <label>${label}</label>
-    <input type="number" data-path="${path}" value="${value ?? ''}" min="${min}" max="${max}" step="1" />
-  </div>`;
+
+
+
+/**
+ * Экранирование текста из BSData.
+ *
+ * Способности и названия приходят из данных и содержат кавычки и апострофы,
+ * которые без экранирования ломают атрибуты (особенно title=).
+ */
+function esc(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
 }
 
-/** Карточка одного оружия с полями правки. */
-function weaponCard(
-  weapon: UnitProfile['models'][number]['weapons'][number],
-  weaponIndex: number,
-  modelIndex: number,
-  onlyKind: 'ranged' | 'melee' | 'both'
-): string {
-  const active = onlyKind === 'both' || weapon.kind === onlyKind;
-  const base = `models.${modelIndex}.weapons.${weaponIndex}`;
-  const fields = [
-    numberField('A', weapon.attacks?.count ?? null, `${base}.attacks.count`, 0, 20),
-    numberField('BS/WS', weapon.skill, `${base}.skill`, 1, 7),
-    numberField('S', weapon.strength, `${base}.strength`, 1, 30),
-    numberField('AP', weapon.ap, `${base}.ap`, -10, 5),
-    numberField('D', weapon.damage?.count ?? null, `${base}.damage.count`, 0, 30),
-  ].join('');
-
-  return `<div class="weapon-card">
-    <div class="whead">
-      <span class="name">${weapon.name}</span>
-      <span class="profile">${weaponProfileText(weapon)}</span>
-    </div>
-    ${weapon.keywords.length > 0 ? `<div class="weapon-keywords">${weapon.keywords.map((keyword) => `<span class="weapon-keyword" title="${keyword.name}">${keyword.raw}</span>`).join('')}</div>` : ''}
-    <div class="field-grid" style="opacity:${active ? 1 : 0.4}">
-      ${active ? fields : '<span class="profile">Не участвует в выбранном режиме боя</span>'}
-    </div>
-  </div>`;
+/**
+ * Метрики юнита в произвольной комбинации «парадигма × режим».
+ *
+ * Ключи приходят из данных (`paradigms` может измениться), поэтому проверяем
+ * принадлежность к типу: иначе типизация Record ломается на индексации строкой.
+ */
+function cellOf(
+  unit: UnitEntry,
+  paradigm: string,
+  mode: CombatMode
+): UnitMetrics | null {
+  if (!isTargetParadigm(paradigm)) return null;
+  return unit.metricsByParadigm?.[paradigm]?.[mode] ?? null;
 }
 
+/** Отсекает значения, которых нет в типе: внешние ключи из JSON. */
+function isTargetParadigm(value: string): value is TargetParadigm {
+  return (Object.keys(state.data?.paradigms ?? PARADIGM_FALLBACK) as string[]).includes(value);
+}
 
-/** Панель редактора для открытого юнита. */
-function renderEditor(unit: UnitEntry): string {
-  const profile = state.edited.get(unit.id) ?? cloneProfile(unit.unit);
+/** Парадигмы по умолчанию, если данные ещё не загружены. */
+const PARADIGM_FALLBACK: TargetParadigm[] = ['all', 'infantry', 'elite', 'armor'];
+
+/**
+ * Матрица тиров по всем 12 комбинациям.
+ *
+ * Раньше в панели был только выбранный вид, и было не видно, является ли низкий
+ * тир свойством юнита или следствием выбранной парадигмы цели. Матрица показывает
+ * это прямо: если юнит S против пехоты и D против техники, виновата парадигма.
+ */
+function renderParadigmMatrix(unit: UnitEntry): string {
+  const paradigms = state.data?.paradigms ?? ['all'];
+  const modes = state.data?.modes ?? ['combined'];
+  const head = modes.map((mode) => `<th class="num">${MODE_LABELS[mode]}</th>`).join('');
+  const body = paradigms
+    .map((paradigm) => {
+      const cells = modes
+        .map((mode) => {
+          const cell = cellOf(unit, paradigm, mode);
+          if (cell === null) return '<td class="num">—</td>';
+          const current = paradigm === state.targetParadigm && mode === state.mode;
+          return `<td class="num${current ? ' current' : ''}">
+            <span class="tier-badge" data-tier="${cell.tier}">${cell.tier}</span>
+            <span class="cell-total">${num(cell.totalScore, 1)}</span>
+          </td>`;
+        })
+        .join('');
+      return `<tr><th>${PARADIGM_LABELS[paradigm] ?? paradigm}</th>${cells}</tr>`;
+    })
+    .join('');
+  return `<section>
+      <h3>Тир по всем видам боя</h3>
+      <p class="hint">Все 12 комбинаций «парадигма цели × режим». Подсвечена та, что выбрана в фильтрах.</p>
+      <div class="table-wrap"><table class="matrix">
+        <thead><tr><th>Парадигма цели</th>${head}</tr></thead>
+        <tbody>${body}</tbody>
+      </table></div>
+    </section>`;
+}
+
+/**
+ * Разбивка боя: сколько очков цели юнит уничтожает по каждому типу цели и
+ * сколько живёт против каждой группы входящего оружия.
+ *
+ * Полосы нормированы на максимум по юниту, поэтому читается именно профиль
+ * «против кого он силён», а не абсолютные числа.
+ */
+function renderBreakdowns(unit: UnitEntry): string {
   const metrics = metricsOf(unit);
-  const row = state.rows.get(unit.id);
-  // В комбинированном режиме показываем оба типа оружия, иначе — только рабочие.
-  const onlyKind: 'ranged' | 'melee' | 'both' = state.mode === 'ranged' ? 'ranged' : state.mode === 'melee' ? 'melee' : 'both';
-  const showBoth = state.mode === 'combined';
-
-  const model = profile.models[0];
-  const modelFields = [
-    numberField('Очки', profile.points, 'points', 1, CALCULATION_POINTS_LIMIT),
-    numberField('T', model.toughness, 'models.0.toughness', 1, 20),
-    numberField('W', model.wounds, 'models.0.wounds', 1, 40),
-    numberField('Sv', model.save, 'models.0.save', 2, 7),
-    numberField('InSv', model.invuln, 'models.0.invuln', 2, 7),
-    `<div class="field"><label>Моделей</label><input type="number" value="${unit.models}" disabled /></div>`,
-  ].join('');
-
-  const weapons = model.weapons
-    // Индекс должен оставаться ИСХОДНЫМ: путь правки адресует оригинальный
-    // массив, иначе при фильтрации по типу оружия правились бы не те поля.
-    .map((weapon, index) => ({ weapon, index }))
-    .filter(({ weapon }) => showBoth || weapon.kind === onlyKind)
-    .map(({ weapon, index }) => weaponCard(weapon, index, 0, onlyKind))
+  const destroyed = metrics.destroyedPointsByTarget ?? {};
+  const offenseMax = Math.max(1, ...Object.values(destroyed));
+  const offense = Object.entries(destroyed)
+    .map(
+      ([id, value]) => `<div class="breakdown-row">
+        <span class="bk">${esc(TARGET_LABELS[id] ?? id)}</span>
+        <span class="bar"><i style="width:${(value / offenseMax) * 100}%"></i></span>
+        <span class="bv">${num(value, 1)}</span>
+      </div>`
+    )
     .join('');
 
-  // Флаги показываются по категориям, и только стратегические влияют на тир.
-  // Иначе в карточке не видно, почему, например, OC 3+ не поднял оценку.
-  const allFlags = metrics.utilityFlags ?? unit.utilityFlags;
-  const flagChip = (flag: (typeof allFlags)[number], className: string): string =>
-    `<span class="flag ${className}" title="${flag.reason}">${flag.id} +${flag.points}</span>`;
-  const flags = [
-    ...allFlags.filter((flag) => flag.category === 'strategic').map((flag) => flagChip(flag, 'flag-scored')),
-    ...allFlags
-      .filter((flag) => flag.category === 'archetype')
-      .map((flag) => flagChip(flag, 'flag-plain')),
-    ...allFlags.filter((flag) => flag.category === 'modeled').map((flag) => flagChip(flag, 'flag-modeled')),
-  ].join('');
-  const loadouts = (unit.loadouts ?? []).map((loadout) => {
-    const loadoutMetric = loadout.metrics;
-    const isSelected = state.edited.has(unit.id) && state.edited.get(unit.id)?.points === loadout.points;
-    return `<div class="weapon-card">
-      <div class="whead">
-        <span class="name">${loadout.name}</span>
-        <span class="profile">${loadout.points} очков · уничтожено ${num(loadoutMetric?.rawMaxDamage ?? 0, 1)} очк./100 · ${loadoutMetric?.bestTargetName ?? '—'}</span>
+  const defense = metrics.defenseVector ?? {};
+  const defenseMax = Math.max(1, ...Object.values(defense));
+  const defenseRows = Object.entries(defense)
+    .map(
+      ([group, value]) => `<div class="breakdown-row">
+        <span class="bk">${esc(DEFENSE_GROUP_LABELS[group] ?? group)}</span>
+        <span class="bar"><i style="width:${(value / defenseMax) * 100}%"></i></span>
+        <span class="bv">${num(value, 2)}</span>
+      </div>`
+    )
+    .join('');
+
+  return `<section>
+      <h3>Урон по типам целей</h3>
+      <p class="hint">Уничтоженные очки на 100 очков юнита. Лучшая цель: ${esc(metrics.bestTargetName || '—')}.</p>
+      ${offense || '<p class="hint">Нет данных.</p>'}
+    </section>
+    <section>
+      <h3>Живучесть по группам входящего оружия</h3>
+      <p class="hint">Сколько боевых фаз юнит доживает против каждой группы.</p>
+      ${defenseRows || '<p class="hint">Нет данных.</p>'}
+    </section>`;
+}
+
+/**
+ * Ручные способности, разложенные по категориям.
+ *
+ * Категории важны не для красоты: в Total входят только стратегические, поэтому
+ * без разбивки не видно, почему, например, FNP или Sororitas_Retributors не
+ * подняли оценку — а это почти всегда вопрос, который и задают, глядя на юнита.
+ */
+function renderUtilityDetails(unit: UnitEntry): string {
+  const flags = unit.utilityFlags ?? [];
+  if (flags.length === 0) {
+    return '<section><h3>Небоевая полезность: 0 / 20</h3><p class="hint">Ни одной распознанной способности.</p></section>';
+  }
+  const known = ['strategic', 'archetype', 'modeled'];
+  const groups: Array<[string, string, string]> = [
+    ['strategic', 'Стратегические', 'Входят в Total и определяют тир'],
+    ['archetype', 'Архетипные', 'Справочные: показывают, к чему юнит тяготеет'],
+    ['modeled', 'Учтённые в бою', 'Уже сидят в симуляции, поэтому в Total не входят'],
+    ['other', 'Прочие', 'Категория не распознана — скорее всего, новый вид эффекта'],
+  ];
+  const body = groups
+    .map(([id, title, note]) => {
+      const items = flags.filter((flag) =>
+        id === 'other' ? !known.includes(flag.category) : flag.category === id
+      );
+      if (items.length === 0) return '';
+      const chips = items
+        .map(
+          (flag) =>
+            `<span class="flag" title="${esc(flag.reason)}"><b>${esc(flag.id)}</b> +${flag.points} — ${esc(flag.reason)}</span>`
+        )
+        .join('');
+      return `<div class="util-group">
+          <h4>${title} <span class="muted">· ${note}</span></h4>
+          <div class="flags">${chips}</div>
+        </div>`;
+    })
+    .join('');
+  return `<section>
+      <h3>Небоевая полезность: ${unit.utilityScore} / 20</h3>
+      <p class="hint">Сумма стратегических очков. Только они входят в Total.</p>
+      ${body}
+    </section>`;
+}
+
+/** Устойчивость тира к произвольным допущениям модели. */
+function renderSensitivityDetails(unit: UnitEntry): string {
+  const sensitivity = unit.sensitivity;
+  if (sensitivity === undefined) {
+    return '<section><h3>Чувствительность тира</h3><p class="hint">Нет данных: сборка шла с --skip-sensitivity.</p></section>';
+  }
+  const percent = (value: number): string => `${(value * 100).toFixed(0)}%`;
+  const verdict = sensitivity.high ? 'HIGH' : sensitivity.medium ? 'MEDIUM' : 'устойчив';
+  return `<section>
+      <h3>Чувствительность тира: ${verdict}</h3>
+      <p class="hint">Тир пересчитывается при ±15% и ±30% числа моделей в эталонных целях.</p>
+      <div class="metrics">
+        <div class="metric"><div class="k">Смена тира</div><div class="v">${percent(sensitivity.tierChangeProbability)}</div></div>
+        <div class="metric"><div class="k">Разброс перцентиля</div><div class="v">${num(sensitivity.spread, 1)}</div></div>
       </div>
-      <button data-loadout="${loadout.id}" class="${isSelected ? 'primary' : ''}">${isSelected ? 'Выбран' : 'Выбрать loadout'}</button>
-    </div>`;
-  }).join('');
+    </section>`;
+}
 
-  return `<div class="editor-backdrop" id="editor-backdrop">
-    <div class="editor">
-      <h2>${unit.name}</h2>
-      <p class="hint">${unit.faction} · ${profile.points} очков · ${unit.models} моделей · ${unit.archetype}</p>
+/**
+ * Дельта одноразовых способностей.
+ *
+ * Отдельная справочная величина: она показывает, насколько юнит прибавил бы с
+ * одноразовым баффом, но в Total, норму урона и тир не входит — «once per
+ * battle» не действует постоянно. Поэтому здесь ноль это норма, а не ошибка.
+ */
+function renderOnceEffectDetails(unit: UnitEntry): string {
+  const delta = unit.onceEffectDelta ?? 0;
+  return `<section>
+      <h3>Одноразовые способности</h3>
+      <div class="metrics">
+        <div class="metric"><div class="k">Δ уничтоженных очков</div><div class="v">${num(delta, 2)}</div></div>
+      </div>
+      <p class="hint">Справочно. В Total и норму урона не входит: способность срабатывает один раз за бой, а не постоянно.</p>
+    </section>`;
+}
 
-      <section>
-        <h3>Показатели (${MODE_LABELS[state.mode].toLowerCase()})</h3>
-        <div class="metrics">
-          <div class="metric"><div class="k">Тир</div><div class="v">${row?.tier ?? '-'}</div></div>
-          <div class="metric"><div class="k">Total</div><div class="v">${num(row?.totalScore ?? 0)}</div></div>
-          <div class="metric"><div class="k">Перцентиль</div><div class="v">${num(row?.percentile ?? 0)}</div></div>
-          <div class="metric"><div class="k">Урон/100</div><div class="v">${num(metrics.effectiveDamage, 2)}</div></div>
-          <div class="metric"><div class="k">Прочность/100</div><div class="v">${num(metrics.absorbedPer100, 2)}<small title="Нормализованная прочность среди юнитов своей цены">${num(row?.normSurvivability ?? 0, 0)}</small></div></div>
-          <div class="metric" title="Запас ран на 100 очков — диагностика, не метрика выживаемости"><div class="k">Ран/100</div><div class="v">${num(metrics.bulkPer100, 2)}</div></div>
-          <div class="metric"><div class="k">Норм. урон</div><div class="v">${num(row?.normDamage ?? 0)}</div></div>
-          <div class="metric"><div class="k">Норм. полезн.</div><div class="v">${num(row?.normUtility ?? 0)}</div></div>
+/**
+ * Варианты снаряжения.
+ *
+ * Метрики для loadout'ов в JSON намеренно нет (считать их для тысяч юнитов
+ * дорого), поэтому показываются очки и состав оружия, а не выдуманные нули.
+ */
+function renderLoadoutDetails(unit: UnitEntry): string {
+  const loadouts = unit.loadouts ?? [];
+  if (loadouts.length === 0) {
+    return '<section><h3>Loadout-варианты</h3><p class="hint">Для этого юнита нет отдельных вариантов снаряжения.</p></section>';
+  }
+  const body = loadouts
+    .map((loadout) => {
+      const weapons = loadout.unit?.models?.[0]?.weapons ?? [];
+      const list = weapons.length === 0 ? '—' : weapons.map((weapon) => esc(weapon.name)).join(', ');
+      return `<div class="weapon-card">
+        <div class="whead">
+          <span class="name">${esc(loadout.name)}</span>
+          <span class="profile">${loadout.points} очков</span>
         </div>
-      </section>
+        <div class="profile">${list}</div>
+      </div>`;
+    })
+    .join('');
+  return `<section><h3>Loadout-варианты</h3>${body}</section>`;
+}
 
-      <section>
-        <h3>Модель</h3>
-        <div class="field-grid">${modelFields}</div>
-      </section>
+/** Варианты «юнит + лидер» для выбранных вида боя и парадигмы. */
+function renderLeaderDetails(unit: UnitEntry): string {
+  const attached = state.data?.attached?.[state.targetParadigm]?.[state.mode] ?? [];
+  const rows = attached.filter((row) => row.unitId === unit.id);
+  if (rows.length === 0) {
+    return '<section><h3>С лидерами</h3><p class="hint">Для этого юнита в выбранном виде нет разрешённых лидеров.</p></section>';
+  }
+  const leaderName = (id: string | null): string =>
+    id === null ? '—' : (state.data?.leaders.find((leader) => leader.id === id)?.name ?? id);
+  const body = rows
+    .map(
+      (row) => `<tr>
+      <td>${esc(row.name)}</td>
+      <td>${esc(leaderName(row.leaderId))}</td>
+      <td class="num">${row.points}</td>
+      <td class="num">${num(row.rawMaxDamage, 1)}</td>
+      <td>${esc(row.bestTargetName)}</td>
+      <td class="num">${num(row.totalScore, 1)}</td>
+      <td><span class="tier-badge" data-tier="${row.tier}">${row.tier}</span></td>
+    </tr>`
+    )
+    .join('');
+  return `<section>
+      <h3>С лидерами — ${PARADIGM_LABELS[state.targetParadigm]}, ${MODE_LABELS[state.mode].toLowerCase()}</h3>
+      <div class="table-wrap"><table>
+        <thead><tr>
+          <th>Отряд</th><th>Лидер</th><th class="num">Очки</th>
+          <th class="num">Уничт. очки/100</th><th>Лучшая цель</th>
+          <th class="num">TOTAL</th><th>Тир</th>
+        </tr></thead>
+        <tbody>${body}</tbody>
+      </table></div>
+    </section>`;
+}
 
-      <section>
-        <h3>Оружие${showBoth ? '' : ` — ${MODE_LABELS[state.mode].toLowerCase()}`}</h3>
-        ${weapons || '<p class="hint">В выбранном режиме у юнита нет оружия.</p>'}
-      </section>
+/**
+ * Панель деталей по юниту: только чтение, все числа берутся из сборки.
+ *
+ * Порядок секций — от «что это за юнит» к «почему такой тир»: сначала итог по
+ * выбранному виду, затем как он меняется по парадигмам, затем из чего сложились
+ * урон и живучесть, и только потом справочные величины.
+ */
+function renderDetails(unit: UnitEntry): string {
+  const metrics = metricsOf(unit);
+  const paradigm = PARADIGM_LABELS[state.targetParadigm] ?? state.targetParadigm;
+  const mode = MODE_LABELS[state.mode].toLowerCase();
 
-      <section>
-        <h3>Loadout-варианты</h3>
-        ${loadouts || '<p class="hint">Для этого юнита нет отдельных вариантов снаряжения.</p>'}
-      </section>
+  const summary = `<section>
+      <h3>Показатели — ${paradigm.toLowerCase()}, ${mode}</h3>
+      <div class="metrics">
+        <div class="metric"><div class="k">Тир</div><div class="v">${metrics.tier}</div></div>
+        <div class="metric"><div class="k">Total</div><div class="v">${num(metrics.totalScore)}</div></div>
+        <div class="metric"><div class="k">Перцентиль</div><div class="v">${num(metrics.percentile)}</div></div>
+        <div class="metric"><div class="k">Урон/100</div><div class="v">${num(metrics.effectiveDamage, 2)}</div></div>
+        <div class="metric" title="Сколько боевых фаз юнит доживает — это и есть выживаемость в тире"><div class="k">Живучесть, фазы</div><div class="v">${num(metrics.effectiveSurvivability, 2)}<small title="Нормализованная прочность среди юнитов своей цены">${num(metrics.normSurvivability, 0)}</small></div></div>
+        <div class="metric" title="Поглощённый до смерти урон — диагностика, в тир не входит"><div class="k">Прочность/100</div><div class="v">${num(metrics.absorbedPer100, 2)}</div></div>
+        <div class="metric" title="Запас ран на 100 очков — диагностика, не метрика выживаемости"><div class="k">Ран/100</div><div class="v">${num(metrics.bulkPer100, 2)}</div></div>
+        <div class="metric"><div class="k">Норм. урон</div><div class="v">${num(metrics.normDamage)}</div></div>
+        <div class="metric"><div class="k">Норм. полезн.</div><div class="v">${num(metrics.normUtility)}</div></div>
+      </div>
+      <p class="hint">Total = 0.55·норм.урон + 0.35·норм.живучесть + 0.10·норм.полезность.</p>
+    </section>`;
 
-      <section>
-        <h3>Небоевая полезность: ${unit.utilityScore} / 20</h3>
-        <div class="flags">${flags || '<span class="flag">нет флагов</span>'}</div>
-      </section>
+  return [
+    summary,
+    renderParadigmMatrix(unit),
+    renderBreakdowns(unit),
+    renderOnceEffectDetails(unit),
+    renderUtilityDetails(unit),
+    renderSensitivityDetails(unit),
+    renderLoadoutDetails(unit),
+    renderLeaderDetails(unit),
+    renderWeapons(unit),
+  ].join('');
+}
 
+/** Оружие юнита: состав и профили, без полей правки. */
+function renderWeapons(unit: UnitEntry): string {
+  const profile = unit.unit;
+  const model = profile?.models?.[0];
+  if (model === undefined) return '';
+  const onlyKind = state.mode === 'ranged' ? 'ranged' : state.mode === 'melee' ? 'melee' : 'both';
+  const weapons = model.weapons.filter((weapon) => onlyKind === 'both' || weapon.kind === onlyKind);
+  const cards = weapons
+    .map(
+      (weapon) => `<div class="weapon-card">
+      <div class="whead">
+        <span class="name">${esc(weapon.name)}</span>
+        <span class="profile">${weaponProfileText(weapon)}</span>
+      </div>
+      ${weapon.keywords.length > 0 ? `<div class="weapon-keywords">${weapon.keywords.map((keyword) => `<span class="weapon-keyword" title="${esc(keyword.name)}">${esc(keyword.raw)}</span>`).join('')}</div>` : ''}
+    </div>`
+    )
+    .join('');
+  return `<section>
+      <h3>Оружие${onlyKind === 'both' ? '' : ` — ${MODE_LABELS[state.mode].toLowerCase()}`}</h3>
+      ${cards || '<p class="hint">В выбранном режиме у юнита нет оружия.</p>'}
+    </section>`;
+}
+
+/** Модальное окно с подробностями по юниту. */
+function renderUnitDialog(unit: UnitEntry): string {
+  return `<div class="editor-backdrop" id="details-backdrop">
+    <div class="editor">
+      <h2>${esc(unit.name)}</h2>
+      <p class="hint">${esc(unit.faction)} · ${unit.points} очков · ${unit.models} моделей · ${esc(unit.archetype)}</p>
+      ${renderDetails(unit)}
       <div class="editor-actions">
-        <button class="primary" data-action="apply">Пересчитать тир</button>
-        <button data-action="reset">Сбросить правки</button>
         <button data-action="close">Закрыть</button>
       </div>
     </div>
@@ -711,34 +721,7 @@ function renderEditor(unit: UnitEntry): string {
 }
 
 
-/** Записывает значение в профиль по пути вида `models.0.weapons.2.attacks.count`. */
-function setByPath(profile: UnitProfile, path: string, raw: string): void {
-  const parts = path.split('.');
-  const value = raw === '' ? null : Number(raw);
-  if (parts[0] === 'points') profile.points = value ?? profile.points;
-  else if (parts[0] === 'models' && parts[1] !== undefined) {
-    const modelIndex = Number(parts[1]);
-    const model = profile.models[modelIndex];
-    if (model === undefined) return;
 
-    if (parts[2] === 'toughness') model.toughness = value ?? model.toughness;
-    else if (parts[2] === 'wounds') model.wounds = value ?? model.wounds;
-    else if (parts[2] === 'save') model.save = value;
-    else if (parts[2] === 'invuln') model.invuln = value;
-    else if (parts[2] === 'weapons' && parts[3] !== undefined) {
-      const weapon = model.weapons[Number(parts[3])];
-      if (weapon === undefined) return;
-      if (parts[4] === 'skill') weapon.skill = value;
-      else if (parts[4] === 'strength') weapon.strength = value;
-      else if (parts[4] === 'ap') weapon.ap = value ?? 0;
-      else if (parts[4] === 'attacks' && parts[5] === 'count') {
-        weapon.attacks = weapon.attacks === null ? null : { ...weapon.attacks, count: value ?? 0 };
-      } else if (parts[4] === 'damage' && parts[5] === 'count') {
-        weapon.damage = weapon.damage === null ? null : { ...weapon.damage, count: value ?? 0 };
-      }
-    }
-  }
-}
 
 /** Таблица юнитов с присоединёнными лидерами. */
 function renderAttachedTable(): string {
@@ -772,10 +755,10 @@ function renderAttachedTable(): string {
   return `<div class="table-wrap"><table><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></div>`;
 }
 
-/** Главная функция отрисовки: панель + таблица + редактор. */
+/** Главная функция отрисовки: фильтры + таблица + окно деталей. */
 function render(app: HTMLElement): void {
-  const editor = state.openUnit === null ? '' : renderEditor(state.openUnit);
-  app.innerHTML = `${renderControls()}${state.view === 'attached' ? renderAttachedTable() : renderTable()}${editor}`;
+  const dialog = state.openUnit === null ? '' : renderUnitDialog(state.openUnit);
+  app.innerHTML = `${renderControls()}${state.view === 'attached' ? renderAttachedTable() : renderTable()}${dialog}`;
   const status = document.querySelector<HTMLDivElement>('#status');
   if (status !== null) status.textContent = renderStatus();
 }
@@ -796,8 +779,6 @@ function bindEvents(app: HTMLElement): void {
     if (modeButton?.dataset.mode) {
       state.mode = modeButton.dataset.mode as CombatMode;
       state.attachedRows = state.data?.attached?.[state.targetParadigm]?.[state.mode] ?? [];
-      // Правки хранятся по ключу «юнит:режим» — смена режима их не теряет.
-      rebuildRows();
       render(app);
       return;
     }
@@ -806,7 +787,6 @@ function bindEvents(app: HTMLElement): void {
     if (paradigmButton?.dataset.paradigm) {
       state.targetParadigm = paradigmButton.dataset.paradigm as TargetParadigm;
       state.attachedRows = state.data?.attached?.[state.targetParadigm]?.[state.mode] ?? [];
-      rebuildRows();
       render(app);
       return;
     }
@@ -842,65 +822,14 @@ function bindEvents(app: HTMLElement): void {
       }
     }
 
-    const loadoutButton = target.closest<HTMLElement>('[data-loadout]');
-    if (loadoutButton?.dataset.loadout && state.openUnit !== null) {
-      const unit = state.openUnit;
-      const loadout = unit.loadouts?.find((candidate) => candidate.id === loadoutButton.dataset.loadout);
-      if (loadout !== undefined) {
-        state.edited.set(unit.id, cloneProfile(loadout.unit));
-        const points = loadout.points;
-        for (const mode of state.data?.modes ?? []) {
-          for (const paradigm of state.data?.paradigms ?? ['all']) {
-            const profile = cloneProfile(loadout.unit);
-            const metrics = recomputeMetrics(unit, profile, mode, paradigm);
-            state.overrides.set(`${unit.id}:${mode}:${paradigm}`, {
-              ...metrics,
-              effectiveDamage: metrics.rawMaxDamage,
-              bestTarget: metrics.bestTarget,
-              bestTargetName: metrics.bestTargetName,
-              totalScore: 0,
-            });
-          }
-        }
-        state.openUnit = unit;
-        rebuildRows();
-        render(app);
-        void points;
-        return;
-      }
-    }
-
-    const action = target.closest<HTMLElement>('[data-action]')?.dataset.action;
-    if (action !== undefined && state.openUnit !== null) {
-      const unit = state.openUnit;
-      if (action === 'close') {
-        state.openUnit = null;
-      } else if (action === 'reset') {
-        state.edited.delete(unit.id);
-        for (const mode of state.data?.modes ?? []) {
-          for (const paradigm of state.data?.paradigms ?? ['all']) {
-            state.overrides.delete(`${unit.id}:${mode}:${paradigm}`);
-          }
-        }
-      } else if (action === 'apply') {
-        const profile = state.edited.get(unit.id);
-        if (profile !== undefined) {
-          // Пересчёт занимает доли секунды, поэтому делаем для всех режимов
-          // сразу: тогда переключение режима не будет «подвисать».
-          for (const mode of state.data?.modes ?? []) {
-            for (const paradigm of state.data?.paradigms ?? ['all']) {
-              state.overrides.set(`${unit.id}:${mode}:${paradigm}`, recomputeMetrics(unit, profile, mode, paradigm));
-            }
-          }
-        }
-      }
-      rebuildRows();
+    if (target.closest<HTMLElement>('[data-action="close"]') !== null) {
+      state.openUnit = null;
       render(app);
       return;
     }
 
-    // Клик по фону редактора закрывает его.
-    if (target.id === 'editor-backdrop') {
+    // Клик по фону окна закрывает его.
+    if (target.id === 'details-backdrop') {
       state.openUnit = null;
       render(app);
     }
@@ -925,9 +854,6 @@ function bindEvents(app: HTMLElement): void {
         search.focus();
         search.setSelectionRange(search.value.length, search.value.length);
       }
-    } else if (target.dataset.path && state.openUnit !== null) {
-      const profile = state.edited.get(state.openUnit.id);
-      if (profile !== undefined) setByPath(profile, target.dataset.path, target.value);
     }
   });
 }

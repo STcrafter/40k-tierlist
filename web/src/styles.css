@@ -163,10 +163,6 @@ tbody tr:hover {
   background: var(--bg-row);
 }
 
-tbody tr.edited td {
-  background: rgba(74, 158, 255, 0.09);
-}
-
 td {
   padding: 7px 10px;
   white-space: nowrap;
@@ -422,12 +418,6 @@ td {
   margin-left: 6px;
 }
 
-.tag.edited-mark {
-  background: rgba(74, 158, 255, 0.2);
-  border-color: var(--accent);
-  color: var(--accent);
-}
-
 /* Неустойчивый ранг: зависит от допущения о размере эталонных целей. */
 .tag.sens-mark {
   background: rgba(240, 170, 60, 0.18);
@@ -451,4 +441,75 @@ td {
   inset: 0 auto 0 0;
   background: var(--accent);
   border-radius: 3px;
+}
+
+/* --- Панель деталей --- */
+
+/* Строка «название — полоса — число» для разбивок урона и живучести. */
+.breakdown-row {
+  display: grid;
+  grid-template-columns: minmax(120px, 1fr) 1fr auto;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 0;
+  font-size: 12px;
+}
+
+.breakdown-row .bk {
+  color: var(--text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.breakdown-row .bv {
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  min-width: 42px;
+}
+
+/* Матрица «парадигма × режим»: выбранная ячейка подсвечивается. */
+table.matrix th {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-dim);
+  text-align: left;
+}
+
+table.matrix td.current {
+  background: rgba(212, 168, 83, 0.12);
+}
+
+table.matrix .cell-total {
+  display: block;
+  font-size: 10px;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Группа флагов: заголовок с пояснением, почему категория не влияет на тир. */
+.util-group {
+  margin-top: 10px;
+}
+
+.util-group h4 {
+  margin: 0 0 6px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.util-group .muted {
+  font-weight: 400;
+  color: var(--text-dim);
+}
+
+.util-group .flag {
+  display: block;
+  width: 100%;
+  margin-bottom: 4px;
+  text-align: left;
+}
+
+.util-group .flag b {
+  color: var(--text);
 }

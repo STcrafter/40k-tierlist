@@ -22,10 +22,40 @@ declare module 'node:path' {
   export function basename(path: string, ext?: string): string;
 }
 
+declare module 'node:url' {
+  export function fileURLToPath(url: string | URL): string;
+}
+
+declare module 'node:os' {
+  export function cpus(): Array<{ model: string; speed: number }>;
+}
+
+declare module 'node:child_process' {
+  /**
+   * Дочерний процесс с IPC-каналом. Объявлен минимально: сборщику нужен только
+   * запуск воркера и подписка на сообщения/выход.
+   */
+  export interface ChildProcess {
+    send?(message: unknown): boolean;
+    /** Тип сообщения выводится из подписи слушателя на месте вызова. */
+    on<T>(event: 'message', listener: (message: T) => void): ChildProcess;
+    on(event: 'error', listener: (error: Error) => void): ChildProcess;
+    on(event: 'exit', listener: (code: number | null) => void): ChildProcess;
+    kill(signal?: string): boolean;
+  }
+  export function fork(
+    modulePath: string,
+    args?: string[],
+    options?: { stdio?: unknown[] }
+  ): ChildProcess;
+}
+
 declare const process: {
   argv: string[];
   env: Record<string, string | undefined>;
   cwd(): string;
   exit(code?: number): never;
   exitCode: number | undefined;
+  /** Присутствует только у процессов, запущенных с IPC-каналом. */
+  send?(message: unknown): boolean;
 };
