@@ -75,6 +75,10 @@ export interface UnitProfile {
     wounds: number;
     save: number | null;
     invuln: number | null;
+    /** Feel No Pain: порог невелирования (5 → '5+'); null — нет. */
+    fnp: number | null;
+    /** Область FNP: 'all' — любой урон, 'mortals' — только мортиды. */
+    fnpScope: 'all' | 'mortals';
     keywords: string[];
     weapons: Array<{
       id: string;

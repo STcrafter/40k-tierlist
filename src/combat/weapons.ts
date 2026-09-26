@@ -419,6 +419,8 @@ export function weaponUnitOf(
       wounds: 2,
       save: 3,
       invuln: null,
+      fnp: null,
+      fnpScope: 'all',
       keywords,
       weapons: [weapon],
     });

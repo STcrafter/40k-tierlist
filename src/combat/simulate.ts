@@ -251,27 +251,79 @@ function killModel(state: DefenderState, index: number): void {
 }
 
 /**
+ * Feel No Pain: невелирование урона.
+ *
+ * За каждый урон атаки бросается один кубик, каждый результат ≥ порога
+ * невелирует 1 урон. Число кубиков НЕ уменьшается при оверфлоу: модель с 1
+ * раной под атакой на 3 урона всё равно бросает 3 кубика (три 5+ — и она
+ * выживает, два — умирает).
+ *
+ * Область действия (три вида в BSData):
+ *   - обычный FNP (`fnpScope: 'all'`) защищает и от обычного урона, и от
+ *     мортидов;
+ *   - FNP «against mortal wounds» (`'mortals'`) — это ОГРАНИЧЕНИЕ области, а
+ *     не усиление: он защищает ТОЛЬКО от мортидов и пропускает обычный урон;
+ *   - псионические атаки идут мимо FNP в любом случае.
+ */
+function feelNoPain(
+  model: CombatModel,
+  amount: number,
+  rng: Rng,
+  kind: 'damage' | 'mortals',
+  psychic: boolean
+): number {
+  if (model.fnp === null || amount <= 0 || psychic) return amount;
+  if (kind === 'damage' && model.fnpScope === 'mortals') return amount;
+  let negated = 0;
+  for (let i = 0; i < amount; i += 1) {
+    if (rollDie(6, rng) >= model.fnp) negated += 1;
+  }
+  return amount - negated;
+}
+
+/**
  * Урон следующей модели: избыток сгорает (урон не «переливается» между моделями).
+ * Если передан rng, урон сначала проходит через Feel No Pain цели.
+ * `psychic` помечает атаку, мимо которой FNP не защищает.
  * Возвращает фактически снятые раны.
  */
-export function damageNextModel(state: DefenderState, amount: number): number {
+export function damageNextModel(
+  state: DefenderState,
+  amount: number,
+  rng?: Rng,
+  psychic = false
+): number {
   const index = nextTargetIndex(state);
   if (index === null || amount <= 0) return 0;
-  const dealt = Math.min(amount, state.woundsLeft[index]);
+  const incoming =
+    rng === undefined
+      ? amount
+      : feelNoPain(state.unit.models[index], amount, rng, 'damage', psychic);
+  if (incoming <= 0) return 0;
+  const dealt = Math.min(incoming, state.woundsLeft[index]);
   state.woundsLeft[index] -= dealt;
   state.damage += dealt;
   if (state.woundsLeft[index] <= 0) killModel(state, index);
   return dealt;
 }
 
-/** Мортиды: распределяются по моделям с переносом избытка. */
-export function damageSpill(state: DefenderState, amount: number): number {
+/**
+ * Мортиды: распределяются по моделям с переносом избытка.
+ * FNP действует и здесь: обычный FNP защищает от мортидов, а FNP
+ * «against mortal wounds» защищает ИМЕННО от них.
+ */
+export function damageSpill(state: DefenderState, amount: number, rng?: Rng, psychic = false): number {
   let left = amount;
   let dealt = 0;
   while (left > 0) {
     const index = nextTargetIndex(state);
     if (index === null) break;
-    const step = Math.min(left, state.woundsLeft[index]);
+    const model = state.unit.models[index];
+    // Невелирование считается от уронА, пришедшего в эту модель.
+    const incoming =
+      rng === undefined ? left : feelNoPain(model, left, rng, 'mortals', psychic);
+    if (incoming <= 0) break;
+    const step = Math.min(incoming, state.woundsLeft[index]);
     state.woundsLeft[index] -= step;
     left -= step;
     dealt += step;
@@ -379,6 +431,8 @@ export function resolveWeapon(
   const lethal = rules.lethalCritHits.some((hook) => hook(ctx));
   const rerollWounds = rules.rerollWounds.some((hook) => hook(ctx));
   const devastating = rules.devastatingCritWounds.some((hook) => hook(ctx));
+  // Псионическая атака идёт мимо Feel No Pain.
+  const isPsychic = hasKeyword(weapon, 'psychic');
 
   let remainingHits = hits;
   let remainingCrits = critHits;
@@ -418,7 +472,7 @@ export function resolveWeapon(
 
     if (critical && devastating) {
       const mortals = rollDice(damageSpecOf(hitCtx, rules), rng);
-      const dealt = damageSpill(state, mortals);
+      const dealt = damageSpill(state, mortals, rng, isPsychic);
       usage.unsaved += 1;
       usage.mortals += dealt;
       usage.damage += dealt;
@@ -437,7 +491,7 @@ export function resolveWeapon(
     }
     usage.unsaved += 1;
     const damage = rollDice(damageSpecOf(hitCtx, rules), rng);
-    const dealt = damageNextModel(state, damage);
+    const dealt = damageNextModel(state, damage, rng, isPsychic);
     usage.damage += dealt;
     usage.kills += state.kills - killsBefore;
   }

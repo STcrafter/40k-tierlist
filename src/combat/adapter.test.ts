@@ -156,3 +156,53 @@ describe('пригодность к бою', () => {
     expect(warriors.unit.models.every((model) => model.toughness > 0 && model.wounds > 0)).toBe(true);
   });
 });
+
+/**
+ * Feel No Pain в BSData встречается в трёх видах, и они НЕ равнозначны:
+ *   1) обычный FNP — защита от любого урона, включая мортиды;
+ *   2) «against mortal wounds» — ОГРАНИЧЕНИЕ: только мортиды;
+ *   3) «against psychic attacks» — псионик, которого мы не моделируем.
+ * Плюс встречаются временные/условные гранты: отряд не имеет FNP сам по
+ * себе, а получает его на время или при выполнении условия.
+ */
+describe('разбор Feel No Pain', () => {
+  const fnpOfName = (name: string) => {
+    const model = adaptUnit(find(name), { size: 'min' }).unit.models[0];
+    return model === undefined ? null : { fnp: model.fnp, scope: model.fnpScope };
+  };
+
+  it('обычный FNP действует против всего урона', () => {
+    expect(fnpOfName('Aberrants')).toEqual({ fnp: 5, scope: 'all' });
+    expect(fnpOfName('Abominant')).toEqual({ fnp: 5, scope: 'all' });
+  });
+
+  it('«against mortal wounds» — ограничение области, а не усиление', () => {
+    // Регрессия: служебная пара BSData («Feel No Pain 5+» рядом с «This
+    // ability always takes the form Feel No Pain X+») перебивала ограниченный
+    // грант и превращала Aleya в обычный FNP 3+ против всего урона.
+    expect(fnpOfName('Aleya')).toEqual({ fnp: 3, scope: 'mortals' });
+    expect(fnpOfName('Canoness')).toEqual({ fnp: 4, scope: 'mortals' });
+    expect(fnpOfName('Krieg Command Squad')).toEqual({ fnp: 6, scope: 'mortals' });
+  });
+
+  it('«against psychic and mortal wounds» сводится к мортидам', () => {
+    // Из двух областей мы моделируем только мортиды: псионик в шаблонах
+    // оружия отсутствует, а против него FNP не работает в любом случае.
+    expect(fnpOfName('Prosecutors')).toEqual({ fnp: 3, scope: 'mortals' });
+    expect(fnpOfName('Witchseekers')).toEqual({ fnp: 3, scope: 'mortals' });
+  });
+
+  it('временные и условные гранты не выдаются как постоянный FNP', () => {
+    // Urien Rakarth: FNP 4+ только против атак с Damage 1. Quartermaster
+    // Cadre: FNP 5+ лишь пока в отряде есть Medicae Servitors.
+    expect(fnpOfName('Urien Rakarth [Legends]')).toEqual({ fnp: null, scope: 'all' });
+    expect(fnpOfName('Quartermaster Cadre Squad [Legends]')).toEqual({ fnp: null, scope: 'all' });
+  });
+
+  it('отряды без FNP в даташите остаются без FNP', () => {
+    for (const name of ['Intercessor Squad', 'Boyz', 'Leman Russ Battle Tank', 'Beastboss']) {
+      expect(fnpOfName(name)?.fnp ?? null, name).toBeNull();
+    }
+  });
+});
+

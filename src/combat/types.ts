@@ -51,6 +51,9 @@ export interface CombatWeapon {
   keywords: ParsedKeyword[];
 }
 
+/** Область действия Feel No Pain. */
+export type FnpScope = 'all' | 'mortals';
+
 /** Одна модель отряда (уже развёрнутая до экземпляра, без поля count). */
 export interface CombatModel {
   id: string;
@@ -60,6 +63,21 @@ export interface CombatModel {
   /** '3+' → 3; null — сейва нет. */
   save: number | null;
   invuln: number | null;
+  /**
+   * Feel No Pain: порог, начиная с которого урон невелируется (5 → '5+').
+   * null — способности нет. За каждый урон бросается один кубик, каждый
+   * результат ≥ порога невелирует 1 урон.
+   */
+  fnp: number | null;
+  /**
+   * Область действия FNP. В BSData встречаются три вида:
+   *   'all'     — «Feel No Pain X+», защищает от любого урона;
+   *   'mortals' — «Feel No Pain X+ against mortal wounds»: ТОЛЬКО мортиды,
+   *               то есть ограничение области, а не усиление;
+   *   вариант «against psychic attacks» не моделируется: псионические
+   *               атаки идут мимо FNP (см. feelNoPain).
+   */
+  fnpScope: FnpScope;
   keywords: string[];
   weapons: CombatWeapon[];
 }

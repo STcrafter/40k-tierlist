@@ -260,6 +260,8 @@ export function targetUnitOf(
       wounds: spec.wounds,
       save: spec.save,
       invuln: spec.invuln,
+      fnp: null,
+      fnpScope: 'all',
       keywords: spec.keywords,
       weapons: [],
     });

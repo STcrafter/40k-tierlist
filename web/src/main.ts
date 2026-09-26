@@ -98,6 +98,9 @@ function toCombatUnit(profile: UnitProfile): CombatUnit {
       wounds: model.wounds,
       save: model.save,
       invuln: model.invuln,
+      // FNP и STEALTH не редактируются в панели, но должны долететь до симулятора.
+      fnp: model.fnp ?? null,
+      fnpScope: model.fnpScope ?? 'all',
       keywords: model.keywords,
       weapons: model.weapons.map(
         (weapon): CombatWeapon => ({

@@ -28,10 +28,15 @@ import type { CombatModel, CombatUnit, CombatWeapon, Rng } from './types.ts';
 /** Генератор, всегда выдающий грань n (1…6). */
 const die = (n: number): Rng => () => (n - 0.5) / 6;
 
-/** Последовательность разных граней — когда броски идут в разном порядке. */
+/**
+ * Последовательность заданных граней (1…6) — когда броски идут в разном порядке.
+ *
+ * Грань переводится в [0, 1) так же, как `die`: rollDie считает
+ * `1 + floor(rng() * 6)`, поэтому возврат сырого значения дал бы 1 + floor(6*6).
+ */
 function sequence(values: number[]): Rng {
   let i = 0;
-  return () => values[Math.min(i++, values.length - 1)];
+  return () => (values[Math.min(i++, values.length - 1)] - 0.5) / 6;
 }
 
 /** `sides: 1` — фиксированное число (rollDice даёт 1 + floor(rng × 1) = 1). */
@@ -59,6 +64,8 @@ function model(overrides: Partial<CombatModel> = {}): CombatModel {
     wounds: 2,
     save: 3,
     invuln: null,
+    fnp: null,
+    fnpScope: 'all',
     keywords: ['INFANTRY'],
     weapons: [weapon()],
     ...overrides,
@@ -169,6 +176,97 @@ describe('сейвы, AP и укрытие', () => {
 });
 
 
+describe('Feel No Pain', () => {
+  // Порядок вызовов rng в ядре (важно для sequence):
+  //   1) кубики атаки (по одному на кубик, даже при sides: 1),
+  //   2) попадание, 3) ранение, 4) сейв, 5) кубики урона, 6) кубики FNP.
+  // Сейв 6+ проваливается только на натуральной 1 — используем его, чтобы
+  // проверять FNP, а не спасброски.
+  // Механику проверяем напрямую через damageNextModel: полный прогон боя
+  // добавляет свои броски (атака, попадание, ранение, сейв) и делает тест
+  // хрупким, а здесь важно только правило невелирования.
+  // У защитника нет оружия, чтобы он не отвечал встречным огнём.
+  const dummy = (overrides: Partial<CombatModel> = {}): CombatModel =>
+    model({ weapons: [], ...overrides });
+
+  it('невелирует по 1 урону за каждый кубик ≥ порога', () => {
+    const state = createDefenderState(unit([dummy({ wounds: 5, fnp: 5 })]));
+    // Три 5+ из трёх — весь урон в 3 невелируется.
+    expect(damageNextModel(state, 3, sequence([6, 6, 6]))).toBe(0);
+    expect(state.woundsLeft[0]).toBe(5);
+
+    const mixed = createDefenderState(unit([dummy({ wounds: 5, fnp: 5 })]));
+    // Два 5+ и один 1 — невелируется 2, остаётся 1.
+    expect(damageNextModel(mixed, 3, sequence([6, 6, 1]))).toBe(1);
+    expect(mixed.woundsLeft[0]).toBe(4);
+  });
+
+  it('оверфлоу не уменьшает число кубиков (правило из ТЗ)', () => {
+    // Ключевое требование: у модели 1 рана, атака на 3 урона — кубиков всё
+    // равно 3. Три 5+ → выживает, два 5+ → умирает.
+    const survives = createDefenderState(unit([dummy({ wounds: 1, fnp: 5 })]));
+    expect(damageNextModel(survives, 3, sequence([6, 6, 6]))).toBe(0);
+    expect(survives.aliveCount).toBe(1);
+
+    const dies = createDefenderState(unit([dummy({ wounds: 1, fnp: 5 })]));
+    expect(damageNextModel(dies, 3, sequence([6, 6, 2]))).toBe(1);
+    expect(dies.aliveCount).toBe(0);
+  });
+
+  it('модель без FNP получает весь урон', () => {
+    const state = createDefenderState(unit([dummy({ wounds: 9, fnp: null })]));
+    expect(damageNextModel(state, 3, sequence([6, 6, 1]))).toBe(3);
+  });
+
+  it('обычный FNP защищает и от мортидов', () => {
+    // Мортиды идут через damageSpill, и обычный FNP (scope 'all') действует
+    // там: это отличие от «FNP против мортальных ран» — то ограничение.
+    const state = createDefenderState(unit([dummy({ wounds: 3, fnp: 5 })]));
+    expect(damageSpill(state, 3, sequence([6, 6, 6]))).toBe(0);
+    expect(state.aliveCount).toBe(1);
+  });
+
+  it('FNP «против мортальных ран» не защищает от обычного урона', () => {
+    // Ограничение области: scope 'mortals' от обычного урона не спасает.
+    const state = createDefenderState(unit([dummy({ wounds: 3, fnp: 5, fnpScope: 'mortals' })]));
+    expect(damageNextModel(state, 3, sequence([6, 6, 6]))).toBe(3);
+    expect(state.aliveCount).toBe(0);
+  });
+
+  it('FNP «против мортальных ран» защищает ровно от мортидов', () => {
+    const state = createDefenderState(unit([dummy({ wounds: 3, fnp: 5, fnpScope: 'mortals' })]));
+    expect(damageSpill(state, 3, sequence([6, 6, 6]))).toBe(0);
+    expect(state.aliveCount).toBe(1);
+  });
+
+  it('псионические атаки идут мимо FNP в любом случае', () => {
+    // Псионик не моделируется как шаблон оружия, но флаг есть: атака с
+    // psychic=true не должна невелиться даже при обычном FNP 5+.
+    const state = createDefenderState(unit([dummy({ wounds: 5, fnp: 5 })]));
+    expect(damageNextModel(state, 3, sequence([6, 6, 6]), true)).toBe(3);
+    expect(state.woundsLeft[0]).toBe(2);
+  });
+});
+
+describe('Stealth', () => {
+  it('снижает попадание дальнобойной атаки на 1', () => {
+    // die(3) даёт бросок 3: по BS 3+ он попадает, по BS 4+ — уже нет.
+    const gun = weapon({ skill: 3, strength: 5 });
+    const open = unit([model({ toughness: 4, wounds: 9, save: 6, keywords: ['INFANTRY'] })], ['INFANTRY']);
+    const stealthy = unit([model({ toughness: 4, wounds: 9, save: 6, keywords: ['STEALTH'] })], ['STEALTH']);
+
+    expect(simulateTrial(gunner(gun), open, { rng: die(3) }).weapons[0].hits).toBe(1);
+    expect(simulateTrial(gunner(gun), stealthy, { rng: die(3) }).weapons[0].hits).toBe(0);
+  });
+
+  it('в рукопашной не действует', () => {
+    const gun = weapon({ kind: 'melee', skill: 3, strength: 5, range: null });
+    const stealthy = unit([model({ toughness: 4, wounds: 9, save: 6, keywords: ['STEALTH'] })], ['STEALTH']);
+    const result = simulateTrial(gunner(gun), stealthy, { rng: die(3), phase: 'melee' });
+    expect(result.weapons[0].hits).toBe(1);
+  });
+});
+
 describe('кейворды 11-й редакции', () => {
   it('условный [LETHAL HITS: non-MONSTER/VEHICLE] не работает по технике', () => {
     // Регрессия: правило проверяло только имя кейворда и не смотрело на
@@ -274,7 +372,7 @@ describe('кейворды 11-й редакции', () => {
     const defender = unit([model({ toughness: 6, wounds: 9, save: 6 })]);
     // Порядок бросков: атака(1) → попадание(4) → ранение(2, провал) → переброс(3, провал).
     const result = simulateTrial(attacker, defender, {
-      rng: sequence([0.5, 3.5 / 6, 1.5 / 6, 2.5 / 6]),
+      rng: sequence([1, 4, 2, 3]),
     });
     expect(result.weapons[0].wounds).toBe(0);
   });
@@ -350,7 +448,7 @@ describe('выбор оружия и стратегии', () => {
     const attacker = gunner(weapon({ skill: 5, attacks: { count: 1, sides: 1, plus: 0 } }));
     const defender = unit([model({ toughness: 4, wounds: 99, save: 6 })]);
     // Первый бросок — промах 1, reroll — попадание 6.
-    const result = simulateTrial(attacker, defender, { rng: sequence([0, 1]), rerollHitOn: [1] });
+    const result = simulateTrial(attacker, defender, { rng: sequence([1, 6]), rerollHitOn: [1] });
     expect(result.weapons[0].hits).toBe(1);
   });
 

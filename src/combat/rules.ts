@@ -66,6 +66,14 @@ export function standardRules(): CombatRules {
       },
       // [HEAVY]: +1 к попаданию (модификатор порога: −1), если условия выполнены.
       (ctx, base) => (ctx.stationary && ctx.weapon.keywords.some((k) => k.name === 'heavy')) ? base === null ? null : base - 1 : base,
+      // Stealth: −1 к попаданию дальнобойными атаками по цели с этим кейвордом.
+      // В рукопашной не действует, автопопадание ([TORRENT]) не ломает.
+      (ctx, base) => {
+        if (base === null || ctx.phase !== 'ranged') return base;
+        const stealth =
+          ctx.target.keywords.includes('STEALTH') || ctx.defender.keywords.includes('STEALTH');
+        return stealth ? base + 1 : base;
+      },
       // Стрельба вслепую: −1 к попаданию (включается опцией indirect).
       (ctx, base) => (ctx.indirect && base !== null) ? base + 1 : base,
     ],

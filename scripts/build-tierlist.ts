@@ -160,6 +160,8 @@ function unitProfileOf(unit: CombatUnit, points: number): unknown {
       wounds: model.wounds,
       save: model.save,
       invuln: model.invuln,
+      fnp: model.fnp,
+      fnpScope: model.fnpScope,
       keywords: model.keywords,
       weapons: model.weapons.map((weapon) => ({
         id: weapon.id,
