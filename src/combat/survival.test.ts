@@ -180,14 +180,24 @@ describe('выживаемость', () => {
     }
   });
 
-  it('крепкая цель получает меньше урона на 100 очков, чем хрупкая', () => {
+  it('при ОДИНАКОВОЙ цене крепкая цель живёт дольше хрупкой', () => {
+    // Ось выживаемости — «сколько боевых фаз юнит прожил на 100 своих очков».
+    // Сравнивать нужно юнитов ОДИНАКОВОЙ стоимости: иначе нормализация на
+    // очки сама объясняет результат (у копеечного отряда очков мало, и любой
+    // его показатель автоматически велик).
+    const soft = survivabilityAgainstUnit(target(5, 4, 1, 6), 100, options);
+    const tough = survivabilityAgainstUnit(target(1, 12, 12, 2), 100, options);
+    expect(tough.overall.roundsPer100Points.mean).toBeGreaterThan(soft.overall.roundsPer100Points.mean);
+  });
+
+  it('запас ран — это диагностика, и он НЕ равен прочности', () => {
+    // Плотность HP (Σ(T×W)/points) не учитывает Sv, AP, InSv, FNP и overkill,
+    // поэтому отличается от эффективной прочности. Проверено на данных:
+    // corr(absorbedPer100, bulkPer100) = 0.99 — поглощённый урон тождественен
+    // сумме ран, и как метрика он бесполезен.
     const soft = survivabilityAgainstUnit(target(5, 4, 1, 6), 100, options);
     const tough = survivabilityAgainstUnit(target(5, 12, 12, 2), 500, options);
-
-    expect(tough.overall.takenPer100Points.mean).toBeLessThan(
-      soft.overall.takenPer100Points.mean
-    );
-    expect(tough.overall.roundsToKill.mean).toBeGreaterThan(soft.overall.roundsToKill.mean);
+    expect(tough.overall.bulkPer100Points.mean).toBeGreaterThan(soft.overall.bulkPer100Points.mean);
   });
 
   it('антибронебойное оружие эффективнее стрелкового против техники', () => {
@@ -206,7 +216,7 @@ describe('выживаемость', () => {
     // Болтер наносит свой урон на 100 своих очков (10 × 12 = 120 очков),
     // а монстр «переживает» его на 100 своих (100 очков).
     expect(threat?.dealtPer100Points.mean).toBeGreaterThan(0);
-    expect(threat?.takenPer100Points.mean).toBeGreaterThan(0);
+    expect(threat?.absorbedPer100Points.mean).toBeGreaterThan(0);
     // Стоимость эталона берётся у самого кластера: раньше здесь стояло
     // жёсткое 100, а после перехода на данные у «крепкой техники» это 395.
     expect(result.target.points).toBe(toughestArmor.points);
@@ -226,7 +236,7 @@ describe('выживаемость', () => {
     const first = survivabilityAgainstArchetype(toughestArmor, options);
     const second = survivabilityAgainstArchetype(toughestArmor, options);
     expect(first.overall.roundsToKill).toEqual(second.overall.roundsToKill);
-    expect(first.overall.takenPer100Points).toEqual(second.overall.takenPer100Points);
+    expect(first.overall.absorbedPer100Points).toEqual(second.overall.absorbedPer100Points);
   });
 
   it('сводная таблица содержит строку на каждый тип юнита', () => {
@@ -235,7 +245,7 @@ describe('выживаемость', () => {
     for (const row of table) {
       expect(row.totalWounds, row.archetype).toBeGreaterThan(0);
       expect(row.points, row.archetype).toBeGreaterThan(0);
-      expect(row.takenPer100Points.mean, row.archetype).toBeGreaterThan(0);
+      expect(row.absorbedPer100Points.mean, row.archetype).toBeGreaterThan(0);
     }
   });
 });

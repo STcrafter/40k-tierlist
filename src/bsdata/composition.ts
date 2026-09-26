@@ -219,7 +219,29 @@ function buildWargear(
     profiles,
     cost: pointsCost(definition, db),
     nested,
+    defaultChoiceIds: defaultChoiceIdsOf(definition),
   };
+}
+
+/**
+ * id записей, помеченных в BSData как выбор по умолчанию.
+ *
+ * Поле `defaultSelectionEntryId` может содержать несколько id через запятую
+ * («Shuriken Pistol, Scorpion Chainsword & Scorpion's claw» — это ОДНА запись с
+ * таким именем, поэтому простое деление по запятой сломало бы разбор). Поэтому
+ * сравниваем id целиком, а также по префиксу до запятой: так покрываются оба вида.
+ */
+function defaultChoiceIdsOf(definition: BsSelectionNodeRaw): Set<string> | null {
+  const raw = definition.defaultSelectionEntryId;
+  if (typeof raw !== 'string') return null;
+  const trimmed = raw.trim();
+  if (trimmed.length === 0) return null;
+  const ids = new Set<string>();
+  for (const part of trimmed.split(',')) {
+    const id = part.trim();
+    if (id.length > 0) ids.add(id);
+  }
+  return ids.size > 0 ? ids : null;
 }
 
 /**

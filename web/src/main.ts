@@ -37,8 +37,10 @@ interface UnitMetricsLocal {
   defenseVector: Record<string, number>;
   damagePer100: number;
   universal: number;
-  baseSurvivability: number;
-  takenPer100: number;
+  /** Поглощённый до смерти урон на 100 очков — effective durability. */
+  absorbedPer100: number;
+  /** Запас ран на 100 очков — только диагностика. */
+  bulkPer100: number;
   unitType: 'Ranged' | 'Melee';
   taxDamage: number;
   taxSurvivability: number;
@@ -169,15 +171,16 @@ function recomputeMetrics(
   const universal = average(targetIdsForMetrics.map(destroyedPer100));
   const damagePer100 = slice.overall.mean * scale;
 
-  // Живучесть — ограниченная стоимостная шкала: 100 / (1 + takenPer100).
+  // Живучесть = effective durability: сколько урона противник обязан потратить,
+  // чтобы удалить юнит, на 100 его очков. Больше = живучее, инверсии нет.
   const surv = survivabilityAgainstUnit(combatUnit, points, {
     trials: 16,
     maxRounds: 12,
     distance: state.data?.distance ?? 12,
     phase,
   });
-  const takenPer100 = surv.overall.takenPer100Points.mean;
-  const baseSurvivability = 100 / (1 + takenPer100);
+  const absorbedPer100 = surv.overall.absorbedPer100Points.mean;
+  const bulkPer100 = surv.overall.bulkPer100Points.mean;
 
   const rangedPer100 = damage.ranged.overall.mean * scale;
   const meleePer100 = damage.melee.overall.mean * scale;
@@ -199,7 +202,7 @@ function recomputeMetrics(
   const defenseVector = Object.fromEntries(
     Object.entries(surv.byGroup).map(([group, value]) => [
       group,
-      100 / (1 + value.takenPer100Points.mean) * tax.survivability,
+      value.roundsPer100Points.mean * tax.survivability,
     ])
   );
 
@@ -212,13 +215,13 @@ function recomputeMetrics(
     defenseVector,
     universal,
     damagePer100,
-    baseSurvivability,
-    takenPer100,
+    absorbedPer100,
+    bulkPer100,
     unitType,
     taxDamage: tax.damage,
     taxSurvivability: tax.survivability,
     effectiveDamage: rawMaxDamage * tax.damage,
-    effectiveSurvivability: baseSurvivability * tax.survivability,
+    effectiveSurvivability: surv.overall.roundsPer100Points.mean * tax.survivability,
     utilityFlags: unit.utilityFlags,
     // Utility не зависит от боевых характеристик — остаётся серверный.
     utilityScore: unit.utilityScore,
@@ -363,7 +366,7 @@ const COLUMNS: Array<{ key: string; title: string; numeric: boolean; hint?: stri
   { key: 'bestTargetName', title: 'Лучшая цель', numeric: false },
   { key: 'universal', title: 'Среднее/100', numeric: true },
   { key: 'damagePer100', title: 'Урон/100', numeric: true },
-  { key: 'takenPer100', title: 'Переж.урон', numeric: true, hint: 'Урон, принимаемый на 100 своих очков' },
+  { key: 'absorbedPer100', title: 'Прочность/100', numeric: true, hint: 'Сколько урона противник обязан потратить, чтобы удалить юнит, на 100 его очков' },
   { key: 'utilityScore', title: 'Полезн.', numeric: true, hint: 'Utility, максимум 20' },
   { key: 'normDamage', title: 'Норм.урон', numeric: true },
   { key: 'normSurvivability', title: 'Норм.живуч.', numeric: true },
@@ -649,8 +652,8 @@ function renderEditor(unit: UnitEntry): string {
           <div class="metric"><div class="k">Total</div><div class="v">${num(row?.totalScore ?? 0)}</div></div>
           <div class="metric"><div class="k">Перцентиль</div><div class="v">${num(row?.percentile ?? 0)}</div></div>
           <div class="metric"><div class="k">Урон/100</div><div class="v">${num(metrics.effectiveDamage, 2)}</div></div>
-          <div class="metric"><div class="k">Живучесть</div><div class="v">${num(metrics.effectiveSurvivability, 2)}</div></div>
-          <div class="metric"><div class="k">Переж.урон/100</div><div class="v">${num(metrics.takenPer100, 2)}</div></div>
+          <div class="metric"><div class="k">Прочность/100</div><div class="v">${num(metrics.absorbedPer100, 2)}<small title="Нормализованная прочность среди юнитов своей цены">${num(row?.normSurvivability ?? 0, 0)}</small></div></div>
+          <div class="metric" title="Запас ран на 100 очков — диагностика, не метрика выживаемости"><div class="k">Ран/100</div><div class="v">${num(metrics.bulkPer100, 2)}</div></div>
           <div class="metric"><div class="k">Норм. урон</div><div class="v">${num(row?.normDamage ?? 0)}</div></div>
           <div class="metric"><div class="k">Норм. полезн.</div><div class="v">${num(row?.normUtility ?? 0)}</div></div>
         </div>

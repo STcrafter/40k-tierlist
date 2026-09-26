@@ -147,7 +147,17 @@ export function standardRules(): CombatRules {
       (ctx) => keywordOf(ctx.weapon.keywords, 'devastating', targetKeywordsOf(ctx)) !== null,
     ],
 
-    saveTarget: [],
+    saveTarget: [
+      // Точное оружие (S = T, например Psycannon / снайперские ружья): сейв не
+      // бросается вовсе. В 11-й редакции это способность игнорировать спасброск
+      // или профиль с S = T. Добавлено как шаблон: без такого оружия все шесть
+      // групп оружия ранжировали отряды почти одинаково (r = 0.75…0.96), и
+      // защитный вектор вырождался в одно число.
+      (ctx, base) => {
+        if (ctx.weapon.keywords.some((k) => k.name === 'precision')) return null;
+        return base;
+      },
+    ],
 
     damage: [
       // [MELTA X]: +X к D, если цель на половинной дальности.

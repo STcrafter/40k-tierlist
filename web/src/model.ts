@@ -29,9 +29,12 @@ export interface UnitMetrics {
   damagePer100: number;
   /** Универсальное среднее destroyed points по выбранной парадигме. */
   universal: number;
-  /** Стоимостная выживаемость: 100 / (1 + takenPer100). */
-  baseSurvivability: number;
-  takenPer100: number;
+  /** Поглощённый до смерти урон на 100 очков — effective durability. */
+  absorbedPer100: number;
+  /** Запас ран на 100 очков — только диагностика. */
+  bulkPer100: number;
+  /** Доля боёв, где юнит не был убит за maxRounds. */
+  censoredShare?: number;
   unitType: 'Ranged' | 'Melee';
   taxDamage: number;
   taxSurvivability: number;
@@ -243,29 +246,70 @@ function percentileAt(sorted: number[], fraction: number): number {
 }
 
 /**
- * Остатки линейной регрессии `value ~ a + b·log(points)`.
+ * Ранг по ЦЕНОВЫМ КОРЗИНАМ, смешанный с глобальным рангом.
  *
  * Дублирует src/tier/scoring.ts: клиент пересобирает тирлист сам после правки
- * юнита в редакторе, и регрессия обязана совпадать с серверной до числа, иначе
+ * юнита в редакторе, и нормализация обязана совпадать с серверной, иначе
  * правка одного юнита сдвинет шкалу иначе, чем при полной пересборке.
  */
-export function residualizeOnLogPoints(points: number[], values: number[]): number[] {
-  if (values.length === 0) return [];
-  if (values.length === 1) return [0];
-  const xs = points.map((point) => Math.log(Math.max(1, point)));
-  const n = xs.length;
-  const meanX = mean(xs);
-  const meanY = mean(values);
-  let cov = 0;
-  let varX = 0;
+export function rankWithinPriceBins(
+  points: number[],
+  values: number[],
+  binWeight = 0.5,
+  minBinSize = 8
+): number[] {
+  const n = values.length;
+  if (n === 0) return [];
+  const globalSorted = [...values].sort((a, b) => a - b);
+  const globalRank = values.map((value) => percentileOf(globalSorted, value));
+  if (n < minBinSize * 2) return globalRank;
+  const sortedPoints = [...points].sort((a, b) => a - b);
+  const quantile = (q: number): number => sortedPoints[Math.min(n - 1, Math.floor(q * n))];
+  const edges = [0, quantile(0.2), quantile(0.4), quantile(0.6), quantile(0.8), 1];
+  const binOf = (point: number): number => {
+    for (let i = edges.length - 1; i >= 1; i -= 1) {
+      if (point >= edges[i - 1]) return i - 1;
+    }
+    return 0;
+  };
+  const bins = new Map<number, number[]>();
   for (let i = 0; i < n; i += 1) {
-    cov += (xs[i] - meanX) * (values[i] - meanY);
-    varX += (xs[i] - meanX) ** 2;
+    const bin = binOf(points[i]);
+    const list = bins.get(bin);
+    if (list) list.push(i);
+    else bins.set(bin, [i]);
   }
-  if (varX === 0) return values.map((value) => value - meanY);
-  const slope = cov / varX;
-  const intercept = meanY - slope * meanX;
-  return values.map((value, i) => value - (intercept + slope * xs[i]));
+  const labelOf = new Map<number, number>();
+  for (const bin of bins.keys()) labelOf.set(bin, bin);
+  const bySize = [...bins.entries()].sort((a, b) => a[1].length - b[1].length);
+  for (const [bin, indices] of bySize) {
+    if (indices.length >= minBinSize) continue;
+    const left = labelOf.get(bin - 1) ?? null;
+    const right = labelOf.get(bin + 1) ?? null;
+    let target: number | null = null;
+    if (left !== null && right !== null) {
+      target = (bins.get(right)?.length ?? 0) >= (bins.get(left)?.length ?? 0) ? right : left;
+    } else {
+      target = left ?? right;
+    }
+    if (target === null) continue;
+    const host = bins.get(target) ?? [];
+    host.push(...indices);
+    bins.set(target, [...new Set(host)]);
+    bins.delete(bin);
+    labelOf.set(target, target);
+  }
+  const binRank = new Map<number, number>();
+  for (const indices of bins.values()) {
+    if (indices.length === 0) continue;
+    const sorted = indices.map((i) => values[i]).sort((a, b) => a - b);
+    for (const i of indices) binRank.set(i, percentileOf(sorted, values[i]));
+  }
+  return values.map((_value, i) => {
+    const local = binRank.get(i);
+    if (local === undefined) return globalRank[i];
+    return local * binWeight + globalRank[i] * (1 - binWeight);
+  });
 }
 
 /**
@@ -399,10 +443,10 @@ export function rebuildTierlist<T extends {
     const costs = units.map((unit) => unit.points);
     const ranks = keys.map((key) => {
       const values = units.map((unit) => pick(unit.raw, key));
-      // Защита ранжируется по остаткам от log(цены), как на сервере.
-      const scored = residual ? residualizeOnLogPoints(costs, values) : values;
-      const sorted = [...scored].sort((a, b) => a - b);
-      return scored.map((value) => percentileOf(sorted, value));
+      // Защита ранжируется по ценовым корзинам, как на сервере.
+      if (residual) return rankWithinPriceBins(costs, values);
+      const sorted = [...values].sort((a, b) => a - b);
+      return values.map((value) => percentileOf(sorted, value));
     });
     return {
       scores: units.map((_, index) => {

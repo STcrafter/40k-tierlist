@@ -132,6 +132,16 @@ export interface BsSelectionNodeRaw {
   profiles?: BsProfileRaw[];
   rules?: BsRuleRaw[];
   entryLinks?: BsEntryLinkRaw[];
+  /**
+   * Запись, которую BattleScribe берёт по умолчанию в этой группе.
+   *
+   * Документированный в вики BSData механизм: «use default entries in Entry
+   * Groups when adding entry to roster, user should get legal entry». Если поле
+   * не задано, BattleScribe добирает недостающие выборы сам (обычно по `min`).
+   * Значение может указывать на одну запись или на несколько, перечисленные
+   * через запятую.
+   */
+  defaultSelectionEntryId?: string;
   selectionEntries?: BsSelectionNodeRaw[];
   selectionEntryGroups?: BsSelectionNodeRaw[];
 }

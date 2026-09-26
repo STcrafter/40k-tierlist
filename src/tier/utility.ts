@@ -136,12 +136,27 @@ export function detectUtilityFlags(datasheet: BsDatasheet): UtilityFlag[] {
   // Для поиска самой способности отрицания вырезаются: «loses the Scouts 9"»
   // не должно превращать отряд в обладателя Scouts.
   const texts = rawTexts.map((text) => withoutNegations(text));
-  const names = abilities.map((ability) => ability.name.toLowerCase());
+  // Имена берём из abilities И rules: многие даташиты (например, с «Deep
+  // Strike») держат правило именно в `rules`, и поиск только по abilities
+  // давал 0 срабатываний. Текст правила — уже с name+description.
+  const names = [...abilities, ...datasheet.rules].map((ability) => ability.name.toLowerCase());
   const keywords = datasheet.keywords.map((keyword) => keyword.trim().toLowerCase());
   const all = texts.join(' ');
 
+  /**
+   * Имена правил в BSData — СТРУКТУРИРОВАННЫЕ данные: «Deep Strike», «Scouts»,
+   * «Infiltrators», «Stealth», «Feel No Pain 5+» встречаются как `name` у
+   * десятков и сотен юнитов. Поэтому сначала проверяем имя, и лишь если его нет
+   * — падаем обратно на текст описания. Замер по базе: у 156 юнитов FNP есть
+   * как имя правила и лишь у 73 — только в тексте, то есть текстовый разбор
+   * видел меньше половины.
+   */
+  const hasRuleNamed = (exact: string | RegExp): boolean => names.some((name) =>
+    typeof exact === 'string' ? name === exact : exact.test(name)
+  );
+
   // --- Небоевые вводные: атака с фланга/сверху, резервы. ---
-  if (names.includes('deep strike') || texts.some((t) => t.includes('deep strike'))) {
+  if (hasRuleNamed('deep strike') || hasRuleNamed(/^deep strike\s/)) {
     add('Deep_Strike', 'способность Deep Strike');
   }
   if (
@@ -152,11 +167,11 @@ export function detectUtilityFlags(datasheet: BsDatasheet): UtilityFlag[] {
   }
 
   // --- Скауты и инфильтраторы: ввод в бой вне фазы развёртывания. ---
-  // В BSData это не кейворды, а именованные способности «Scouts 7"» и
-  // «Infiltrators», поэтому ищем их по тексту. Слово «Scout» само по себе
-  // пропускаем: «Scout Squad» встречается в списках присоединения лидеров.
-  if (/\bscouts\s+\d/i.test(all)) add('Scouts', 'способность Scouts (ввод до первой фазы)');
-  if (/\binfiltrators\b/i.test(all) || /\binfiltrator\s+squad\b/i.test(datasheet.name)) {
+  // В BSData это именованные правила «Scouts N"» и «Infiltrators» (104 и 76).
+  if (hasRuleNamed(/^scouts\b/) || /\bscouts\s+\d/i.test(all)) {
+    add('Scouts', 'способность Scouts (ввод до первой фазы)');
+  }
+  if (hasRuleNamed(/^infiltrators\b/) || /\binfiltrators\b/i.test(all) || /\binfiltrator\s+squad\b/i.test(datasheet.name)) {
     add('Infiltrator', 'способность Infiltrators (ввод в любой момент)');
   }
 
@@ -165,9 +180,17 @@ export function detectUtilityFlags(datasheet: BsDatasheet): UtilityFlag[] {
   const maxMove = Math.max(...profilesOf(datasheet).map((p) => p.move ?? 0));
   if (maxMove >= 10) add('High_Speed', `Move ${maxMove}"`);
 
-  // --- Feel No Pain: в базе это правило «Feel No Pain X+» на юните. ---
-  if (hasFnpAtLeast(texts, 6)) add('FNP_6+', 'Feel No Pain 6+');
-  else if (hasFnpAtLeast(texts, 5)) add('FNP_5+', 'Feel No Pain 5+');
+  // --- Feel No Pain. В BSData это правило с именем «Feel No Pain 5+», то есть
+  // порог лежит в ИМЕНИ правила, а не в его описании. Поэтому сначала смотрим
+  // имена («Feel No Pain 6+» → 6), и только затем падаем на текст.
+  const fnpFromName = names
+    .map((name) => /feel\s*no\s*pain\s*(\d)/.exec(name)?.[1])
+    .filter((value): value is string => value !== undefined)
+    .map(Number);
+  const fnp6 = fnpFromName.some((n) => n >= 6) || hasFnpAtLeast(texts, 6);
+  const fnp5 = fnp6 || fnpFromName.some((n) => n === 5) || hasFnpAtLeast(texts, 5);
+  if (fnp6) add('FNP_6+', 'Feel No Pain 6+');
+  else if (fnp5) add('FNP_5+', 'Feel No Pain 5+');
 
   // --- Скрытность. ---
   if (names.includes('stealth') || names.includes('penumbral puppetry')) {

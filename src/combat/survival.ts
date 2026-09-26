@@ -62,8 +62,33 @@ export interface WeaponThreat {
   killProbability: number;
   /** Урон, который наносит стрельющий, на 100 своих очков. */
   dealtPer100Points: SurvivalStat;
-  /** Урон, который цель принимает, на 100 своих очков. */
-  takenPer100Points: SurvivalStat;
+  /**
+   * Поглощённый урон до уничтожения, на 100 очков цели — это и есть
+   * effective durability («сколько ресурса противник вложил, чтобы удалить
+   * юнит на его стоимость»).
+   *
+   * Если цель не убита за maxRounds, измерение цензурировано снизу: мы знаем
+   * лишь «не меньше поглощённого». Чтобы такие юниты не считались хрупкими,
+   * им засчитывается полный запас ран с надбавкой за недоступный остаток боя.
+   */
+  absorbedPer100Points: SurvivalStat;
+  /**
+   * Сколько боевых фаз юнит ПРОЖИЛ, на 100 своих очков.
+   *
+   * Это та величина, которая отличает «стену» от «мешочки ран». Поглощённый
+   * урон до смерти математически равен сумме ран: измерение дало corr с
+   * плотностью HP = 0.99, то есть не отличалось от bulk. Спасброск, T и FNP
+   * удлиняют бой, но не меняют, сколько ран нужно снять. А число фаз меняется
+   * радикально: T12 против болтера S4 живёт десятки фаз, T3 погибает за две.
+   *
+   * Разные шаблоны имеют разный DPS, поэтому «фазы» сравнимы только внутри
+   * одного шаблона — что и делает защитный вектор (ранг внутри группы).
+   */
+  roundsPer100Points: SurvivalStat;
+  /** Доля боёв, где цель так и не была убита (цензурирование). */
+  survivedCap: number;
+  /** Запас ран цели — диагностика (плотность HP сама по себе не метрика). */
+  bulkPer100Points: SurvivalStat;
 }
 
 /** Сводка по одной цели. */
@@ -83,8 +108,10 @@ export interface SurvivalResult {
   byGroup: Record<string, {
     damagePerRound: SurvivalStat;
     roundsToKill: SurvivalStat;
-    /** Пережитый урон на 100 очков цели; меньше = живучее. */
-    takenPer100Points: SurvivalStat;
+    /** Поглощённый до смерти урон на 100 очков цели; больше = живучее. */
+    absorbedPer100Points: SurvivalStat;
+    /** Прожитые боевые фазы на 100 очков — это и есть ось выживаемости. */
+    roundsPer100Points: SurvivalStat;
   }>;
   /** Усреднение по всем шаблонам оружия — итоговая живучесть. */
   overall: {
@@ -92,8 +119,14 @@ export interface SurvivalResult {
     roundsToKill: SurvivalStat;
     /** Доля боёв, в которых цель была уничтожена за maxRounds. */
     killProbability: number;
-    /** Пережитый урон на 100 очков цели: меньше = живучее. */
-    takenPer100Points: SurvivalStat;
+    /** Поглощённый урон на 100 очков: диагностика (тождественна сумме ран). */
+    absorbedPer100Points: SurvivalStat;
+    /** Прожитые боевые фазы на 100 очков: ось выживаемости. */
+    roundsPer100Points: SurvivalStat;
+    /** Доля боёв, где цель не была убита (цензурирование измерения). */
+    survivedCap: number;
+    /** Запас ран на 100 очков — диагностика, не метрика выживаемости. */
+    bulkPer100Points: SurvivalStat;
   };
 }
 
@@ -131,6 +164,9 @@ function stat(values: number[]): SurvivalStat {
   return { mean, stdev: Math.sqrt(variance) };
 }
 
+/** Надбавка за недоступный остаток боя при цензурировании (см. threatAgainst). */
+const CENSORED_ROUNDS_FACTOR = 1.5;
+
 /** Нормировка величины на 100 очков. */
 function per100Points(values: number[], points: number): SurvivalStat {
   if (points <= 0) return { mean: 0, stdev: 0 };
@@ -165,11 +201,15 @@ function threatAgainst(
 
   const damage: number[] = [];
   const rounds: number[] = [];
-  // Урон ПЕРВОГО раунда: цель ещё не ранена, поэтому обе нормировки
-  // (нанесённый и пережитый) считаются от «чистого» выстрела, а не от
-  // последнего раунда, где отряд может бить в умирающую цель впустую.
+  // Поглощённый до смерти урон — основа effective durability. Берём бой целиком
+  // (а не первый раунд): первый раунд наказывал за «съеденный» урон того, кто
+  // выжил, и из-за обрезания по остатку ран давал обратную корреляцию с запасом
+  // HP на очко (r = −0.54).
+  const absorbed: number[] = [];
   const firstRound: number[] = [];
   let killed = 0;
+  let censored = 0;
+  const totalWounds = target.models.reduce((sum, model) => sum + model.wounds, 0);
 
   for (let i = 0; i < trials; i += 1) {
     const battle = simulateBattle(attacker, target, {
@@ -188,7 +228,16 @@ function threatAgainst(
     // Средний урон за раунд боя: полный урон делим на число сыгранных раундов,
     // иначе цель, убитая за один выстрел, «набирала» бы завышенный урон/раунд.
     damage.push(battle.damage / Math.max(1, battle.rounds));
-    if (battle.targetDestroyed) killed += 1;
+    if (battle.targetDestroyed) {
+      killed += 1;
+      absorbed.push(battle.absorbed);
+    } else {
+      // Цензурирование: цель пережила maxRounds, и мы знаем лишь «не меньше
+      // поглощённого». Засчитываем полный запас ран с надбавкой, иначе самые
+      // живучие модели получали бы худшую оценку именно за свою живучесть.
+      censored += 1;
+      absorbed.push(totalWounds * CENSORED_ROUNDS_FACTOR);
+    }
   }
 
   return {
@@ -202,7 +251,10 @@ function threatAgainst(
     roundsToKill: stat(rounds),
     killProbability: trials > 0 ? killed / trials : 0,
     dealtPer100Points: per100Points(firstRound, attackerPoints),
-    takenPer100Points: per100Points(firstRound, targetPoints),
+    absorbedPer100Points: per100Points(absorbed, targetPoints),
+    roundsPer100Points: per100Points(rounds, targetPoints),
+    survivedCap: trials > 0 ? censored / trials : 0,
+    bulkPer100Points: per100Points([totalWounds], targetPoints),
   };
 }
 
@@ -243,7 +295,8 @@ export function survivabilityAgainstUnit(
     byGroup[group] = {
       damagePerRound: stat(inGroup.map((threat) => threat.damagePerRound.mean)),
       roundsToKill: stat(inGroup.map((threat) => threat.roundsToKill.mean)),
-      takenPer100Points: stat(inGroup.map((threat) => threat.takenPer100Points.mean)),
+      absorbedPer100Points: stat(inGroup.map((threat) => threat.absorbedPer100Points.mean)),
+      roundsPer100Points: stat(inGroup.map((threat) => threat.roundsPer100Points.mean)),
     };
   }
 
@@ -261,7 +314,10 @@ export function survivabilityAgainstUnit(
       damagePerRound: stat(threats.map((threat) => threat.damagePerRound.mean)),
       roundsToKill: stat(threats.map((threat) => threat.roundsToKill.mean)),
       killProbability: stat(threats.map((threat) => threat.killProbability)).mean,
-      takenPer100Points: stat(threats.map((threat) => threat.takenPer100Points.mean)),
+      absorbedPer100Points: stat(threats.map((threat) => threat.absorbedPer100Points.mean)),
+      roundsPer100Points: stat(threats.map((threat) => threat.roundsPer100Points.mean)),
+      survivedCap: stat(threats.map((threat) => threat.survivedCap)).mean,
+      bulkPer100Points: per100Points([target.models.reduce((sum, m) => sum + m.wounds, 0)], targetPoints),
     },
   };
 }
@@ -280,13 +336,13 @@ export interface SurvivalRow {
    * Среднее число раундов до уничтожения (больше = живучее).
    * ВНИМАНИЕ: величина цензурирована сверху потолком `maxRounds` — если цель
    * не убита, в счёт идёт весь потолок. Поэтому `roundsToKill` показывает
-   * «хватило ли времени», а за глубину отвечает `takenPer100Points`.
+   * «хватило ли времени», а за глубину отвечает `absorbedPer100Points`.
    */
   roundsToKill: SurvivalStat;
   /** Доля боёв, в которых цель была уничтожена (1 — цель роняют всегда). */
   killProbability: number;
-  /** Пережитый урон на 100 очков (меньше = живучее). */
-  takenPer100Points: SurvivalStat;
+  /** Поглощённый до смерти урон на 100 очков (больше = живучее). */
+  absorbedPer100Points: SurvivalStat;
   /** Результат по группам оружия. */
   byGroup: SurvivalResult['byGroup'];
 }
@@ -307,7 +363,7 @@ export function survivabilityTable(options: SurvivalOptions = {}): SurvivalRow[]
       damagePerRound: result.overall.damagePerRound,
       roundsToKill: result.overall.roundsToKill,
       killProbability: result.overall.killProbability,
-      takenPer100Points: result.overall.takenPer100Points,
+      absorbedPer100Points: result.overall.absorbedPer100Points,
       byGroup: result.byGroup,
     };
   });

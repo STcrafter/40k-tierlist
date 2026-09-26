@@ -71,7 +71,7 @@ for (const row of table) {
       `${String(row.totalWounds).padStart(5)}${String(row.points).padStart(6)}` +
       `${fmt(row.damagePerRound.mean)}${fmt(row.roundsToKill.mean).padStart(10)}` +
       `${(row.killProbability * 100).toFixed(0).padStart(8)}` +
-      `  ${fmt(row.takenPer100Points.mean)}`
+      `  ${fmt(row.absorbedPer100Points.mean)}`
   );
 }
 
@@ -95,7 +95,7 @@ if (archetypeFlag !== null) {
     console.log(
       `  ${threat.weaponName.slice(0, 22).padEnd(24)}${threat.group.padEnd(18)}` +
         `${fmt(threat.damagePerRound.mean)}${fmt(threat.roundsToKill.mean).padStart(10)}` +
-        `${(threat.killProbability * 100).toFixed(0).padStart(8)}${fmt(threat.takenPer100Points.mean)}`
+        `${(threat.killProbability * 100).toFixed(0).padStart(8)}${fmt(threat.absorbedPer100Points.mean)}`
     );
   }
   console.log('');
@@ -146,21 +146,21 @@ if (factionFlag !== null) {
       damagePerRound: result.overall.damagePerRound,
       roundsToKill: result.overall.roundsToKill,
       killProbability: result.overall.killProbability,
-      takenPer100Points: result.overall.takenPer100Points,
+      absorbedPer100Points: result.overall.absorbedPer100Points,
       byGroup: result.byGroup,
     });
   }
   const sorted = rows.sort((a, b) =>
     sortKey === 'rounds'
       ? b.roundsToKill.mean - a.roundsToKill.mean
-      : a.takenPer100Points.mean - b.takenPer100Points.mean
+      : a.absorbedPer100Points.mean - b.absorbedPer100Points.mean
   );
   for (const row of sorted.slice(0, 25)) {
     console.log(
       `  ${row.name.slice(0, 28).padEnd(30)}${row.archetype.padEnd(17)}` +
         `${String(row.models).padStart(4)}${String(row.points).padStart(6)}` +
         `${fmt(row.damagePerRound.mean)}${fmt(row.roundsToKill.mean).padStart(8)}` +
-        `${fmt(row.takenPer100Points.mean).padStart(19)}`
+        `${fmt(row.absorbedPer100Points.mean).padStart(19)}`
     );
   }
 }

@@ -41,6 +41,17 @@ export interface AdaptOptions {
   includeOptional?: boolean;
   /** Заменить одну запись choice-группы на указанный индекс. */
   choices?: Record<string, number>;
+  /**
+   * Зафиксировать вариант модели в группе: ключ — `modelGroup:<индекс группы>`,
+   * значение — индекс варианта в `group.variants`.
+   *
+   * Нужно, потому что у части юнитов альтернативное снаряжение закодировано НЕ
+   * в choice-группе, а отдельными вариантами модели: Sekhetar Robots — это
+   * «2-4 Sekhetar Robot w/ pyreflux meltagun» либо «… w/ warpflame projector
+   * and claw». Без этого параметра всегда брался первый вариант, и второе
+   * снаряжение не появлялось нигде.
+   */
+  variantChoices?: Record<string, number>;
 }
 
 export interface AdaptedUnit {
@@ -112,9 +123,12 @@ function selectWeaponProfile(item: BsWargear): BsWeaponProfile | null {
  * Crisis Battlesuits остались бы вообще без оружия: первыми в группе
  * идут именно апгрейды, а стволы — дальше по списку.
  *
- * Эвристика: берём первые `min` записей, содержащих оружие. Какая именно
- * запись выбрана игроком, из данных не узнать, поэтому это приближение
- * (для отчёта оно даёт осмысленный порядок величин, но не точную цифру).
+ * Порядок выбора приоритетен:
+ *   1. явный выбор игрока (`choices`) — если он задан;
+ *   2. `defaultChoiceIds` — документированное в вики BSData умолчание
+ *      (`defaultSelectionEntryId`): именно эти записи BattleScribe кладёт в
+ *      ростер, и в 356 группах базы это НЕ первая запись;
+ *   3. иначе — эвристика «первые min записей» (BattleScribe добирает сам).
  */
 function weaponsOf(item: BsWargear, ownerId: string, choices: Record<string, number> = {}): CombatWeapon[] {
   if (item.kind === 'roster') return [];
@@ -131,7 +145,7 @@ function weaponsOf(item: BsWargear, ownerId: string, choices: Record<string, num
   const armed = item.nested.filter((nested) => containsWeapon(nested));
   const selectedIndex = choices[item.id];
   const chosen = selectedIndex === undefined
-    ? armed.slice(0, Math.max(1, item.min))
+    ? defaultChoices(item, armed)
     : [armed[selectedIndex] ?? armed[0]].filter((value): value is BsWargear => value !== undefined);
   for (const choice of chosen) {
     weapons.push(...weaponsOf(choice, ownerId, choices));
@@ -395,6 +409,7 @@ export function adaptUnit(datasheet: BsDatasheet, options: AdaptOptions = {}): A
   const size = options.size ?? 'min';
   const includeOptional = options.includeOptional ?? false;
   const choices = options.choices ?? {};
+  const variantChoices = options.variantChoices ?? {};
   const unitKeywords = datasheet.keywords.map((keyword) => keyword.toUpperCase());
   // Stealth в BSData — способность, а не кейворд, но бой считает её через
   // кейворды цели, поэтому добавляем как STEALTH в список отряда.
@@ -402,7 +417,25 @@ export function adaptUnit(datasheet: BsDatasheet, options: AdaptOptions = {}): A
   const fnp = fnpOf(datasheet);
   const models: CombatModel[] = [];
   const counts = new Map<string, number>();
-  for (const group of datasheet.modelGroups) {
+  for (const [index, group] of datasheet.modelGroups.entries()) {
+    // Зафиксированный вариант: берём его и набираем ровно столько моделей,
+    // сколько требует нижняя граница группы. Так loadout с «warpflame projector
+    // and claw» имеет ту же численность, что и базовый, и они сравнимы.
+    const forced = variantChoices[`modelGroup:${index}`];
+    if (forced !== undefined) {
+      const variant = group.variants[forced];
+      if (variant === undefined) continue;
+      const cap = unitCapOf(variant);
+      const wanted = group.min ?? 1;
+      const count = Math.max(
+        0,
+        Math.min(wanted, variant.max ?? wanted, group.max ?? wanted, cap ?? wanted)
+      );
+      if (count <= 0) continue;
+      counts.set(variant.id, (counts.get(variant.id) ?? 0) + count);
+      models.push(...expandVariant(variant, count, unitKeywords, includeOptional, fnp, choices));
+      continue;
+    }
     const allocation = allocateVariants(group.variants, group, size);
     for (const variant of group.variants) {
       const count = allocation.get(variant.id) ?? 0;
@@ -418,18 +451,88 @@ export function adaptUnit(datasheet: BsDatasheet, options: AdaptOptions = {}): A
   };
 }
 
+/**
+ * Записи группы выбора, которые берутся по умолчанию.
+ *
+ * Приоритет: `defaultChoiceIds` из BSData → первые `min` записей. Первое —
+ * документированный в вики способ узнать комплект юнита; в 356 группах базы
+ * умолчание указывает не на первую запись, и эвристика без него молча ставила
+ * не то оружие (у Aeldari — Scorpion Chainsword вместо Star Glaive).
+ */
+function defaultChoices(item: BsWargear, armed: BsWargear[]): BsWargear[] {
+  if (armed.length === 0) return armed;
+  const defaults = item.defaultChoiceIds;
+  if (defaults && defaults.size > 0) {
+    const byDefault = armed.filter((choice) => defaults.has(choice.id));
+    if (byDefault.length > 0) {
+      // Умолчание может называть меньше записей, чем требует min (BSData так
+      // оформляет «1 из 2»), поэтому добираем остаток эвристикой.
+      const wanted = Math.max(1, item.min);
+      if (byDefault.length >= wanted) return byDefault.slice(0, wanted);
+      const rest = armed.filter((choice) => !byDefault.includes(choice));
+      return [...byDefault, ...rest.slice(0, wanted - byDefault.length)];
+    }
+  }
+  return armed.slice(0, Math.max(1, item.min));
+}
+
 /** Рекурсивная стоимость выбранной записи снаряжения. */
 function wargearCost(item: BsWargear): number {
   return item.cost + item.nested.reduce((sum, nested) => sum + wargearCost(nested), 0);
 }
 
 /**
+ * Варианты модели закодированы как АЛЬТЕРНАТИВЫ, если у всех вариантов группы
+ * совпадает имя профиля модели: это одна и та же модель с разным снаряжением
+ * («Robot w/ pyreflux meltagun» / «Robot w/ warpflame projector and claw»).
+ *
+ * Если имена профилей различаются, варианты — разные РОЛИ в отряде (сержант и
+ * боец, отдельные типы оружейных отделений), и перебирать их как loadout
+ * бессмысленно: в отряде они сосуществуют, а не заменяют друг друга.
+ */
+function alternativeVariantGroups(datasheet: BsDatasheet): number[] {
+  const result: number[] = [];
+  datasheet.modelGroups.forEach((group, index) => {
+    if (group.variants.length < 2) return;
+    const names = new Set(group.variants.map((variant) => variant.profile?.name ?? variant.name));
+    if (names.size !== 1) return;
+    // Если все варианты несут одно и то же оружие — выбирать нечего.
+    const signatures = new Set(
+      group.variants.map((variant) => weaponSignatureOf(variant).join('|'))
+    );
+    if (signatures.size < 2) return;
+    result.push(index);
+  });
+  return result;
+}
+
+/** Подпись оружия варианта — чтобы отличить «разные стволы» от «одних и тех же». */
+function weaponSignatureOf(variant: BsModelVariant): string[] {
+  const names: string[] = [];
+  const collect = (items: BsWargear[]): void => {
+    for (const item of items) {
+      for (const profile of item.profiles) names.push(profile.name);
+      collect(item.nested);
+    }
+  };
+  collect(variant.defaultWargear);
+  return names.sort();
+}
+
+/**
  * Ограниченный перебор loadout-вариантов datasheet.
  *
- * Для каждой модели выбирается один вариант из каждой обязательной choice-группы.
- * Комбинации разных моделей объединяются в общий набор выборов, но число
- * вариантов ограничено: у больших отрядов иначе возникает комбинаторный взрыв.
- * Первый вариант всегда соответствует текущему дефолтному адаптеру.
+ * Перебираются ДВА вида альтернатив:
+ *   1. choice-группы в снаряжении («Blast / Cleave»);
+ *   2. варианты МОДЕЛИ, если группа имитирует одну модель с разным снаряжением.
+ *
+ * Второй пункт добавлен после разбора Sekhetar Robots: там альтернативное
+ * оружие лежит не в choice-группе, а в отдельных вариантах модели, поэтому
+ * перебор видел только первый вариант и всегда выдавал «Базовый».
+ *
+ * Комбинации объединяются в общий набор выборов, но их число ограничено: у
+ * больших отрядов иначе возникает комбинаторный взрыв. Первый вариант всегда
+ * соответствует текущему дефолтному адаптеру.
  */
 export function loadoutVariantsOf(
   datasheet: BsDatasheet,
@@ -437,6 +540,8 @@ export function loadoutVariantsOf(
 ): LoadoutCandidate[] {
   const size = options.size ?? 'min';
   const includeOptional = options.includeOptional ?? false;
+  const limit = options.limit ?? 64;
+  const variantGroupIndexes = alternativeVariantGroups(datasheet);
   const groups = datasheet.modelGroups.flatMap((group) => group.variants).flatMap((variant) =>
     variant.defaultWargear
       .filter((item) => item.kind === 'choice' && item.min > 0)
@@ -445,35 +550,65 @@ export function loadoutVariantsOf(
   // Декартово произведение вариантов по всем choice-группам. Раньше здесь
   // перебирались только альтернативы последней группы, поэтому часть loadout-ов
   // получала неполный набор снаряжения.
-  const combinations: Record<string, number>[] = [{}];
+  interface Combo {
+    choices: Record<string, number>;
+    variants: Record<string, number>;
+  }
+  const combinations: Combo[] = [{ choices: {}, variants: {} }];
   for (const group of groups) {
     const alternatives = group.item.nested.filter((item) => containsWeapon(item));
     if (alternatives.length === 0) continue;
-    const next: Record<string, number>[] = [];
+    const next: Combo[] = [];
     for (const current of combinations) {
       alternatives.forEach((_, index) => {
-        next.push({ ...current, [group.item.id]: index });
+        next.push({ choices: { ...current.choices, [group.item.id]: index }, variants: current.variants });
       });
     }
     combinations.splice(0, combinations.length, ...next);
-    if (combinations.length > (options.limit ?? 64)) {
-      combinations.length = options.limit ?? 64;
+    if (combinations.length > limit) {
+      combinations.length = limit;
+      break;
+    }
+  }
+  // Второе измерение: альтернативные варианты МОДЕЛИ. Вариант 0 — базовый,
+  // поэтому комбинации с ним уже есть и повторно не добавляются.
+  for (const groupIndex of variantGroupIndexes) {
+    const variantCount = datasheet.modelGroups[groupIndex]?.variants.length ?? 0;
+    if (variantCount < 2) continue;
+    const base = combinations.slice();
+    for (let variantIndex = 1; variantIndex < variantCount; variantIndex += 1) {
+      for (const current of base) {
+        combinations.push({
+          choices: { ...current.choices },
+          variants: { ...current.variants, [`modelGroup:${groupIndex}`]: variantIndex },
+        });
+      }
+    }
+    if (combinations.length > limit) {
+      combinations.length = limit;
       break;
     }
   }
   const candidates: LoadoutCandidate[] = [];
-  for (const [index, choices] of combinations.entries()) {
-    const adapted = adaptUnit(datasheet, { size, includeOptional, choices });
+  for (const [index, combo] of combinations.entries()) {
+    const { choices, variants } = combo;
+    const adapted = adaptUnit(datasheet, { size, includeOptional, choices, variantChoices: variants });
     if (adapted.unit.models.length === 0) continue;
     const extra = groups.reduce((sum, group) => {
     const selected = group.item.nested.filter((item) => containsWeapon(item))[choices[group.item.id] ?? 0];
     return sum + (selected ? wargearCost(selected) : 0);
   }, 0);
-  const name = groups.length === 0
-    ? 'Базовый'
-    : groups
-        .map((group) => group.item.nested.filter((item) => containsWeapon(item))[choices[group.item.id] ?? 0]?.name ?? '?')
-        .join(' / ');
+  const parts: string[] = [];
+  // Имя варианта модели идёт первым: у Sekhetar Robots именно по нему видно,
+  // что отряд вооружён «w/ warpflame projector and claw», а не «Базовый».
+  for (const groupIndex of variantGroupIndexes) {
+    const variant = datasheet.modelGroups[groupIndex]?.variants[variants[`modelGroup:${groupIndex}`] ?? 0];
+    if (variant) parts.push(variant.name || variant.profile?.name || '?');
+  }
+  for (const group of groups) {
+    parts.push(group.item.nested.filter((item) => containsWeapon(item))[choices[group.item.id] ?? 0]?.name ?? '?');
+  }
+  const name = parts.length === 0 ? 'Базовый' : parts.join(' / ');
     candidates.push({
       id: `${datasheet.id}:loadout:${index}`,
       name,

@@ -33,7 +33,16 @@ export type WeaponGroupId =
   /** Орудия техники: батарейная пушка, лазкан, мультимельта. */
   | 'vehicle-guns'
   /** Специализированное оружие против техники: ланс, мультимельта. */
-  | 'anti-armour';
+  | 'anti-armour'
+  /**
+   * Оружие, бьющее мортидами и игнорирующее спасброск.
+   *
+   * Добавлено, чтобы защитный вектор перестал быть одномерным: у исходных шести
+   * групп все пары корреляций лежали в r = 0.75…0.96, то есть они ранжировали
+   * отряды практически одинаково. Мортиды и точность задевают совершенно другие
+   * свойства (InSv, спасброск, число моделей), чем болтер и лазган.
+   */
+  | 'mortal-precision';
 
 /** Эталонный оружейный профиль. */
 export interface WeaponArchetype {
@@ -65,6 +74,7 @@ export const WEAPON_GROUP_NAMES: Record<WeaponGroupId, string> = {
   'monster-melee': 'Рукопашное монстров',
   'vehicle-guns': 'Орудия техники',
   'anti-armour': 'Против техники',
+  'mortal-precision': 'Мортиды и точность',
 };
 
 /** Все группы оружия в фиксированном порядке — для стабильных отчётов. */
@@ -75,6 +85,7 @@ export const WEAPON_GROUPS: readonly WeaponGroupId[] = [
   'monster-melee',
   'vehicle-guns',
   'anti-armour',
+  'mortal-precision',
 ];
 
 /**
@@ -353,6 +364,40 @@ export const WEAPON_ARCHETYPES: readonly WeaponArchetype[] = [
     models: 5,
     pointsPerModel: 35,
   },
+  {
+    id: 'precision-rifle',
+    name: 'Точное ружьё',
+    group: 'mortal-precision',
+    kind: 'ranged',
+    range: 48,
+    attacks: '1',
+    skill: '3+',
+    // S = T: снайперский выстрел, спасброск не бросается. Слабый по урону
+    // на модель, но единственный шаблон, который проверяет именно спасброск.
+    strength: 4,
+    ap: 0,
+    damage: '3',
+    keywords: ['Precision'],
+    models: 10,
+    pointsPerModel: 8,
+  },
+  {
+    id: 'mortal-blaster',
+    name: 'Мортидальный бластер',
+    group: 'mortal-precision',
+    kind: 'ranged',
+    range: 24,
+    attacks: '2',
+    skill: '3+',
+    strength: 8,
+    ap: -1,
+    damage: '4',
+    // Критическое ранение = мортиды в обход сейва: проверяет InSv и то, сколько
+    // моделей успеет отряд снять до гибели.
+    keywords: ['Devastating Wounds'],
+    models: 5,
+    pointsPerModel: 30,
+  },
 ];
 
 /** Шаблон оружия по идентификатору. */
@@ -396,6 +441,7 @@ const GROUP_KEYWORDS: Record<WeaponGroupId, string[]> = {
   'monster-melee': ['MONSTER'],
   'vehicle-guns': ['VEHICLE'],
   'anti-armour': ['INFANTRY'],
+  'mortal-precision': ['INFANTRY'],
 };
 
 /**

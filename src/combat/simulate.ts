@@ -642,6 +642,15 @@ export interface BattleResult {
   targetDestroyed: boolean;
   /** Урон, нанесённый цели за все раунды. */
   damage: number;
+  /**
+   * Сколько урона цель УСПЕЛА поглотить до своей смерти.
+   *
+   * Отличается от `damage` учётом избытка (overkill): удар, убивший модель с
+   * 1 оставшейся раной, «потратил» на неё 1 рану, а не все 6 нанесённых. Именно
+   * поглощённый урон отвечает на вопрос «сколько ресурса противник вложил,
+   * чтобы удалить юнит», поэтому именно он идёт в effective durability.
+   */
+  absorbed: number;
   /** Осталось живых моделей цели. */
   survivors: number;
   /** Моделей цели потеряно. */
@@ -680,6 +689,11 @@ export function simulateBattle(
     rounds,
     targetDestroyed: state.aliveCount === 0,
     damage: state.damage,
+    // state.damage копится как `dealt = min(урон, остаток ран)`, то есть
+    // избыток (overkill) в него не попадает: удар, убивший модель с 1 раной,
+    // добавляет 1, а не 6. Поэтому absorbed — это ровно «сколько урона цель
+    // поглотила», и отдельный пересчёт не нужен.
+    absorbed: state.damage,
     survivors: state.aliveCount,
     kills: state.kills,
     damageByRound,

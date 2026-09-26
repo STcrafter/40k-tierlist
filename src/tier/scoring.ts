@@ -154,10 +154,21 @@ export interface RawScore {
   universal: number;
   /** Оставлено для совместимости с отчётами: урон, а не уничтоженные очки. */
   damagePer100: number;
-  /** Стоимостная выживаемость: 100 / (1 + takenPer100). */
-  baseSurvivability: number;
-  /** Пережитый урон на 100 очков (для справки). */
-  takenPer100: number;
+  /**
+   * Effective durability: сколько входящего урона противник должен потратить,
+   * чтобы удалить юнит, на 100 его очков. Больше = живучее.
+   *
+   * Заменяет прежнюю `100 / (1 + takenPer100)`. Та шкала брала урон ПЕРВОГО
+   * раунда и обрезала его остатком ран, из-за чего живучий отряд, «съевший»
+   * много урона, получал худшую оценку: corr(раны на очко, метрика) = −0.54.
+   */
+  effectiveDurability: number;
+  /** Поглощённый урон на 100 очков — сырое значение, больше = живучее. */
+  absorbedPer100: number;
+  /** Запас ран на 100 очков — только диагностика (плотность HP ≠ метрика). */
+  bulkPer100: number;
+  /** Доля боёв, где юнит не был убит за maxRounds (цензурирование). */
+  censoredShare: number;
   unitType: UnitType;
   hasFlyOrDeepStrike: boolean;
   tax: MeleeTax;
@@ -301,18 +312,24 @@ export function rawScoreOf(
   // за неё применять нельзя.
   const tax = mode === 'ranged' ? { damage: 1, survivability: 1 } : meleeTax(unitType, hasFlyOrDeepStrike);
 
-  // Выживаемость: в survival «пережитый урон на 100 очков» — чем меньше, тем
-  // лучше; для складывания с уроном переворачиваем в 100 / taken.
+  // Выживаемость = effective durability: сколько входящего урона противник
+  // обязан потратить, чтобы удалить юнит, на 100 его очков. Больше = живучее,
+  // поэтому в отличие от прежней 100/(1+taken) здесь нет инверсии: юнит,
+  // поглотивший много урона, получает высокую оценку, а не низкую.
   const surv = survivabilityAgainstUnit(baseUnit, points, survival);
-  const takenPer100 = surv.overall.takenPer100Points.mean;
-  const baseSurvivability = 100 / (1 + takenPer100);
+  const absorbedPer100 = surv.overall.absorbedPer100Points.mean;
+  // Ось выживаемости — «сколько боевых фаз юнит прожил на 100 своих очков».
+  // Именно она, а НЕ поглощённый урон: тот математически равен сумме ран
+  // (corr с плотностью HP = 0.99) и потому не отличает «стену» от «мешочки
+  // ран». Sv/T/FNP/Stealth меняют не количество снимаемых ран, а время.
+  const effectiveDurability = surv.overall.roundsPer100Points.mean * tax.survivability;
   const effectiveOffenseVector = Object.fromEntries(
     Object.entries(destroyedPointsByTarget).map(([id, value]) => [id, value * tax.damage])
   );
   const defenseVector = Object.fromEntries(
     Object.entries(surv.byGroup).map(([group, value]) => [
       group,
-      100 / (1 + value.takenPer100Points.mean) * tax.survivability,
+      value.roundsPer100Points.mean * tax.survivability,
     ])
   );
 
@@ -331,13 +348,15 @@ export function rawScoreOf(
     vsArmor,
     universal,
     damagePer100,
-    baseSurvivability,
-    takenPer100,
+    effectiveDurability,
+    absorbedPer100,
+    bulkPer100: surv.overall.bulkPer100Points.mean,
+    censoredShare: surv.overall.survivedCap,
     unitType,
     hasFlyOrDeepStrike,
     tax,
     effectiveDamage: rawMaxDamage * tax.damage,
-    effectiveSurvivability: baseSurvivability * tax.survivability,
+    effectiveSurvivability: effectiveDurability,
     utilityFlags,
     utilityScore,
   };
@@ -393,6 +412,104 @@ export function residualizeOnLogPoints(points: number[], values: number[]): numb
   const slope = cov / varX;
   const intercept = meanY - slope * meanX;
   return values.map((value, i) => value - (intercept + slope * xs[i]));
+}
+
+/**
+ * Ранг по ЦЕНОВЫМ КОРЗИНАМ, смешанный с глобальным рангом.
+ *
+ * Заменяет регрессию остатков. У глобальной линейной регрессии на краях
+ * диапазона почти нет локальной поддержки, и остатки выворачивались: в наборе
+ * 1 юнит дешевле 25 очков и 5 дороже 800, и normSurvivability была
+ * U-образной по цене (дешёвые 99, середина 45, дорогие 82).
+ *
+ * Как работает: юниты раскладываются по ценовым бинам, внутри каждого бина
+ * считается перцентиль значения, затем он смешивается с глобальным перцентилем.
+ * Бины с малым числом юнитов сливаются с соседним — иначе «корзина» из одного
+ * юнита делает его и референсом, и мерой сразу.
+ *
+ * @param points стоимость каждого юнита (те же элементы, что и `values`)
+ * @param values нормализуемая метрика
+ * @param binWeight доля ценовой корзины в итоговом ранге (0 = только глобальный)
+ */
+export function rankWithinPriceBins(
+  points: number[],
+  values: number[],
+  binWeight = 0.5,
+  minBinSize = 8
+): number[] {
+  const n = values.length;
+  if (n === 0) return [];
+  const globalSorted = [...values].sort((a, b) => a - b);
+  const globalRank = values.map((value) => percentileOf(globalSorted, value));
+  if (n < minBinSize * 2) return globalRank;
+
+  // Границы бинов задаём по квантилям цены, а не фиксированными числами: так
+  // корзины всегда заполнены и следуют распределению набора.
+  const sortedPoints = [...points].sort((a, b) => a - b);
+  const quantile = (q: number): number => sortedPoints[Math.min(n - 1, Math.floor(q * n))];
+  const edges = [0, quantile(0.2), quantile(0.4), quantile(0.6), quantile(0.8), 1];
+
+  const binOf = (point: number): number => {
+    for (let i = edges.length - 1; i >= 1; i -= 1) {
+      if (point >= edges[i - 1]) return i - 1;
+    }
+    return 0;
+  };
+  const bins = new Map<number, number[]>();
+  for (let i = 0; i < n; i += 1) {
+    const bin = binOf(points[i]);
+    const list = bins.get(bin);
+    if (list) list.push(i);
+    else bins.set(bin, [i]);
+  }
+
+  /**
+   * Недо��олненные корзины сливаем с СОСЕДНЕЙ, а не отдаём глобальному ранку.
+   *
+   * Откат на глобальный ранг и был причиной вывернутых краёв: в наборе всего
+   * 1 юнит дешевле 25 очков и 5 дороже 800, и оба края оказывались в хвосте
+   * глобальной шкалы (normSurv 99 и 6). Слияние с соседней корзиной даёт им
+   * честное сравнение внутри сопоставимой по цене группы.
+   */
+  const labelOf = new Map<number, number>();
+  for (const bin of bins.keys()) labelOf.set(bin, bin);
+  // Сортируем корзины по размеру: сначала закрываем самые пустые.
+  const bySize = [...bins.entries()].sort((a, b) => a[1].length - b[1].length);
+  for (const [bin, indices] of bySize) {
+    if (indices.length >= minBinSize) continue;
+    const left = labelOf.get(bin - 1) ?? null;
+    const right = labelOf.get(bin + 1) ?? null;
+    // Соседа выбираем по числу юнитов: к крупному присоединяться выгоднее.
+    let target: number | null = null;
+    if (left !== null && right !== null) {
+      const leftSize = bins.get(left)?.length ?? 0;
+      const rightSize = bins.get(right)?.length ?? 0;
+      target = rightSize >= leftSize ? right : left;
+    } else {
+      target = left ?? right;
+    }
+    if (target === null) continue;
+    const host = bins.get(target) ?? [];
+    host.push(...indices);
+    bins.set(target, [...new Set(host)]);
+    bins.delete(bin);
+    labelOf.set(target, target);
+  }
+
+  const binRank = new Map<number, number>();
+  for (const indices of bins.values()) {
+    if (indices.length === 0) continue;
+    const sorted = indices.map((i) => values[i]).sort((a, b) => a - b);
+    for (const i of indices) binRank.set(i, percentileOf(sorted, values[i]));
+  }
+
+  return values.map((_value, i) => {
+    const local = binRank.get(i);
+    // Юнит, для которого не нашлось сопоставимой группы, получает глобальный
+    // ранг: в пустой корзине он был бы «лучшим среди одного», то есть 100.
+    if (local === undefined) return globalRank[i];
+    return local * binWeight + globalRank[i] * (1 - binWeight);
+  });
 }
 
 /**
@@ -493,20 +610,21 @@ export function tierList(
   /**
    * Ранг одной компоненты вектора.
    *
-   * `residual: true` ранжирует не саму величину, а остаток от регрессии на
-   * log(стоимость). Применяется только к защите: там корреляция с ценой
-   * структурная (T/W растут сублинейно к цене), и абсолютные значения просто
-   * награждали бы дорогие модели. Урон ранжируется как раньше — по абсолютным
-   * значениям: стоимость в нём уже учтена делением на 100 очков.
+   * Защита ранжируется по ЦЕНОВЫМ КОРЗИНАМ (rankWithinPriceBins), а не по
+   * абсолютным значениям: связь живучести с ценой структурная (T/W растут
+   * сублинейно), и абсолютные значения просто награждали бы дорогие модели.
+   * Корзины вместо регрессии остатков — потому что у глобальной линейной
+   * регрессии на краях диапазона нет локальной поддержки, и она выворачивала
+   * U-образно края. Урон ранжируется как раньше: стоимость в нём уже учтена
+   * делением на 100 очков.
    */
-  const rankComponent = (
-    pick: (row: DraftRow) => number | undefined,
-    residual: boolean
-  ): number[] => {
+  const rankComponent = (pick: (row: DraftRow) => number | undefined, binned: boolean): number[] => {
     const values = drafts.map((row) => pick(row) ?? 0);
-    const scored = residual ? residualizeOnLogPoints(costs, values) : values;
-    const sorted = [...scored].sort((a, b) => a - b);
-    return scored.map((value) => percentileOf(sorted, value));
+    if (!binned) {
+      const sorted = [...values].sort((a, b) => a - b);
+      return values.map((value) => percentileOf(sorted, value));
+    }
+    return rankWithinPriceBins(costs, values);
   };
   const offenseRanks = offenseKeys.map((key) =>
     rankComponent((row) => row.effectiveOffenseVector[key], false)

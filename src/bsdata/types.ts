@@ -71,6 +71,15 @@ export interface BsWargear {
   cost: number;
   /** Вложенное снаряжение составного апгрейда ('Kustom Choppa and Kombi-skorcha'). */
   nested: BsWargear[];
+  /**
+   * id записей, помеченных в BSData как выбор по умолчанию
+   * (`defaultSelectionEntryId` на группе). null — автор не задал умолчание.
+   *
+   * Это единственный ДОКУМЕНТИРОВАННЫЙ способ узнать, с чем юнит идёт из
+   * коробки; без него приходится гадать «первые min записей», что в 356 группах
+   * базы указывает не на то оружие (см. вики BSData → Catalogue Guidelines).
+   */
+  defaultChoiceIds: Set<string> | null;
 }
 
 /** Взаимоисключающая группа выбора ('Weapon 1', 'Kustom Choppa и Kombi-skorcha'). */
