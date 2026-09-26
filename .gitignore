@@ -4,6 +4,8 @@ dist
 # Артефакты локальной проверки/сборки
 v-*.txt
 *.log
+*.pid
+*.err
 bs.json
 parse-report.json
 audit-out.json
