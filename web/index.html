@@ -9,21 +9,16 @@
       content="Аналитический тирлист Warhammer 40,000: тир по 12 сочетаниям «парадигма цели × режим боя», разбор урона и живучести, вклад способностей. Все метрики посчитаны движком сборки."
     />
     <link rel="icon" type="image/svg+xml" href="./favicon.svg" />
-    <title>Тирлист Warhammer 40,000 — аналитический расчёт</title>
+    <title>Тирлист 40K — аналитический расчёт</title>
     <!--
-      Одна гарнитура — IBM Plex, в трёх начертаниях: Regular для текста,
-      Condensed для шапки, Mono для всех чисел. Разные шрифты для заголовков и
-      таблицы здесь не работали: Cinzel с тонкими штрихами превращал шапку в
-      свадебное приглашение, а на шестнадцати колонках цифр это просто мешало.
-
-      Подключение в разметке, а не через @import: такой запрос встаёт в очередь
-      после разбора таблицы стилей и задерживает первую отрисовку.
+      Шрифты грузятся здесь, а не в styles.css: @import в CSS блокирует разбор
+      таблицы стилей и задерживает первую отрисовку на лишний запрос.
     -->
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
       rel="stylesheet"
-      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Sans+Condensed:wght@600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap"
+      href="https://fonts.googleapis.com/css2?family=Cinzel:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap"
     />
     <link rel="stylesheet" href="./src/styles.css" />
   </head>
