@@ -23,9 +23,6 @@ import { ARCHETYPES } from '../../src/combat/archetypes.ts';
 import { withinCalculationBudget } from '../../src/combat/budget.ts';
 import { COLUMNS } from '../../src/tier/columns.ts';
 import {
-  isTargetParadigm,
-  type AttachedData,
-  type AttachedRow,
   type CombatMode,
   type IndexData,
   type TargetParadigm,
@@ -658,12 +655,28 @@ function breakdownRow(label: string, value: number, max: number, digits: number)
   </div>`;
 }
 
-/** Плитка одного показателя. */
-function metric(label: string, value: string, title?: string, note?: string): string {
-  const hint = title !== undefined ? ` title="${esc(title)}"` : '';
-  const small = note !== undefined ? `<small>${esc(note)}</small>` : '';
-  return `<div class="metric"${hint}><div class="k">${esc(label)}</div><div class="v">${value}${small}</div></div>`;
+/**
+ * Метрики юнита в произвольной комбинации «парадигма × режим».
+ *
+ * Ключи приходят из данных (`paradigms` может измениться), поэтому проверяем
+ * принадлежность к типу: иначе типизация Record ломается на индексации строкой.
+ */
+function cellOf(
+  unit: UnitEntry,
+  paradigm: string,
+  mode: CombatMode
+): UnitMetrics | null {
+  if (!isTargetParadigm(paradigm)) return null;
+  return unit.metricsByParadigm?.[paradigm]?.[mode] ?? null;
 }
+
+/** Отсекает значения, которых нет в типе: внешние ключи из JSON. */
+function isTargetParadigm(value: string): value is TargetParadigm {
+  return (Object.keys(state.data?.paradigms ?? PARADIGM_FALLBACK) as string[]).includes(value);
+}
+
+/** Парадигмы по умолчанию, если данные ещё не загружены. */
+const PARADIGM_FALLBACK: TargetParadigm[] = ['all', 'infantry', 'elite', 'armor'];
 
 /**
  * Матрица тиров по всем 12 комбинациям.
