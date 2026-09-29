@@ -1,46 +1,72 @@
 /*
- * Оформление тирлиста: «инквизиторское досье».
+ * Оформление аналитического тирлиста.
  *
- * Не тёмно-серый дашборд: палитра взята от печатей, латуни и костяных
- * скрижалей — холодный сине-чёрный фон, костяной текст, латунный акцент и
- * пять цветов тира как единственное яркое пятно на странице.
+ * Главное решение — тир это не украшение строки, а СТРУКТУРА списка. Раньше
+ * ранг жил маленькой цветной пластиной среди серых чисел, и на 1093 строках
+ * глаз не мог считать список — а тирлист существует именно ради того, чтобы
+ * его прочитать взглядом сверху вниз. Теперь юниты собраны в полосы по тиру,
+ * у полосы своя подложка, сплошной рельс слева и липкая метка.
  *
- * Типографика несут работу: Cinzel (гравированные прописные) держит заголовки,
- * IBM Plex Mono — все числа, IBM Plex Sans — прозу. Моноширинный набор цифр
- * не украшение: колонок шестнадцать, и без tabular-nums разряды «плавали» бы
- * при каждой перерисовке сортировки.
- */
-
-/*
- * Шрифты намеренно НЕ подключаются через @import: такой запрос встаёт в
- * очередь после разбора таблицы стилей и задерживает первую отрисовку.
- * Ссылка на них стоит в web/index.html рядом с preconnect.
+ * Второе решение — читаемость цифр. Числа это и есть содержимое таблицы,
+ * поэтому они набраны почти белым и моноширинным: без tabular-nums разряд
+ * прыгает при каждой перерисовке сортировки, и колонку невозможно читать
+ * вертикальным взглядом.
+ *
+ * Декора нет намеренно. Градиентные заголовки, зерно, скобки и срезанные углы
+ * выглядели дорого ровно до первого взгляда на таблицу, а потом мешали читать
+ * и ничего не сообщали.
  */
 
 :root {
-  --void: #080a0e;
-  --iron: #0e1116;
-  --iron-2: #141920;
-  --iron-3: #1b212a;
-  --line: #232c36;
-  --line-2: #303c49;
-  --bone: #e7e3d8;
-  --bone-dim: #8d95a0;
-  --bone-faint: #5d6672;
-  --brass: #c8a86b;
-  --brass-dim: #6b5a35;
+  --bg: #0b0e13;
+  --bg-panel: #11151c;
+  --bg-raised: #161b24;
+  --bg-input: #0d1117;
 
-  --tier-s: #e8503a;
-  --tier-a: #e8a33d;
-  --tier-b: #7fc98a;
-  --tier-c: #5fa8d3;
-  --tier-d: #6e7681;
+  --line: #20262f;
+  --line-2: #2d3540;
+  --line-3: #3b444f;
 
-  --font-display: 'Cinzel', 'Times New Roman', serif;
-  --font-body: 'IBM Plex Sans', 'Helvetica Neue', sans-serif;
-  --font-mono: 'IBM Plex Mono', 'Courier New', monospace;
+  /*
+   * Контраст к фону #0b0e13, посчитан по формуле WCAG:
+   *   text  17.2:1  AAA   основной текст и все числа таблицы
+   *   2     10.3:1  AAA   вторичный текст
+   *   3      6.4:1  AA    подписи колонок, метки, названия секций
+   *   4      5.1:1  AA    только плейсхолдеры и приглушённые флаги
+   *
+   * В прошлой версии подписи были #5d6672 — 3.3:1, то есть ниже AA для
+   * мелкого текста. Именно они, а не цифры, и читались вяло: колонки и
+   * заголовки секций просто тонули.
+   */
+  --text: #eef2f7;
+  --text-2: #b6bec9;
+  --text-3: #8b95a3;
+  --text-4: #7a8492;
 
-  --row-h: 30px;
+  --accent: #7fb2e5;
+  --focus: #8cc0f0;
+
+  --tier-s: #ff6b5f;
+  --tier-a: #ffab4d;
+  --tier-b: #6fd18a;
+  --tier-c: #5fb0e8;
+  --tier-d: #7d8794;
+
+  /* Подложка полосы тира: 3–6% тона, чтобы блок был виден, а не кричал. */
+  --tint-s: rgba(255, 107, 95, 0.06);
+  --tint-a: rgba(255, 171, 77, 0.052);
+  --tint-b: rgba(111, 209, 138, 0.045);
+  --tint-c: rgba(95, 176, 232, 0.04);
+  --tint-d: rgba(125, 135, 148, 0.03);
+
+  --font-ui: 'IBM Plex Sans', 'Helvetica Neue', Arial, sans-serif;
+  --font-display: 'IBM Plex Sans Condensed', 'IBM Plex Sans', 'Arial Narrow', sans-serif;
+  --font-mono: 'IBM Plex Mono', 'SF Mono', Consolas, monospace;
+
+  --row-h: 32px;
+  --head-h: 34px;
+  --rail: 3px;
+
   color-scheme: dark;
 }
 
@@ -52,38 +78,20 @@
 
 body {
   margin: 0;
-  background: var(--void);
-  color: var(--bone);
-  font-family: var(--font-body);
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-ui);
   font-size: 14px;
   line-height: 1.5;
   -webkit-font-smoothing: antialiased;
-}
-
-/*
- * Зерно поверх всей страницы.
- *
- * Плоская заливка большой площади читается как «экран не грузится»; шум
- * добавляет материальность. Слой не перехватывает события и не мешает
- * выделению текста.
- */
-.grain {
-  position: fixed;
-  inset: 0;
-  z-index: 0;
-  pointer-events: none;
-  opacity: 0.035;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3'/%3E%3C/filter%3E%3Crect width='140' height='140' filter='url(%23n)'/%3E%3C/svg%3E");
+  text-rendering: optimizeLegibility;
 }
 
 #app {
-  position: relative;
-  z-index: 1;
   min-height: 100vh;
-  padding-bottom: 80px;
 }
 
-/* Скрыть визуально, оставить для программ чтения с экрана. */
+/* Видимо скрыть, оставить программе чтения с экрана. */
 .sr-only {
   position: absolute;
   width: 1px;
@@ -91,99 +99,85 @@ body {
   padding: 0;
   margin: -1px;
   overflow: hidden;
-  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
   white-space: nowrap;
   border: 0;
+}
+
+:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+  border-radius: 2px;
 }
 
 /* ─────────────────────────  Шапка  ───────────────────────── */
 
 .masthead {
-  position: relative;
-  padding: 34px 28px 26px;
-  border-bottom: 1px solid var(--line);
-  background: linear-gradient(180deg, #0d1117 0%, var(--void) 100%);
+  padding: 26px 28px 22px;
+  background: var(--bg-panel);
+  border-bottom: 1px solid var(--line-2);
 }
 
-/* Угловые засечки — рамка «штемпеля» вместо ровной линии. */
-.masthead::before,
-.masthead::after {
-  content: '';
-  position: absolute;
-  width: 26px;
-  height: 26px;
-  border: 1px solid var(--brass-dim);
-  pointer-events: none;
-}
-.masthead::before {
-  top: 12px;
-  left: 14px;
-  border-right: 0;
-  border-bottom: 0;
-}
-.masthead::after {
-  right: 14px;
-  bottom: 12px;
-  border-left: 0;
-  border-top: 0;
+.masthead-top {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 12px 32px;
 }
 
 .eyebrow {
-  margin: 0;
-  color: var(--brass);
-  font-family: var(--font-mono);
+  margin: 0 0 6px;
+  color: var(--text-3);
   font-size: 11px;
-  letter-spacing: 0.22em;
+  font-weight: 500;
+  letter-spacing: 0.14em;
   text-transform: uppercase;
 }
 
 h1 {
-  margin: 8px 0 10px;
+  margin: 0;
   font-family: var(--font-display);
-  font-size: clamp(28px, 4.5vw, 44px);
+  font-size: 34px;
   font-weight: 700;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  background: linear-gradient(180deg, #f4f1e8 0%, #b9ac8c 100%);
-  -webkit-background-clip: text;
-  background-clip: text;
-  color: transparent;
+  letter-spacing: 0.005em;
+  line-height: 1.05;
+  color: var(--text);
 }
 
 .subtitle {
-  max-width: 68ch;
-  margin: 0;
-  color: var(--bone-dim);
-  font-size: 13.5px;
+  max-width: 72ch;
+  margin: 10px 0 0;
+  color: var(--text-2);
+  font-size: 13px;
 }
 
-/* Параметры сборки: видно, что за числа стоят в тирах. */
+/* Параметры сборки — чтобы число не выглядело выдуманным. */
 .readout {
   display: flex;
   flex-wrap: wrap;
-  gap: 10px 28px;
-  margin: 22px 0 0;
+  gap: 6px 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
 }
 .readout > div {
   display: flex;
-  flex-direction: column;
-  gap: 2px;
+  align-items: baseline;
+  gap: 6px;
+  padding: 4px 9px;
+  background: var(--bg-raised);
+  border: 1px solid var(--line);
+  border-radius: 3px;
 }
 .readout dt {
-  color: var(--bone-faint);
-  font-family: var(--font-mono);
-  font-size: 10px;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
+  color: var(--text-3);
+  font-size: 11px;
 }
 .readout dd {
   margin: 0;
-  color: var(--bone);
+  color: var(--text);
   font-family: var(--font-mono);
-  font-size: 14px;
-  font-variant-numeric: tabular-nums;
-}
-
 
 /* ─────────────────────────  Панель управления  ───────────────────────── */
 
@@ -191,13 +185,13 @@ h1 {
   display: flex;
   flex-wrap: wrap;
   align-items: flex-end;
-  gap: 14px 20px;
-  padding: 16px 28px;
-  background: var(--iron);
+  gap: 12px 18px;
+  padding: 12px 28px;
+  background: var(--bg);
   border-bottom: 1px solid var(--line);
   position: sticky;
   top: 0;
-  z-index: 5;
+  z-index: 20;
 }
 
 .control {
@@ -206,83 +200,84 @@ h1 {
   gap: 5px;
 }
 .control.grow {
-  flex: 1 1 200px;
-  max-width: 340px;
+  flex: 1 1 190px;
+  max-width: 320px;
 }
 
 .control-label {
-  color: var(--bone-faint);
-  font-family: var(--font-mono);
-  font-size: 10px;
-  letter-spacing: 0.16em;
+  color: var(--text-3);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
   text-transform: uppercase;
 }
 
-/* Кнопки и поля — единый «инструментальный» корпус. */
 .segmented {
   display: flex;
-  gap: 2px;
-  padding: 2px;
-  background: var(--void);
-  border: 1px solid var(--line);
-  border-radius: 2px;
+  background: var(--bg-input);
+  border: 1px solid var(--line-2);
+  border-radius: 4px;
+  overflow: hidden;
 }
 
 .segmented button {
   appearance: none;
   border: 0;
-  border-radius: 2px;
+  border-radius: 0;
   background: transparent;
-  color: var(--bone-dim);
-  font-family: var(--font-body);
-  font-size: 12.5px;
-  padding: 6px 11px;
+  color: var(--text-2);
+  font-family: inherit;
+  font-size: 13px;
+  padding: 6px 12px;
   cursor: pointer;
   white-space: nowrap;
-  transition: background 120ms ease, color 120ms ease;
+  transition: background 110ms ease, color 110ms ease;
+}
+.segmented button + button {
+  border-left: 1px solid var(--line);
 }
 .segmented button:hover {
-  background: var(--iron-3);
-  color: var(--bone);
+  background: var(--bg-raised);
+  color: var(--text);
 }
-/* Нажатое состояние рисуется рамкой-«штампом», а не заливкой: иначе
-   подсветка съедала бы цвет тира рядом. */
 .segmented button[aria-pressed='true'] {
-  background: var(--iron-3);
-  color: var(--bone);
-  box-shadow: inset 0 0 0 1px var(--brass-dim);
+  background: var(--bg-raised);
+  color: var(--text);
+  font-weight: 600;
+  box-shadow: inset 0 -2px 0 var(--accent);
 }
 
 .tier-filter button {
-  width: 30px;
+  width: 32px;
   padding: 6px 0;
   font-family: var(--font-mono);
   font-weight: 600;
   text-align: center;
 }
-.tier-filter button[aria-pressed='true'][data-tier-only='S'] { box-shadow: inset 0 0 0 1px var(--tier-s); color: var(--tier-s); }
-.tier-filter button[aria-pressed='true'][data-tier-only='A'] { box-shadow: inset 0 0 0 1px var(--tier-a); color: var(--tier-a); }
-.tier-filter button[aria-pressed='true'][data-tier-only='B'] { box-shadow: inset 0 0 0 1px var(--tier-b); color: var(--tier-b); }
-.tier-filter button[aria-pressed='true'][data-tier-only='C'] { box-shadow: inset 0 0 0 1px var(--tier-c); color: var(--tier-c); }
-.tier-filter button[aria-pressed='true'][data-tier-only='D'] { box-shadow: inset 0 0 0 1px var(--tier-d); color: var(--tier-d); }
+/* Отметка тира — обводка и текст его цветом, а не заливка: пять залитых
+   плашек в ряд превращались в лоскутное одеяло. */
+.tier-filter button[aria-pressed='true'][data-tier-only='S'] { color: var(--tier-s); box-shadow: inset 0 0 0 1px var(--tier-s); }
+.tier-filter button[aria-pressed='true'][data-tier-only='A'] { color: var(--tier-a); box-shadow: inset 0 0 0 1px var(--tier-a); }
+.tier-filter button[aria-pressed='true'][data-tier-only='B'] { color: var(--tier-b); box-shadow: inset 0 0 0 1px var(--tier-b); }
+.tier-filter button[aria-pressed='true'][data-tier-only='C'] { color: var(--tier-c); box-shadow: inset 0 0 0 1px var(--tier-c); }
+.tier-filter button[aria-pressed='true'][data-tier-only='D'] { color: var(--tier-d); box-shadow: inset 0 0 0 1px var(--tier-d); }
 
 select,
 input[type='search'] {
   appearance: none;
-  background: var(--void);
-  color: var(--bone);
-  border: 1px solid var(--line);
-  border-radius: 2px;
-  padding: 7px 10px;
-  font-family: var(--font-body);
+  background: var(--bg-input);
+  color: var(--text);
+  border: 1px solid var(--line-2);
+  border-radius: 4px;
+  padding: 6px 10px;
+  font-family: inherit;
   font-size: 13px;
 }
 select {
-  min-width: 180px;
+  min-width: 172px;
   cursor: pointer;
-  /* Свой маркер: системная стрелка светлеет не на всех фонах одинаково. */
-  background-image: linear-gradient(45deg, transparent 50%, var(--brass) 50%),
-    linear-gradient(135deg, var(--brass) 50%, transparent 50%);
+  background-image: linear-gradient(45deg, transparent 50%, var(--text-3) 50%),
+    linear-gradient(135deg, var(--text-3) 50%, transparent 50%);
   background-position: calc(100% - 15px) 15px, calc(100% - 10px) 15px;
   background-size: 5px 5px, 5px 5px;
   background-repeat: no-repeat;
@@ -292,26 +287,22 @@ input[type='search'] {
   width: 100%;
 }
 input[type='search']::placeholder {
-  color: var(--bone-faint);
+  color: var(--text-4);
 }
-
-:where(button, select, input, a):focus-visible {
-  outline: 2px solid var(--brass);
-  outline-offset: 1px;
+select:hover,
+input[type='search']:hover {
+  border-color: var(--line-3);
 }
 
 .status {
-  margin: 0;
-  padding: 9px 28px;
-  color: var(--bone-dim);
-  background: var(--iron-2);
-  border-bottom: 1px solid var(--line);
-  font-family: var(--font-mono);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
 
 /* ─────────────────────────  Таблица  ───────────────────────── */
 
 .table-wrap {
-  padding: 0 0 40px;
+  padding: 0 0 72px;
   overflow-x: auto;
 }
 
@@ -319,23 +310,16 @@ table {
   width: 100%;
   border-collapse: separate;
   border-spacing: 0;
-  font-size: 12.5px;
+  font-size: 13px;
 }
 
-/*
- * Липкая шапка задана только главной таблице (через #table-wrap).
- *
- * Селектор `thead th` без ограничения цеплял бы ещё и матрицу
- * «парадигма × режим» внутри окна: там отступ 77px не имеет смысла, и шапка
- * матрицы отлипала бы от своей таблицы.
- */
 #table-wrap thead th {
   position: sticky;
-  top: 77px;
-  z-index: 4;
+  top: 55px;
+  z-index: 8;
   padding: 0;
   text-align: left;
-  background: var(--iron-2);
+  background: var(--bg-panel);
   border-bottom: 1px solid var(--line-2);
   white-space: nowrap;
 }
@@ -345,85 +329,74 @@ table {
   align-items: center;
   gap: 5px;
   width: 100%;
-  padding: 9px 10px;
+  padding: 9px 12px;
   background: transparent;
   border: 0;
-  color: var(--bone-faint);
-  font-family: var(--font-mono);
-  font-size: 10px;
-  font-weight: 500;
-  letter-spacing: 0.1em;
+  color: var(--text-3);
+  font-family: var(--font-ui);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.07em;
   text-transform: uppercase;
   cursor: pointer;
 }
 .sort-btn:hover {
-  color: var(--bone);
-  background: var(--iron-3);
+  color: var(--text);
+  background: var(--bg-raised);
 }
 th.num .sort-btn {
   justify-content: flex-end;
 }
 th[aria-sort='descending'] .sort-btn,
 th[aria-sort='ascending'] .sort-btn {
-  color: var(--brass);
+  color: var(--accent);
 }
 .sort-arrow {
-  font-size: 9px;
+  font-size: 8px;
   line-height: 1;
 }
 
 /*
- * Строки рендерятся все сразу, но браузер не обязан считать раскладку и краску
- * за пределами экрана: content-visibility пропускает их отрисовку целиком.
- * На 1093 строках × 16 колонок это разница между секундой и мгновенной
- * прокруткой, при этом разметка остаётся обычной таблицей — для чтения с
- * экрана и для поиска по Ctrl+F.
+ * Строки пропускают раскладку за пределами экрана, но остаются обычной
+ * таблицей — ради поиска по Ctrl+F и программ чтения с экрана.
  */
 tbody tr {
   content-visibility: auto;
   contain-intrinsic-size: auto var(--row-h);
 }
 
-tbody tr:nth-child(odd) {
-  background: #0a0d11;
-}
-tbody tr:hover {
-  background: var(--iron-3);
-}
-tbody tr:hover th.unit-cell {
-  box-shadow: inset 2px 0 0 var(--brass);
-}
-
 td,
 th.unit-cell {
-  padding: 6px 10px;
+  padding: 0 12px;
+  height: var(--row-h);
   text-align: left;
   font-weight: 400;
   white-space: nowrap;
-  border-bottom: 1px solid #161b22;
+  border-bottom: 1px solid var(--line);
 }
 
-td.num,
-th.num {
+/*
+ * Числа — это содержимое таблицы, поэтому набраны почти белым, а не серым.
+ * tabular-nums обязателен: без него разряд при перерисовке сортировки
+ * «прыгает», и колонку невозможно читать вертикальным взглядом.
+ */
+td.num {
   text-align: right;
+  color: var(--text);
   font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
-  color: var(--bone-dim);
+}
+td.num.quiet {
+  color: var(--text-2);
 }
 
-/* Ячейка юнита: тир-пластина, имя, метка чувствительности. */
+/* Ячейка юнита прижата к левому краю при горизонтальной прокрутке. */
 th.unit-cell {
   position: sticky;
   left: 0;
-  z-index: 2;
-  background: var(--void);
+  z-index: 4;
+  background: var(--bg);
   border-right: 1px solid var(--line);
-}
-tbody tr:nth-child(odd) th.unit-cell {
-  background: #0a0d11;
-}
-tbody tr:hover th.unit-cell {
-  background: var(--iron-3);
 }
 
 .unit-name {
@@ -431,15 +404,15 @@ tbody tr:hover th.unit-cell {
   padding: 0;
   border: 0;
   background: none;
-  color: var(--bone);
+  color: var(--text);
   font-family: inherit;
-  font-size: 12.5px;
+  font-size: 13px;
   font-weight: 500;
   text-align: left;
   cursor: pointer;
 }
 .unit-name:hover {
-  color: var(--brass);
+  color: var(--accent);
   text-decoration: underline;
   text-underline-offset: 3px;
 }
@@ -448,64 +421,131 @@ tbody tr:hover th.unit-cell {
 }
 
 /*
- * Пластина тира со срезом угла.
+ * Пластина тира: единственный насыщенный элемент строки.
  *
- * Цвет тира — единственный яркий акцент на странице, поэтому он держится на
- * заливке, а не на рамке: иначе 1093 пластины превратили бы таблицу в рябь.
+ * Размер достаточен, чтобы считаться боковым зрением, но буква не наезжает на
+ * соседние колонки. Срез угла убран — на 20px он читался как артефакт.
  */
 .tier-badge {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-width: 22px;
+  width: 20px;
   height: 20px;
-  margin-right: 8px;
-  padding: 0 6px 0 8px;
-  background: var(--tier-d);
-  color: #0a0d11;
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 600;
-  clip-path: polygon(5px 0, 100% 0, 100% calc(100% - 5px), calc(100% - 5px) 100%, 0 100%, 0 5px);
+  line-height: 1;
 }
-.tier-badge[data-tier='S'] { background: var(--tier-s); color: #fff; }
-.tier-badge[data-tier='A'] { background: var(--tier-a); }
-.tier-badge[data-tier='B'] { background: var(--tier-b); }
-.tier-badge[data-tier='C'] { background: var(--tier-c); }
-.tier-badge[data-tier='D'] { background: var(--tier-d); }
+.tier-badge[data-tier='S'] { color: #0b0e13; background: var(--tier-s); }
+.tier-badge[data-tier='A'] { color: #0b0e13; background: var(--tier-a); }
+.tier-badge[data-tier='B'] { color: #0b0e13; background: var(--tier-b); }
+.tier-badge[data-tier='C'] { color: #0b0e13; background: var(--tier-c); }
+.tier-badge[data-tier='D'] { color: #12151a; background: var(--tier-d); }
 button.tier-badge {
-  appearance: none;
-  border: 0;
-  cursor: pointer;
+
+/* ─────────────────────────  Полосы по тирам  ───────────────────────── */
+
+/*
+ * Главное отличие от прежней версии: тир стал структурой, а не украшением.
+ *
+ * Раньше ранг жил маленькой пластиной среди серых чисел, и на 1093 строках
+ * глаз не мог считать список — а тирлист существует именно ради того, чтобы
+ * его прочитать взглядом сверху вниз. Теперь юниты собраны в блоки по тиру:
+ * у блока своя подложка, сплошной рельс слева и липкая метка, поэтому границы
+ * рангов видны при беглом просмотре, не читая ни одной цифры.
+ *
+ * Полоса — это строки внутри ОДНОЙ таблицы, а не отдельная таблица на тир:
+ * иначе шапка из шестнадцати колонок повторилась бы пять раз.
+ */
+
+tbody tr[data-band] {
+  --band-tint: var(--tint-d);
 }
-button.tier-badge:hover {
-  filter: brightness(1.2);
+tbody tr[data-band='S'] { --band-tint: var(--tint-s); }
+tbody tr[data-band='A'] { --band-tint: var(--tint-a); }
+tbody tr[data-band='B'] { --band-tint: var(--tint-b); }
+tbody tr[data-band='C'] { --band-tint: var(--tint-c); }
+tbody tr[data-band='D'] { --band-tint: var(--tint-d); }
+
+tbody tr[data-band] > td,
+tbody tr[data-band] > th.unit-cell {
+  background: var(--band-tint);
 }
-button.tier-badge:disabled {
-  cursor: default;
+/* Рельс полосы: единая вертикальная линия цвета тира вдоль всего блока. */
+tbody tr[data-band] > th.unit-cell {
+  box-shadow: inset var(--rail) 0 0 var(--band-rail);
+}
+tbody tr[data-band='S'] { --band-rail: var(--tier-s); }
+tbody tr[data-band='A'] { --band-rail: var(--tier-a); }
+tbody tr[data-band='B'] { --band-rail: var(--tier-b); }
+tbody tr[data-band='C'] { --band-rail: var(--tier-c); }
+tbody tr[data-band='D'] { --band-rail: var(--tier-d); }
+
+tbody tr[data-band]:hover > td,
+tbody tr[data-band]:hover > th.unit-cell {
+  background: rgba(255, 255, 255, 0.055);
 }
 
-.tag {
-  display: inline-block;
-  margin-left: 8px;
-  padding: 1px 6px;
-  border: 1px solid var(--line-2);
-  border-radius: 2px;
-  color: var(--bone-faint);
+/* Метка блока липкая: в длинном блоке тир не должен теряться при прокрутке. */
+tr.tier-head-row > th {
+  position: sticky;
+  top: 89px;
+  z-index: 6;
+  padding: 8px 12px;
+  background: var(--bg-raised);
+  border-top: 1px solid var(--line-2);
+  border-bottom: 1px solid var(--line);
+  text-align: left;
+  font-weight: 600;
+}
+tr.tier-head-row[data-tier='S'] { --band: var(--tier-s); }
+tr.tier-head-row[data-tier='A'] { --band: var(--tier-a); }
+tr.tier-head-row[data-tier='B'] { --band: var(--tier-b); }
+tr.tier-head-row[data-tier='C'] { --band: var(--tier-c); }
+tr.tier-head-row[data-tier='D'] { --band: var(--tier-d); }
+
+.tier-band-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.tier-letter {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  background: var(--band);
+  color: #0b0e13;
   font-family: var(--font-mono);
-  font-size: 9.5px;
-  letter-spacing: 0.08em;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1;
 }
 
-/* Неустойчивый ранг: зависит от допущения о размере эталонных целей. */
-.tag.sens-mark {
-  background: rgba(232, 163, 61, 0.14);
-  border-color: rgba(232, 163, 61, 0.45);
-  color: var(--tier-a);
+.tier-band-title {
+  color: var(--band);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.11em;
+  text-transform: uppercase;
 }
 
-.bar {
-  position: relative;
+.tier-band-count {
+  color: var(--text-3);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Линейка до края: показывает, что блок чем-то закончится. */
+.tier-band-rule {
+  flex: 1;
+  height: 1px;
+  background: linear-gradient(90deg, var(--line-2), transparent);
+}
 
 /* ─────────────────────────  Модальное окно  ───────────────────────── */
 
@@ -516,19 +556,18 @@ button.tier-badge:disabled {
   display: flex;
   align-items: flex-start;
   justify-content: center;
-  padding: 5vh 16px;
-  background: rgba(4, 6, 9, 0.82);
-  animation: fade-in 140ms ease;
+  padding: 4vh 16px;
+  background: rgba(5, 7, 10, 0.78);
 }
 
 .dialog {
-  width: min(1080px, 100%);
-  max-height: 90vh;
+  width: min(1100px, 100%);
+  max-height: 92vh;
   overflow-y: auto;
-  background: var(--iron);
+  background: var(--bg-panel);
   border: 1px solid var(--line-2);
-  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.6);
-  animation: rise 180ms cubic-bezier(0.2, 0.8, 0.3, 1);
+  border-radius: 6px;
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.55);
 }
 .dialog:focus {
   outline: none;
@@ -537,28 +576,28 @@ button.tier-badge:disabled {
 .dialog-head {
   position: sticky;
   top: 0;
-  z-index: 2;
+  z-index: 3;
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
   gap: 16px;
-  padding: 20px 24px 16px;
-  background: linear-gradient(180deg, var(--iron-2), var(--iron));
+  padding: 16px 22px;
+  background: var(--bg-raised);
   border-bottom: 1px solid var(--line-2);
 }
 .dialog-head h2 {
   margin: 0;
   font-family: var(--font-display);
   font-size: 22px;
-  font-weight: 600;
-  letter-spacing: 0.02em;
+  font-weight: 700;
+  line-height: 1.15;
 }
 .dialog-sub {
   margin: 0;
-  padding: 10px 24px 0;
-  color: var(--bone-faint);
+  padding: 12px 22px 0;
+  color: var(--text-3);
   font-family: var(--font-mono);
-  font-size: 11.5px;
+  font-size: 12px;
 }
 
 .close {
@@ -567,90 +606,56 @@ button.tier-badge:disabled {
   height: 32px;
   background: transparent;
   border: 1px solid var(--line-2);
-  border-radius: 2px;
-  color: var(--bone-dim);
-  font-size: 14px;
-  line-height: 1;
-  cursor: pointer;
-}
-.close:hover {
-  border-color: var(--tier-s);
-  color: var(--tier-s);
-}
-
-.dialog-body {
-  padding: 4px 24px 24px;
-}
-.dialog-body section {
-  padding: 20px 0;
-  border-bottom: 1px solid var(--line);
-}
-.dialog-body section:last-child {
-  border-bottom: 0;
-}
-
-.dialog-body h3 {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  margin: 0 0 4px;
-  font-family: var(--font-display);
-  font-size: 15px;
-  font-weight: 600;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: var(--bone);
-}
-/* Линейка с ромбом: заголовок отделяется от данных, а не висит над ними. */
-.dialog-body h3::after {
+  border-radius: 4px;
+  color: var(--text-2);
 
 /* ─────────────────────────  Секции и плитки  ───────────────────────── */
 
 .metrics {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(168px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(172px, 1fr));
   gap: 8px;
-  margin: 14px 0;
+  margin: 12px 0 0;
 }
 .metric {
   padding: 10px 12px;
-  background: var(--void);
+  background: var(--bg);
   border: 1px solid var(--line);
-  border-left: 2px solid var(--brass-dim);
+  border-radius: 4px;
 }
 .metric .k {
-  color: var(--bone-faint);
-  font-family: var(--font-mono);
-  font-size: 9.5px;
-  letter-spacing: 0.12em;
+  color: var(--text-3);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.07em;
   text-transform: uppercase;
 }
 .metric .v {
   display: flex;
   align-items: baseline;
   gap: 7px;
-  margin-top: 3px;
+  margin-top: 4px;
+  color: var(--text);
   font-family: var(--font-mono);
-  font-size: 19px;
+  font-size: 20px;
   font-variant-numeric: tabular-nums;
-  color: var(--bone);
+  line-height: 1.2;
 }
 .metric .v small {
-  color: var(--bone-faint);
-  font-size: 10.5px;
+  color: var(--text-3);
+  font-size: 11px;
 }
 
-/* Строка «название — полоса — число» для разбивок урона и живучести. */
 .breakdown-row {
   display: grid;
   grid-template-columns: minmax(140px, 220px) 1fr auto;
   align-items: center;
-  gap: 10px;
-  padding: 4px 0;
-  font-size: 12.5px;
+  gap: 12px;
+  padding: 5px 0;
+  font-size: 13px;
 }
 .breakdown-row .bk {
-  color: var(--bone-dim);
+  color: var(--text-2);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -660,7 +665,8 @@ button.tier-badge:disabled {
   margin: 0;
 }
 .breakdown-row .bv {
-  min-width: 48px;
+  min-width: 50px;
+  color: var(--text);
   font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
   text-align: right;
@@ -670,45 +676,50 @@ button.tier-badge:disabled {
 table.matrix {
   margin-top: 12px;
   border: 1px solid var(--line);
+  border-radius: 4px;
+  border-collapse: separate;
+  border-spacing: 0;
+  overflow: hidden;
 }
 table.matrix th {
-  padding: 8px 10px;
-  color: var(--bone-faint);
-  font-family: var(--font-mono);
-  font-size: 10px;
-  font-weight: 500;
-  letter-spacing: 0.1em;
+  padding: 8px 12px;
+  color: var(--text-3);
+  background: var(--bg-raised);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.07em;
   text-transform: uppercase;
   text-align: left;
-  border-bottom: 1px solid var(--line);
+  border-bottom: 1px solid var(--line-2);
 }
 table.matrix td {
-  padding: 8px 10px;
-  border-bottom: 1px solid #161b22;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--line);
 }
 table.matrix td.current {
-  background: rgba(200, 168, 107, 0.1);
+  background: rgba(127, 178, 229, 0.12);
 }
 table.matrix .cell-total {
   display: block;
-  margin-top: 2px;
-  color: var(--bone-faint);
+  margin-top: 3px;
+  color: var(--text-3);
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: 11px;
   font-variant-numeric: tabular-nums;
 }
 
 .util-group {
-  margin-top: 12px;
+  margin-top: 14px;
 }
 .util-group h4 {
-  margin: 0 0 7px;
-  font-size: 12px;
+  margin: 0 0 8px;
+  color: var(--text-2);
+  font-size: 12.5px;
   font-weight: 600;
 }
 .util-group .muted {
   font-weight: 400;
-  color: var(--bone-faint);
+  color: var(--text-3);
 }
 .flags {
   display: flex;
@@ -717,24 +728,75 @@ table.matrix .cell-total {
 }
 .flag {
   display: block;
-  padding: 4px 9px;
-  background: var(--void);
-  border: 1px solid var(--line);
-  border-radius: 2px;
-  color: var(--bone-dim);
-  font-size: 11.5px;
+  padding: 5px 10px;
+  background: var(--bg);
+  border: 1px solid var(--line-2);
+  border-radius: 4px;
+  color: var(--text-2);
+  font-size: 12px;
 }
 .flag b {
-  color: var(--bone);
+  color: var(--text);
+  font-weight: 600;
 }
 
 /* Стратегический флаг — единственный, что двигает тир: выделяем его. */
 .flag-strategic {
-  border-color: var(--brass-dim);
+  border-color: var(--line-3);
+  background: var(--bg-raised);
 }
-/* Маркер архетипа (OC 3+, Move 10", FLY) — видно, но в скоре не участвует. */
+
+/*
+ * Архетипный и учтённый флаги различаются только приглушением, без рамки:
+ * пунктир и точки на мелком кегле превращались в рябь, которая ничего
+ * не кодировала, а просто мешала.
+ */
 .flag-archetype {
-  border-style: dashed;
+  border-color: var(--line);
+  color: var(--text-3);
+}
+.flag-modeled {
+  border-color: var(--line);
+  color: var(--text-4);
+}
+
+.weapon-card {
+  margin-top: 8px;
+  padding: 11px 13px;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+}
+.whead {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+.whead .name {
+  color: var(--text);
+  font-weight: 500;
+}
+.profile {
+  color: var(--text-3);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+}
+.weapon-keywords {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 8px;
+}
+.weapon-keyword {
+  padding: 2px 7px;
+  background: var(--bg-raised);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  color: var(--text-2);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+}
 
 /* ─────────────────────────  Анимация  ───────────────────────── */
 
@@ -742,37 +804,22 @@ table.matrix .cell-total {
   from { opacity: 0; }
 }
 @keyframes rise {
-  from { opacity: 0; transform: translateY(12px); }
+  from { opacity: 0; transform: translateY(10px); }
 }
 
-/*
- * Появление первых строк лесенкой.
- *
- * Задержка ограничена 14 строками: на 1093 юнитах неограниченная лесенка
- * растянула бы появление на полминуты, и сайт выглядел бы сломанным.
- */
+.backdrop {
+  animation: fade-in 120ms ease;
+}
+.dialog {
+  animation: rise 160ms cubic-bezier(0.2, 0.8, 0.3, 1);
+}
+
 @media (prefers-reduced-motion: no-preference) {
-  #table-wrap tbody tr {
-    animation: rise 260ms ease both;
+  .tier-group {
+    animation: rise 220ms ease both;
   }
-  #table-wrap tbody tr:nth-child(1) { animation-delay: 0ms; }
-  #table-wrap tbody tr:nth-child(2) { animation-delay: 14ms; }
-  #table-wrap tbody tr:nth-child(3) { animation-delay: 28ms; }
-  #table-wrap tbody tr:nth-child(4) { animation-delay: 42ms; }
-  #table-wrap tbody tr:nth-child(5) { animation-delay: 56ms; }
-  #table-wrap tbody tr:nth-child(6) { animation-delay: 70ms; }
-  #table-wrap tbody tr:nth-child(7) { animation-delay: 84ms; }
-  #table-wrap tbody tr:nth-child(8) { animation-delay: 98ms; }
-  #table-wrap tbody tr:nth-child(9) { animation-delay: 112ms; }
-  #table-wrap tbody tr:nth-child(10) { animation-delay: 126ms; }
-  #table-wrap tbody tr:nth-child(11) { animation-delay: 140ms; }
-  #table-wrap tbody tr:nth-child(12) { animation-delay: 154ms; }
-  #table-wrap tbody tr:nth-child(13) { animation-delay: 168ms; }
-  #table-wrap tbody tr:nth-child(14) { animation-delay: 182ms; }
-  #table-wrap tbody tr:nth-child(n + 15) { animation-delay: 196ms; }
 }
 
-/* Уважение к настройке системы: без анимаций вообще. */
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
@@ -785,17 +832,23 @@ table.matrix .cell-total {
 
 /* ─────────────────────────  Узкие экраны  ───────────────────────── */
 
-@media (max-width: 860px) {
+@media (max-width: 900px) {
   .masthead,
   .controls,
   .status {
     padding-left: 16px;
     padding-right: 16px;
   }
+  h1 {
+    font-size: 27px;
+  }
   .controls {
     position: static;
   }
-  thead th {
+  #table-wrap thead th {
+    top: 0;
+  }
+  .tier-band-head {
     top: 0;
   }
   .dialog-body {
@@ -808,112 +861,132 @@ table.matrix .cell-total {
   th.unit-cell {
     position: static;
   }
-  .readout {
-    gap: 10px 18px;
-  }
 }
 
-  opacity: 0.75;
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
 }
-/* Уже смоделировано в бою (FNP, Stealth) — вторично платить нельзя. */
-.flag-modeled {
-  border-style: dotted;
-  opacity: 0.55;
-}
-
-.weapon-card {
-  margin-top: 8px;
-  padding: 11px 13px;
-  background: var(--void);
-  border: 1px solid var(--line);
-}
-.whead {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 12px;
-}
-.whead .name {
-  font-weight: 500;
-}
-.profile {
-  color: var(--bone-faint);
-  font-family: var(--font-mono);
-  font-size: 11px;
-}
-.weapon-keywords {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-  margin-top: 7px;
-}
-.weapon-keyword {
-  padding: 1px 6px;
-  background: var(--iron-3);
-  border-radius: 2px;
-  color: var(--brass);
-  font-family: var(--font-mono);
-  font-size: 10px;
+.close:hover {
+  border-color: var(--tier-s);
+  color: var(--tier-s);
 }
 
-  content: '';
-  flex: 1;
-  height: 1px;
-  background: linear-gradient(90deg, var(--line-2), transparent);
+.dialog-body {
+  padding: 4px 22px 22px;
 }
-.dialog-body h3::before {
-  content: '';
-  order: 3;
-  flex: none;
-  width: 6px;
-  height: 6px;
-  background: var(--brass-dim);
-  transform: rotate(45deg);
+
+.dialog-body section {
+  padding: 20px 0;
+  border-bottom: 1px solid var(--line);
+}
+.dialog-body section:last-child {
+  border-bottom: 0;
+}
+
+/* Заголовок секции — спокойная надпись, а не украшение. */
+.dialog-body h3 {
+  margin: 0 0 3px;
+  color: var(--text-2);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+}
+.dialog-body section > .hint {
+  margin: 0 0 12px;
 }
 
 .loading-note,
 .error {
-  padding: 32px 0;
+  padding: 40px 0;
   text-align: center;
 }
 .error {
   color: var(--tier-s);
 }
 
+// __CSS4__
+
+  appearance: none;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+}
+button.tier-badge:hover {
+  filter: brightness(1.12);
+}
+button.tier-badge:disabled {
+  cursor: default;
+}
+
+.tag {
   display: inline-block;
-  width: 44px;
-  height: 5px;
-  margin-right: 7px;
+  margin-left: 8px;
+  padding: 1px 6px;
+  border: 1px solid var(--line-2);
+  border-radius: 3px;
+  color: var(--text-3);
+  font-size: 10.5px;
+  letter-spacing: 0.03em;
+}
+
+/* Неустойчивый ранг: зависит от допущения о размере эталонных целей. */
+.tag.sens-mark {
+  background: rgba(255, 171, 77, 0.12);
+  border-color: rgba(255, 171, 77, 0.42);
+  color: var(--tier-a);
+}
+
+.bar {
+  position: relative;
+  display: inline-block;
+  width: 38px;
+  height: 4px;
+  margin-right: 8px;
   vertical-align: middle;
-  background: var(--iron-3);
-  border-radius: 1px;
+  background: var(--line-2);
+  border-radius: 2px;
   overflow: hidden;
 }
 .bar > i {
   position: absolute;
   inset: 0 auto 0 0;
-  background: var(--brass-dim);
-  border-right: 1px solid var(--brass);
+  background: var(--accent);
+  border-radius: 2px;
 }
 
 .empty {
-  padding: 48px 28px;
-  color: var(--bone-dim);
+  padding: 56px 28px;
+  color: var(--text-2);
   text-align: center;
 }
 .hint {
-  color: var(--bone-faint);
-  font-size: 12px;
+  color: var(--text-3);
+  font-size: 12.5px;
 }
 code {
   padding: 1px 5px;
-  background: var(--iron-3);
-  border-radius: 2px;
+  background: var(--bg-raised);
+  border: 1px solid var(--line-2);
+  border-radius: 3px;
   font-family: var(--font-mono);
   font-size: 12px;
 }
 
-  font-size: 11.5px;
-  letter-spacing: 0.04em;
+  gap: 4px 14px;
+  margin: 0;
+  padding: 9px 28px;
+  background: var(--bg-panel);
+  border-bottom: 1px solid var(--line);
+  color: var(--text-2);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
 }
 
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+// __CSS2__

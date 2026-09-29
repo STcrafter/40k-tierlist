@@ -66,6 +66,15 @@ const state = {
   sortKey: 'totalScore',
   sortDesc: true,
   view: 'units' as 'units' | 'attached',
+  /**
+   * Раскладка списка юнитов.
+   *
+   * `bands` — полосы по тирам, режим по умолчанию. Тирлист читают ради ранга,
+   * а в сплошной таблице ранг терялся среди шестнадцати колонок чисел.
+   * `flat` остаётся для сравнения «у кого наибольший норм. урон», где
+   * перескакивать между тирами нужно намеренно.
+   */
+  grouping: 'bands' as 'bands' | 'flat',
   /** Открытая панель деталей: id юнита, сама запись и статус загрузки. */
   open: null as { id: string; detail: UnitDetail | null; error: string | null } | null,
 };
@@ -307,16 +316,20 @@ function compareAttached(a: AttachedRow, b: AttachedRow, key: string): number {
  */
 function mountShell(app: HTMLElement): void {
   app.innerHTML = `
-    <div class="grain" aria-hidden="true"></div>
     <header class="masthead">
-      <p class="eyebrow">Аналитический расчёт · 11-я редакция</p>
-      <h1>Тирлист 40K</h1>
+      <div class="masthead-top">
+        <div>
+          <p class="eyebrow">Аналитический расчёт · Warhammer 40,000</p>
+          <h1>Тирлист</h1>
+        </div>
+        <dl class="readout" id="readout"></dl>
+      </div>
       <p class="subtitle">
         Все числа посчитаны движком сборки: нормы, Total и тир приходят готовыми.
-        Клик по юниту открывает разбор — тир по всем видам боя, из чего сложились
-        урон и живучесть, и вклад каждой способности.
+        Клик по юниту открывает разбор — тир по всем двенадцати сочетаниям
+        «парадигма цели × режим боя», из чего сложились урон и живучесть, и вклад
+        каждой способности.
       </p>
-      <dl class="readout" id="readout"></dl>
     </header>
     <div class="controls" id="controls"></div>
     <p class="status" id="status" role="status" aria-live="polite"></p>
@@ -348,6 +361,13 @@ function mountControls(app: HTMLElement): void {
       <div class="segmented" role="group" aria-labelledby="label-view">
         <button type="button" data-view="units" aria-pressed="false">Юниты</button>
         <button type="button" data-view="attached" aria-pressed="false">С лидером</button>
+      </div>
+    </div>
+    <div class="control">
+      <span class="control-label" id="label-grouping">Раскладка</span>
+      <div class="segmented" role="group" aria-labelledby="label-grouping">
+        <button type="button" data-grouping="bands" aria-pressed="false">По тирам</button>
+        <button type="button" data-grouping="flat" aria-pressed="false">Сплошной</button>
       </div>
     </div>
     <div class="control">
@@ -393,6 +413,7 @@ function syncControls(app: HTMLElement): void {
     }
   };
   mark('[data-view]', (el) => el.dataset.view === state.view);
+  mark('[data-grouping]', (el) => el.dataset.grouping === state.grouping);
   mark('[data-mode]', (el) => el.dataset.mode === state.mode);
   mark('[data-paradigm]', (el) => el.dataset.paradigm === state.targetParadigm);
   mark('[data-tier-only]', (el) => state.tierFilter.has(el.dataset.tierOnly as Tier));
@@ -413,7 +434,9 @@ function renderStatus(app: HTMLElement): void {
       : cellOf(row as UnitIndexEntry, state.targetParadigm, state.mode)?.tier;
     if (tier !== undefined) counts[tier] = (counts[tier] ?? 0) + 1;
   }
-  const parts = TIERS.map((tier) => `${tier}:${counts[tier] ?? 0}`).join('  ·  ');
+  const parts = TIERS.map(
+    (tier) => `${tier} ${counts[tier] ?? 0}`
+  ).join('   ');
   const section = attached ? 'Отряды с лидерами' : 'Юниты';
   status.textContent = `${section} · ${MODE_LABELS[state.mode]} · ${PARADIGM_LABELS[state.targetParadigm]} · ${parts} · всего ${rows.length}`;
 }
@@ -468,7 +491,8 @@ function renderTable(app: HTMLElement): void {
   }
 
   const head = COLUMNS.map((column) => sortHeader(column.key, column.title, column.numeric, column.hint)).join('');
-  const body = units.map((unit) => {
+
+  const rowFor = (unit: UnitIndexEntry, band: Tier | null): string => {
     const tier = cellOf(unit, state.targetParadigm, state.mode)?.tier ?? 'D';
     const cells = COLUMNS.filter((column) => column.key !== 'name')
       .map((column) => {
@@ -481,7 +505,10 @@ function renderTable(app: HTMLElement): void {
         return `<td class="${column.numeric ? 'num' : ''}">${text}</td>`;
       })
       .join('');
-    return `<tr>
+    // В сплошном режиме полосы нет, поэтому и подложки нет: иначе весь список
+    // получил бы тон тира D и выглядел бы как один блок.
+    const bandAttr = band === null ? '' : ` data-band="${band}"`;
+    return `<tr${bandAttr}>
       <th scope="row" class="unit-cell">
         <button type="button" class="tier-badge" data-tier="${tier}" data-open="${unit.id}" title="Открыть разбор юнита">${tier}</button>
         <button type="button" class="unit-name" data-open="${unit.id}">${esc(unit.name)}</button>
@@ -489,13 +516,43 @@ function renderTable(app: HTMLElement): void {
       </th>
       ${cells}
     </tr>`;
-  }).join('');
+  };
+
+  const body = state.grouping === 'flat'
+    ? units.map((unit) => rowFor(unit, null)).join('')
+    : TIERS.flatMap((tier) => {
+        // Порядок внутри полосы задаётся текущей сортировкой: сортировка по
+        // Total внутри S и внутри D означает разное, и это полезно.
+        const rows = units.filter((unit) => cellOf(unit, state.targetParadigm, state.mode)?.tier === tier);
+        if (rows.length === 0) return [];
+        return [
+          `<tr class="tier-head-row" data-tier="${tier}"><th colspan="${COLUMNS.length}">
+            <span class="tier-band-head">
+              <span class="tier-letter" aria-hidden="true">${tier}</span>
+              <span class="tier-band-title">Тир ${tier}</span>
+              <span class="tier-band-count">${rows.length} ${plural(rows.length, 'юнит', 'юнита', 'юнитов')}</span>
+              <span class="tier-band-rule" aria-hidden="true"></span>
+            </span>
+          </th></tr>`,
+          ...rows.map((unit) => rowFor(unit, tier)),
+        ];
+      }).join('');
 
   host.innerHTML = `<table>
     <caption class="sr-only">Тирлист юнитов: сортировка кликом по заголовку, детали по клику на название</caption>
     <thead><tr>${head}</tr></thead>
     <tbody>${body}</tbody>
   </table>`;
+}
+
+/** Русское склонение по числу: «1 юнит», «2 юнита», «5 юнитов». */
+function plural(count: number, one: string, few: string, many: string): string {
+  const mod100 = Math.abs(count) % 100;
+  if (mod100 >= 11 && mod100 <= 14) return many;
+  const mod10 = count % 10;
+  if (mod10 === 1) return one;
+  if (mod10 >= 2 && mod10 <= 4) return few;
+  return many;
 }
 
 /** Пометка неустойчивого тира: она меняет доверие к строке, а не значение. */
@@ -1046,6 +1103,13 @@ function bindEvents(app: HTMLElement): void {
     const viewButton = target.closest<HTMLElement>('[data-view]');
     if (viewButton?.dataset.view !== undefined) {
       void switchView(app, viewButton.dataset.view as 'units' | 'attached');
+      return;
+    }
+
+    const groupingButton = target.closest<HTMLElement>('[data-grouping]');
+    if (groupingButton?.dataset.grouping !== undefined) {
+      state.grouping = groupingButton.dataset.grouping as 'bands' | 'flat';
+      render(app);
       return;
     }
 
