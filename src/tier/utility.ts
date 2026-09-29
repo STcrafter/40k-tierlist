@@ -96,6 +96,14 @@ export const UTILITY_CATEGORY: Record<UtilityFlagId, UtilityCategory> = {
   Sororitas_Castigator: 'strategic',
   Sororitas_Exorcist: 'strategic',
   Sororitas_Penitent_Engines: 'strategic',
+  Custodes_Blade_Champion: 'strategic',
+  Custodes_Knight_Centura: 'strategic',
+  Custodes_Aleya: 'strategic',
+  Custodes_Shield_Captain: 'strategic',
+  Custodes_Shield_Captain_Allarus: 'strategic',
+  Custodes_Shield_Captain_Dawneagle: 'strategic',
+  Custodes_Allarus: 'strategic',
+  Custodes_Aquilon: 'strategic',
 };
 
 /** Флаги, которые реально входят в итоговый скор. */
@@ -161,6 +169,14 @@ export const UTILITY_POINTS: Record<UtilityFlagId, number> = {
   Sororitas_Castigator: 1,
   Sororitas_Exorcist: 1,
   Sororitas_Penitent_Engines: 2,
+  Custodes_Blade_Champion: 3,
+  Custodes_Knight_Centura: 3,
+  Custodes_Aleya: 1,
+  Custodes_Shield_Captain: 1,
+  Custodes_Shield_Captain_Allarus: 1,
+  Custodes_Shield_Captain_Dawneagle: 2,
+  Custodes_Allarus: 1,
+  Custodes_Aquilon: 1,
 };
 
 /** Потолок utility_score. */

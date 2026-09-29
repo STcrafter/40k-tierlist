@@ -116,6 +116,18 @@ export interface CombatModel {
    * (Hospitaller); у Ministorum Priest при Sanctifiers — D3, то есть 3.
    */
   reviveCount?: number;
+  /**
+   * Потолок инстансов урона за раунд, который модель принимает суммарно.
+   *
+   * Shield-Captain in Allarus: «все получаемые инстансы урона за раунд
+   * сводятся к 1». Это правило о счёте инстансов, а не о количестве ран, поэтому
+   * его нельзя выразить через FNP (тот невелирует урон, но не сокращает
+   * число инстансов) и тем более через invuln.
+   *
+   * null — ограничения нет. Одноразовость задаётся отдельно: см.
+   * `onceDamageCap` в ручном слое.
+   */
+  damageCapPerRound?: number | null;
   keywords: string[];
   weapons: CombatWeapon[];
 }

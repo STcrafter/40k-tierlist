@@ -45,6 +45,55 @@ function target(models: number, toughness: number, wounds: number, save: number 
   return targetUnitOf(weakestInfantry, { models, toughness, wounds, save });
 }
 
+/**
+ * Потолок инстансов урона за раунд (Shield-Captain in Allarus).
+ *
+ * Проверяется именно «за раунд»: счётчик обязан обнуляться в начале раунда,
+ * иначе способность превратилась бы в бессрочный щит и тирлист вёл бы себя
+ * неверно. Отдельно проверяется, что потолок считается по инстансам, а не по
+ * ранам: одна атака на 3 урона под потолком 1 должна снять 1 рану.
+ */
+describe('потолок инстансов урона за раунд', () => {
+  /** Модель T6/W3/Sv 7 — проходит любой сейв, чтобы тест не зависел от бросков. */
+  function capped(models: number, cap: number | null): CombatUnit {
+    const base = target(models, 6, 3, 7);
+    return {
+      ...base,
+      models: base.models.map((model) => ({ ...model, damageCapPerRound: cap })),
+    };
+  }
+
+  it('ограничивает урон за раунд до указанного числа инстансов', () => {
+    const attacker = weaponUnitOf(weaponById('assault-cannon'));
+    // Потолок 1: сколько бы атакующий ни бил, цель теряет за раунд 1 рану.
+    const state = createDefenderState(capped(3, 1));
+    const opts = resolveCombatOptions({ rng: () => 0.5 });
+    simulateRound(attacker, state, opts);
+    expect(state.damage).toBe(1);
+  });
+
+  it('не ограничивает модель, у которой потолка нет', () => {
+    const attacker = weaponUnitOf(weaponById('assault-cannon'));
+    const state = createDefenderState(capped(3, null));
+    const opts = resolveCombatOptions({ rng: () => 0.5 });
+    simulateRound(attacker, state, opts);
+    expect(state.damage).toBeGreaterThan(1);
+  });
+
+  it('сбрасывает счётчик между раундами', () => {
+    const attacker = weaponUnitOf(weaponById('assault-cannon'));
+    const state = createDefenderState(capped(3, 1));
+    const opts = resolveCombatOptions({ rng: () => 0.5 });
+    simulateRound(attacker, state, opts);
+    const afterFirst = state.damage;
+    // Второй раунд: потолок снова действует, поэтому урон прибавляется, а не
+    // обнуляется по остаточному лимиту.
+    simulateRound(attacker, state, opts);
+    expect(state.damage).toBe(afterFirst + 1);
+  });
+});
+
+
 describe('многораундовая симуляция боя', () => {
   // Бросок 4: попадает по 3+ и ранит по 4+, но НЕ проходит сейв 6+.
   // (Натуральная 6 всегда проходит сейв, поэтому rng 0.99 для этих проверок не годится.)

@@ -13,6 +13,15 @@ declare module 'node:fs' {
   export function existsSync(path: string): boolean;
   export function writeFileSync(path: string, data: string, encoding?: 'utf8'): void;
   export function mkdirSync(path: string, options?: { recursive?: boolean }): void;
+  /**
+   * Рекурсивное удаление с `force` — без `force` бросает на отсутствующем пути.
+   * Нужен пересборщику, чтобы вычищать каталог файлов юнитов перед новой
+   * выгрузкой: удалённые из BSData юниты иначе остались бы лежать на диске.
+   */
+  export function rmSync(
+    path: string,
+    options?: { recursive?: boolean; force?: boolean }
+  ): void;
 }
 
 declare module 'node:path' {

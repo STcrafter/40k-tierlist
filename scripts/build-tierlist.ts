@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Сборщик данных для веб-тирлиста.
  *
  * Считает метрики всех юнитов один раз и выгружает готовый JSON. Считать их в
@@ -13,7 +13,7 @@
  *   node scripts/build-tierlist.ts --trials=40 --out=web/public/data/tierlist.json
  */
 
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { cpus } from 'node:os';
 import { dirname, resolve } from 'node:path';
 import { fork } from 'node:child_process';
@@ -24,6 +24,7 @@ import {
   type CombatMode,
   type TargetParadigm,
 } from '../src/tier/scoring.ts';
+import { INDEX_CELL_KEYS } from '../src/tier/columns.ts';
 import { withOnceEffects } from '../src/manual/abilities.ts';
 import { emptyParadigmGrid, prepareUnits, type AttachedPayload, type TrimmedRow } from './prepare-units.ts';
 import type { ComboResult, SensitivityResult, TierJob, TierWorkerResult } from './tier-worker.ts';
@@ -93,32 +94,51 @@ const attachedByParadigm = emptyParadigmGrid(
 );
 
 /**
- * Дельта одноразовых способностей: «сколько очков стоит бафф».
+ * Дельты одноразовых способностей: «сколько стоит бафф» по урону и по живучести.
  *
  * Считается двумя прогонами по одним и тем же шаблонным целям: с
  * включёнными одноразовыми эффектами и без них. Разница и есть дельта.
  *
- * Результат — справочный: в тир и норму урона он не попадает, потому что
+ * Выживаемость меряется отдельно от урона, и это не дублирование: способности
+ * делятся на два класса, которые видны в разных величинах. Боевые (Trajann,
+ * повторный залп Custodian Guard) проявляются в `rawMaxDamage`, а защитные
+ * (Allarus-щит) — в `effectiveSurvivability`, и в сумме они дают полную картину
+ * цены способности. Раньше считался только урон, поэтому Allarus-щит и Trajann
+ * выглядели в отчёте одинаково пустыми, хотя стоят противоположного.
+ *
+ * Обе дельты — справочные: в тир и нормы они не попадают, потому что
  * «once per battle» не действует постоянно. У юнитов без таких способностей
- * (а их подавляющее большинство) дельта равна 0, и прогоны не выполняются
- * вовсе — иначе сборка платила бы лишний Monte-Carlo на каждого юнита.
+ * (а их подавляющее большинство) прогоны не выполняются вовсе — иначе сборка
+ * платила бы лишний Monte-Carlo на каждого юнита.
  */
-function onceEffectDeltaOf(datasheet: BsDatasheet, unit: CombatUnit, points: number): number {
+interface OnceEffectDeltas {
+  damage: number;
+  survivability: number;
+}
+
+function onceEffectDeltasOf(
+  datasheet: BsDatasheet,
+  unit: CombatUnit,
+  points: number
+): OnceEffectDeltas {
   const boosted = withOnceEffects(unit);
-  // Нет эффекта — тот же объект, дельта нулевая по построению.
-  if (boosted === unit) return 0;
+  // Нет эффекта — тот же объект, дельты нулевые по построению.
+  if (boosted === unit) return { damage: 0, survivability: 0 };
 
   const options = { mode: 'combined' as const, targetParadigm: 'all' as const };
-  // Считается для единиц юнитов, но дельта — справочная величина: сбой
+  // Считается для единиц юнитов, но дельты — справочные величины: сбой
   // расчёта не должен ронять всю сборку тирлиста, поэтому перехватываем.
   try {
     const plain = rawScoreOf(datasheet, unit, points, options);
     const buffed = rawScoreOf(datasheet, boosted, points, options);
-    const value = buffed.rawMaxDamage - plain.rawMaxDamage;
-    return Math.round(value * 100) / 100;
+    const round2 = (value: number): number => Math.round(value * 100) / 100;
+    return {
+      damage: round2(buffed.rawMaxDamage - plain.rawMaxDamage),
+      survivability: round2(buffed.effectiveSurvivability - plain.effectiveSurvivability),
+    };
   } catch (error) {
     console.error(`  дельта не посчитана для «${datasheet.name}»:`, error);
-    return 0;
+    return { damage: 0, survivability: 0 };
   }
 }
 
@@ -250,21 +270,6 @@ const payload = {
   distance,
   modes,
   paradigms,
-  attached: Object.fromEntries(
-    paradigms.map((paradigm) => [paradigm, attachedByParadigm[paradigm]])
-  ),
-  leaders: leaders.map((leader) => ({
-    id: leader.id,
-    name: leader.name,
-    faction: leader.faction,
-    factions: leader.factions,
-    points: leader.points,
-    keywords: leader.keywords,
-    allowedUnitIds: leader.allowedUnitIds,
-    bonuses: leader.bonuses,
-    abilities: leader.abilities,
-    unit: unitProfileOf(leader.unit, leader.points),
-  })),
   factions: [...new Set(prepared.flatMap((item) => item.datasheet.factions))].sort(),
   units: prepared.map(({ datasheet, unit, points, loadouts }) => {
     const base = byParadigm.all.combined.find((row) => row.id === datasheet.id);
@@ -321,18 +326,7 @@ const payload = {
       points,
       models: unit.models.length,
       archetype: archetypeOf(unit, points)?.id ?? 'unknown',
-      /**
-       * ДЕЛЬТА ОДНОРАЗОВЫХ СПОСОБНОСТЕЙ — справочный столбец.
-       *
-       * Считается как «уничтоженные очки с одноразовым баффом минус без него»
-       * против шаблонных целей, в тех же единицах, что destroyedPointsByTarget.
-       *
-       * В расчёт тира и нормы урона она НЕ входит намеренно: способность
-       * «once per battle» не действует постоянно, и включение её в бой дало бы
-       * юниту постоянный бафф и сдвинуло бы норму для всего набора. Здесь это
-       * просто число в строке юнита, чтобы видеть цену способности глазами.
-       */
-      onceEffectDelta: onceEffectDeltaOf(datasheet, unit, points),
+      onceEffectDeltas: onceEffectDeltasOf(datasheet, unit, points),
       /**
        * Чувствительность ранга к размеру эталонных целей (±20% моделей).
        * Считается только для all/combined — это единственный вид, для которого
@@ -350,17 +344,117 @@ const payload = {
       utilityFlags: base?.utilityFlags ?? [],
       utilityScore: base?.utilityScore ?? 0,
       unit: unitProfileOf(unit, points),
-      metrics: metricsByParadigm.all as unknown as Record<CombatMode, ReturnType<typeof metricsFor>>,
+      // Алиас `metrics: metricsByParadigm.all` больше не выгружается: это были
+      // те же 4.58 МБ байт в байт, а читала их одна строка фолбэка на клиенте.
       metricsByParadigm,
       loadouts: loadoutMetrics,
     };
   }),
 };
 
-mkdirSync(dirname(outPath), { recursive: true });
-// Сериализуем ОДИН раз: файл крупный (десятки МБ), а повторный JSON.stringify
-// держал бы в памяти вторую такую же строку и мог уронить процесс на записи.
-const json = JSON.stringify(payload);
-writeFileSync(outPath, json, 'utf8');
-const sizeMb = (json.length / 1024 / 1024).toFixed(1);
-console.log(`\nГотово за ${((Date.now() - started) / 1000).toFixed(1)} с → ${outPath} (${sizeMb} МБ)`);
+const leadersPayload = leaders.map((leader) => ({
+  id: leader.id,
+  name: leader.name,
+  faction: leader.faction,
+  factions: leader.factions,
+  points: leader.points,
+  keywords: leader.keywords,
+  allowedUnitIds: leader.allowedUnitIds,
+  bonuses: leader.bonuses,
+  abilities: leader.abilities,
+  unit: unitProfileOf(leader.unit, leader.points),
+}));
+
+const attachedPayload = Object.fromEntries(
+  paradigms.map((paradigm) => [paradigm, attachedByParadigm[paradigm]])
+);
+
+/**
+ * Ячейка индекса: те же имена полей, что в полной метрике.
+ *
+ * Ключи берутся из src/tier/columns.ts — того же модуля, который читает
+ * таблица, — поэтому колонка не может остаться без данных, а тест
+ * columns.test.ts следит за равенством с обеих сторон.
+ */
+function indexCell(full: Record<string, unknown>): Record<string, unknown> {
+  const cell: Record<string, unknown> = {};
+  for (const key of INDEX_CELL_KEYS) cell[key] = full[key];
+  return cell;
+}
+
+const indexPayload = {
+  generatedAt: payload.generatedAt,
+  trials: payload.trials,
+  distance: payload.distance,
+  modes: payload.modes,
+  paradigms: payload.paradigms,
+  factions: payload.factions,
+  leaders: leadersPayload,
+  units: payload.units.map((unit) => ({
+    id: unit.id,
+    name: unit.name,
+    faction: unit.faction,
+    factions: unit.factions,
+    points: unit.points,
+    models: unit.models,
+    archetype: unit.archetype,
+    onceEffectDeltas: unit.onceEffectDeltas,
+    sensitivity: unit.sensitivity,
+    utilityFlags: unit.utilityFlags,
+    utilityScore: unit.utilityScore,
+    cells: Object.fromEntries(
+      paradigms.map((paradigm) => [
+        paradigm,
+        Object.fromEntries(
+          modes.map((mode) => [mode, indexCell(unit.metricsByParadigm[paradigm][mode] as never)])
+        ),
+      ])
+    ),
+  })),
+};
+
+/**
+ * Запись файла с отчётом о размере.
+ *
+ * Считается и несжатый размер: по нему видно, что именно разошлось по вкладкам,
+ * а не по памяти браузера.
+ */
+function writeJson(path: string, value: unknown): number {
+  mkdirSync(dirname(path), { recursive: true });
+  // Сериализуем ОДИН раз: файл крупный (десятки МБ), а повторный JSON.stringify
+  // держал бы в памяти вторую такую же строку и мог уронить процесс на записи.
+  const json = JSON.stringify(value);
+  writeFileSync(path, json, 'utf8');
+  return json.length;
+}
+
+const unitsDir = resolve(dirname(outPath), 'units');
+// Каталог пересобирается целиком: без чистки в нём копились бы файлы юнитов,
+// которых больше нет в BSData (переименование id = новый id + старый остаётся).
+rmSync(unitsDir, { recursive: true, force: true });
+mkdirSync(unitsDir, { recursive: true });
+
+const indexPath = outPath;
+const indexBytes = writeJson(indexPath, indexPayload);
+
+// Панель деталей. Один юнит — 11–27 КБ, поэтому она грузится по клику, а не
+// вместе со всем набором.
+let detailBytes = 0;
+for (const unit of payload.units) {
+  detailBytes += writeJson(resolve(unitsDir, `${unit.id}.json`), unit);
+}
+
+// Строки «юнит + лидер» нужны только во второй вкладке, а весят больше всех
+// юнитов вместе взятых, поэтому тоже вынесены в отдельный файл.
+const attachedPath = resolve(dirname(outPath), 'attached.json');
+const attachedBytes = writeJson(attachedPath, {
+  generatedAt: payload.generatedAt,
+  attached: attachedPayload,
+});
+
+const mb = (bytes: number): string => (bytes / 1024 / 1024).toFixed(2);
+const elapsed = ((Date.now() - started) / 1000).toFixed(1);
+console.log(`\nГотово за ${elapsed} с`);
+console.log(`  ${indexPath} — ${mb(indexBytes)} МБ (загружается сразу)`);
+console.log(`  ${attachedPath} — ${mb(attachedBytes)} МБ (вкладка «с лидерами»)`);
+console.log(`  ${unitsDir}/ — ${mb(detailBytes)} МБ на ${payload.units.length} юнитов (по клику)`);

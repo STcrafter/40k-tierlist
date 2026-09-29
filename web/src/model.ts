@@ -61,7 +61,7 @@ export interface UnitMetrics {
 export interface UnitProfile {
   id: string;
   name: string;
-  /** Стоимость отряда; редактируется вместе с характеристиками. */
+  /** Стоимость отряда. */
   points: number;
   keywords: string[];
   models: Array<{
@@ -91,7 +91,34 @@ export interface UnitProfile {
   }>;
 }
 
-export interface UnitEntry {
+/**
+ * Ячейка индекса — ровно те величины, что видны в строке таблицы.
+ *
+ * Собиратель отдаёт полную метрику в файле юнита, а здесь оставлено девять
+ * чисел на каждую пару «парадигма × режим». Имена полей совпадают с полными
+ * метриками, поэтому код рендера не различает источник.
+ */
+export type UnitCell = Pick<
+  UnitMetrics,
+  | 'tier'
+  | 'totalScore'
+  | 'percentile'
+  | 'rawMaxDamage'
+  | 'universal'
+  | 'damagePer100'
+  | 'effectiveSurvivability'
+  | 'absorbedPer100'
+  | 'utilityScore'
+  | 'unitType'
+  | 'normDamage'
+  | 'normSurvivability'
+  | 'normUtility'
+  | 'bestTarget'
+  | 'bestTargetName'
+>;
+
+/** Строка таблицы: всё, что нужно для отрисовки и сортировки, без деталей. */
+export interface UnitIndexEntry {
   id: string;
   name: string;
   /** Основная фракция для отображения. */
@@ -102,10 +129,20 @@ export interface UnitEntry {
   models: number;
   archetype: string;
   /**
-   * Дельта одноразовых способностей: насколько юнит дороже стал бы с
-   * одноразовым баффом. Справочное поле — в Total и норму урона не входит.
+   * Дельты одноразовых способностей — справочные величины, в Total и нормы
+   * они не входят.
+   *
+   * Две цифры, а не одна: способности делятся на классы, которые видны в разных
+   * величинах. Боевые (Trajann, повторный залп Custodian Guard) проявляются в
+   * `damage`, защитные (Allarus-щит) — в `survivability`. Одно число заставило бы
+   * складывать несравнимые сущности или молча терять половину эффектов.
    */
-  onceEffectDelta?: number;
+  onceEffectDeltas?: {
+    /** Дополнительные уничтоженные очки на 100 очков юнита. */
+    damage: number;
+    /** Дополнительные прожитые боевые фазы. */
+    survivability: number;
+  };
   /** Чувствительность тира к произвольным допущениям модели. */
   sensitivity?: {
     spread: number;
@@ -116,11 +153,31 @@ export interface UnitEntry {
   };
   utilityFlags: Array<{ id: string; points: number; reason: string; category: string }>;
   utilityScore: number;
+  cells: Record<TargetParadigm, Record<CombatMode, UnitCell>>;
+}
+
+/**
+ * Полная запись юнита — грузится по клику из `data/units/<id>.json`.
+ *
+ * Держит боевой профиль и сетку метрик по всем парадигмам: панель деталей
+ * показывает разбивку урона, живучесть, налоги и loadouts, а в индексе их нет
+ * — они весили бы 16 МБ на набор ради одного открытого юнита.
+ */
+export interface UnitDetail {
+  id: string;
+  name: string;
+  faction: string;
+  factions: string[];
+  points: number;
+  models: number;
+  archetype: string;
+  onceEffectDeltas?: { damage: number; survivability: number };
+  sensitivity?: { spread: number; high: boolean; medium: boolean; tierChangeProbability: number };
+  utilityFlags: Array<{ id: string; points: number; reason: string; category: string }>;
+  utilityScore: number;
   unit: UnitProfile;
-  metrics: Record<CombatMode, UnitMetrics>;
-  /** Метрики по каждой парадигме цели: all, infantry, elite, armor. */
-  metricsByParadigm?: Record<TargetParadigm, Record<CombatMode, UnitMetrics>>;
-  loadouts?: Array<{ id: string; name: string; points: number; unit: UnitProfile; metrics?: UnitMetrics }>;
+  metricsByParadigm: Record<TargetParadigm, Record<CombatMode, UnitMetrics>>;
+  loadouts?: Array<{ id: string; name: string; points: number; unit: UnitProfile }>;
 }
 
 export interface LeaderSummary {
@@ -155,15 +212,28 @@ export interface AttachedRow {
   utilityFlags: Array<{ id: string; points: number; reason: string }>;
 }
 
-export interface TierlistData {
+/**
+ * `data/tierlist.json` — индекс, единственный файл, который грузится сразу.
+ *
+ * Раньше здесь лежало всё, включая полные метрики по каждой паре
+ * «парадигма × режим» и строки «юнит + лидер»: 36 МБ, из которых 4.6 МБ —
+ * побайтовая копия `metricsByParadigm.all`. Теперь индекс несёт только то, что
+ * рисует таблица, а остальное едет отдельными файлами по требованию.
+ */
+export interface IndexData {
   generatedAt: string;
   trials: number;
   distance: number;
   modes: CombatMode[];
   paradigms: TargetParadigm[];
   factions: string[];
-  units: UnitEntry[];
+  units: UnitIndexEntry[];
   leaders: LeaderSummary[];
+}
+
+/** `data/attached.json` — вкладка «с лидерами», грузится при переключении. */
+export interface AttachedData {
+  generatedAt: string;
   attached: Record<TargetParadigm, Record<CombatMode, AttachedRow[]>>;
 }
 

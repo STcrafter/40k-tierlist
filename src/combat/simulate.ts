@@ -292,6 +292,14 @@ export interface DefenderState {
   damage: number;
   /** Воскрешение уже израсходовано (одноразовые способности, ручной слой). */
   resurrectUsed: boolean;
+  /**
+   * Сколько инстансов урона отряд уже принял в текущем раунде.
+   *
+   * Сбрасывается в начале каждого раунда (см. simulateRound). Нужен для
+   * `CombatModel.damageCapPerRound`: ограничение «за раунд», а не «за бой»
+   * и не «за атаку», поэтому счётчик живёт в состоянии, а не в модели.
+   */
+  damageInstancesThisRound: number;
 }
 
 /**
@@ -384,6 +392,7 @@ export function createDefenderState(
     kills: 0,
     damage: 0,
     resurrectUsed: false,
+    damageInstancesThisRound: 0,
   };
 }
 
@@ -434,6 +443,22 @@ function feelNoPain(
 }
 
 /**
+ * Потолок инстансов урона за раунд: сколько урона модель ещё может принять.
+ *
+ * Учитываются и мортиды: способность говорит про «все инстансы урона», а не
+ * про обычный урон, и Allarus-щит не делает исключений для мортидов.
+ *
+ * Модели без потолка не ограничены, а потолок действует на модель, а не на
+ * отряд: у Shield-Captain он один, у присоединённого юнита ограничения нет.
+ */
+function cappedByRound(state: DefenderState, model: CombatModel, amount: number): number {
+  const cap = model.damageCapPerRound;
+  if (cap === undefined || cap === null) return amount;
+  const left = cap - state.damageInstancesThisRound;
+  return left <= 0 ? 0 : Math.min(amount, left);
+}
+
+/**
  * Урон следующей модели: избыток сгорает (урон не «переливается» между моделями).
  * Если передан rng, урон сначала проходит через Feel No Pain цели.
  * `psychic` помечает атаку, мимо которой FNP не защищает.
@@ -447,11 +472,13 @@ export function damageNextModel(
 ): number {
   const index = nextTargetIndex(state);
   if (index === null || amount <= 0) return 0;
+  const model = state.unit.models[index];
+  const capped = cappedByRound(state, model, amount);
+  if (capped <= 0) return 0;
   const incoming =
-    rng === undefined
-      ? amount
-      : feelNoPain(state.unit.models[index], amount, rng, 'damage', psychic);
+    rng === undefined ? capped : feelNoPain(model, capped, rng, 'damage', psychic);
   if (incoming <= 0) return 0;
+  state.damageInstancesThisRound += incoming;
   const dealt = Math.min(incoming, state.woundsLeft[index]);
   state.woundsLeft[index] -= dealt;
   state.damage += dealt;
@@ -471,10 +498,15 @@ export function damageSpill(state: DefenderState, amount: number, rng?: Rng, psy
     const index = nextTargetIndex(state);
     if (index === null) break;
     const model = state.unit.models[index];
+    // Тот же потолок за раунд, что и для обычного урона: ограничиваются все
+    // инстансы, а мортиды — инстансы тоже.
+    const capped = cappedByRound(state, model, left);
+    if (capped <= 0) break;
     // Невелирование считается от уронА, пришедшего в эту модель.
     const incoming =
-      rng === undefined ? left : feelNoPain(model, left, rng, 'mortals', psychic);
+      rng === undefined ? capped : feelNoPain(model, capped, rng, 'mortals', psychic);
     if (incoming <= 0) break;
+    state.damageInstancesThisRound += incoming;
     const step = Math.min(incoming, state.woundsLeft[index]);
     state.woundsLeft[index] -= step;
     left -= step;
@@ -717,6 +749,9 @@ export function simulateRound(
   usages: Map<string, WeaponUsageResult> = new Map()
 ): number {
   const damageBefore = state.damage;
+  // Потолок инстансов урона действует «за раунд», поэтому счётчик обнуляется
+  // именно здесь, а не при создании состояния.
+  state.damageInstancesThisRound = 0;
 
   for (const phase of phasesOf(opts.phase)) {
     for (const model of attacker.models) {

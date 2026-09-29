@@ -25,6 +25,7 @@ import { diceMean, parseDice } from './dice.ts';
 import { parseKeywords } from './keywords.ts';
 import { pointsFor } from '../bsdata/points.ts';
 import { manualAbilityOf, applyAuraToModels } from '../manual/abilities.ts';
+import { applyKaTah, hasMartialKatah } from '../manual/katah.ts';
 import type {
   BsDatasheet,
   BsModelGroup,
@@ -520,7 +521,7 @@ export function adaptUnit(datasheet: BsDatasheet, options: AdaptOptions = {}): A
   return {
     unit: applyManualAbilities(
       { id: datasheet.id, name: datasheet.name, keywords: unitKeywords, models },
-      datasheet.id
+      datasheet
     ),
     counts,
     points: pointsFor(datasheet, counts).points,
@@ -535,9 +536,19 @@ export function adaptUnit(datasheet: BsDatasheet, options: AdaptOptions = {}): A
  * работает одинаково для обычного юнита и для юнита с лидером, и не требует
  * знать про ручные правила на каждом шаге построения.
  */
-function applyManualAbilities(unit: CombatUnit, datasheetId: string): CombatUnit {
-  const ability = manualAbilityOf(datasheetId);
-  if (ability === null) return unit;
+function applyManualAbilities(unit: CombatUnit, datasheet: BsDatasheet): CombatUnit {
+  // Martial Ka'tah берётся из правил BSData, а не из ручной таблицы: набор
+  // юнитов с этой способностью меняется при обновлении базы, и список id
+  // пришлось бы поддерживать руками.
+  //
+  // Применяется в конце, на готовом отряде: стойка выбирается перебором по
+  // оружию, поэтому всё, что навешено выше (Trajann с +6 атаками, Custodian
+  // Guard с Lethal Hits), обязано попасть в отряд ДО выбора стойки.
+  const withKaTah = (built: CombatUnit): CombatUnit =>
+    hasMartialKatah(datasheet.rules) ? applyKaTah(built) : built;
+
+  const ability = manualAbilityOf(datasheet.id);
+  if (ability === null) return withKaTah(unit);
 
   // Аура накладывается на собственные модели лидера: способности Sororitas
   // действуют «себе и юниту», и половина (себе) достаётся тут, вторая — при
@@ -627,7 +638,7 @@ function applyManualAbilities(unit: CombatUnit, datasheetId: string): CombatUnit
     }
     return next;
   });
-  return { ...unit, models, keywords: auraApplied.keywords };
+  return withKaTah({ ...unit, models, keywords: auraApplied.keywords });
 }
 
 /**

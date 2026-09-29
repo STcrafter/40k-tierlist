@@ -3,15 +3,35 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="theme-color" content="#14161a" />
+    <meta name="theme-color" content="#080a0e" />
+    <meta
+      name="description"
+      content="Аналитический тирлист Warhammer 40,000: тир по 12 сочетаниям «парадигма цели × режим боя», разбор урона и живучести, вклад способностей. Все метрики посчитаны движком сборки."
+    />
     <link rel="icon" type="image/svg+xml" href="./favicon.svg" />
-    <title>40K Tier List — аналитический тирлист</title>
+    <title>Тирлист 40K — аналитический расчёт</title>
+    <!--
+      Шрифты грузятся здесь, а не в styles.css: @import в CSS блокирует разбор
+      таблицы стилей и задерживает первую отрисовку на лишний запрос.
+    -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=Cinzel:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap"
+    />
     <link rel="stylesheet" href="./src/styles.css" />
   </head>
   <body>
     <div id="app">
-      <div class="loading">Загрузка тирлиста…</div>
+      <p class="empty">Загрузка индекса тирлиста…</p>
     </div>
+    <noscript>
+      <p class="empty">
+        Для просмотра тирлиста нужен JavaScript: индекс и разбор юнитов
+        подгружаются по требованию.
+      </p>
+    </noscript>
     <script type="module" src="./src/main.ts"></script>
   </body>
 </html>

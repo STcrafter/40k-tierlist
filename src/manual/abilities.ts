@@ -43,6 +43,14 @@ export const MANUAL_UTILITY_FLAG_IDS = [
   'Sororitas_Castigator',
   'Sororitas_Exorcist',
   'Sororitas_Penitent_Engines',
+  'Custodes_Blade_Champion',
+  'Custodes_Knight_Centura',
+  'Custodes_Aleya',
+  'Custodes_Shield_Captain',
+  'Custodes_Shield_Captain_Allarus',
+  'Custodes_Shield_Captain_Dawneagle',
+  'Custodes_Allarus',
+  'Custodes_Aquilon',
 ] as const;
 
 export type ManualUtilityFlagId = (typeof MANUAL_UTILITY_FLAG_IDS)[number];
@@ -108,11 +116,18 @@ export interface LeaderAura {
   extraAttacks?: number;
   /** Кейворды оружию лидера (Morvenn Vahl — LANCE). */
   weaponKeywords?: string[];
+  /**
+   * Изменение AP оружия: −1 ухудшает, +1 улучшает (Valerian: −1 AP и себе, и юниту).
+   *
+   * Знаковое поле, а не отдельные `apPenalty`/`apBonus`: правило может и ухудшать,
+   * и улучшать, а «−1» и «+1» — это одно сложение со знаком.
+   */
+  apDelta?: number;
 /**
  * Одноразовые эффекты оружию лидера: +N атак и +M силы в рукопашной.
  *
  * В бой они НЕ применяются: см. ONCE_DIVISOR. Значения хранятся здесь, чтобы
- * по ним отдельно считалась дельта (см. onceEffectDelta), а не чтобы искажать
+ * по ним отдельно считалась дельта (см. onceEffectDeltasOf), а не чтобы искажать
  * боевой расчёт.
  */
   onceMeleeAttacks?: number;
@@ -208,6 +223,22 @@ export interface ManualAbility {
    * а Sanctifiers получают свои бонусы только от Ministorum Priest).
    */
   withLeader?: LeaderConditional;
+  /**
+   * Одноразовый потолок инстансов урона за раунд (Shield-Captain in Allarus: 1).
+   *
+   * Одноразовый, поэтому в бой не идёт: применяется только в
+   * `withOnceEffects`, откуда попадает в дельту одноразовых эффектов — в том
+   * числе в дельту по выживаемости, где как раз и проявляется.
+   */
+  onceDamageCapPerRound?: number;
+  /**
+   * Одноразовый дополнительный залп дальнобойным оружием
+   * (Custodian Guard: «shoots again with everything it has»).
+   *
+   * В замере — удвоение числа атак дальнобойного оружия: это ровно то, что даёт
+   * второй залп в том же раунде.
+   */
+  onceExtraRangedVolley?: boolean;
 }
 
 /** Что юнит получает или теряет при присоединении лидера. */
@@ -593,6 +624,120 @@ export const MANUAL_ABILITIES: Record<string, ManualAbility> = {
       },
     ],
   },
+
+  // ── Adeptus Custodes ───────────────────────────────────────────────────────
+  // ID — из `public/BSData/wh40k-11e/Imperium - Adeptus Custodes.json`.
+
+  // Aleya: переброс попадания на 1 всему отряду.
+  '9e42-7207-9c30-6122': {
+    rerollHitOn: [1],
+    utilityFlags: [
+      { id: 'Custodes_Aleya', points: 1, reason: 'переброс попадания на 1 всему отряду' },
+    ],
+  },
+
+  // Allarus Custodians: переброс ранения на 1. Способность ограничена целями
+  // VEHICLE/MONSTER/CHARACTER, но у rerollWoundOn в движке условия на цель нет —
+  // переброс действует шире, чем в правилах. Это завышает юнита, поэтому
+  // помечено: правило записано целиком, а не приблизительно.
+  'c8a6-a4c5-703e-b717': {
+    rerollWoundOn: [1],
+    utilityFlags: [
+      {
+        id: 'Custodes_Allarus',
+        points: 1,
+        reason: 'переброс ранения на 1 против техники, монстров и персонажей',
+      },
+    ],
+  },
+
+  // Aquilon Custodians: переброс ранения на 1 в стрельбе. Фаза обязательна,
+  // иначе переброс ушёл бы и в рукопашную, где способности нет.
+  '03bc-0141-b967-40e0': {
+    rerollWoundOn: [1],
+    rerollPhase: 'ranged',
+    utilityFlags: [
+      { id: 'Custodes_Aquilon', points: 1, reason: 'переброс ранения на 1 в дальнем бою' },
+    ],
+  },
+
+  // Blade Champion и Knight-Centura — EPIC HERO: каждый добавляет юниту целый
+  // дополнительный раунд работы, поэтому самые дорогие флаги в наборе.
+  '48b7-e713-d5b1-f11c': {
+    utilityFlags: [
+      {
+        id: 'Custodes_Blade_Champion',
+        points: 3,
+        reason: 'EPIC HERO с большим объёмом атак и ре-роллами',
+      },
+    ],
+  },
+  '7099-71b2-56e8-7191': {
+    utilityFlags: [
+      { id: 'Custodes_Knight_Centura', points: 3, reason: 'EPIC HERO с FNP и перебросом ранения' },
+    ],
+  },
+
+  // Custodian Guard: переброс ранения на 1 и одноразовый повторный залп.
+  '91b3-2e1c-e642-d213': { rerollWoundOn: [1], onceExtraRangedVolley: true },
+
+  // Custodian Guard with Adrasite and Pyrithite Spears: копья стреляют, поэтому
+  // одноразовые Lethal Hits вешаются на всё оружие отряда.
+  'af0f-5212-907e-7125': {
+    rerollWoundOn: [1],
+    weaponKeywords: [{ keywords: ['Lethal Hits'], models: null }],
+  },
+
+  // Custodian Wardens: с героем атаки сильнее их Т дают −1 ранения. FNP 4+ —
+  // одноразовый, поэтому в ауре, а не в постоянном `fnp`.
+  '9610-b148-8433-93b8': {
+    withLeader: { leaderIds: null, woundsPenalty: 1 },
+    aura: { fnp: 4 },
+  },
+
+  // Shield-Captain: одноразовые Active и Sustained Hits 1 в рукопашной.
+  'b61c-b815-65c0-b1cc': {
+    aura: { onceMeleeKeywords: ['Active', 'Sustained Hits 1'] },
+    utilityFlags: [
+      {
+        id: 'Custodes_Shield_Captain',
+        points: 1,
+        reason: 'одноразовые Active и Sustained Hits 1 в рукопашной',
+      },
+    ],
+  },
+
+  // Shield-Captain in Allarus Terminator Armour: одноразово весь получаемый
+  // урон за раунд сводится к одному инстансу. Именно инстансы, а не раны:
+  // это не FNP (тот невелирует урон) и не Invuln (тот про мортиды).
+  '6319-eeba-b717-bd86': {
+    onceDamageCapPerRound: 1,
+    utilityFlags: [
+      {
+        id: 'Custodes_Shield_Captain_Allarus',
+        points: 1,
+        reason: 'одноразовое ограничение урона до одного инстанса за раунд',
+      },
+    ],
+  },
+
+  // Shield-Captain on Dawneagle Jetbike: FLY на скоростном корпусе.
+  '58fa-4a25-a5af-1144': {
+    utilityFlags: [
+      {
+        id: 'Custodes_Shield_Captain_Dawneagle',
+        points: 2,
+        reason: 'jetbike даёт FLY и быстрый ввод в бой',
+      },
+    ],
+  },
+
+  // Trajann Valoris: одноразово 12 атак топором вместо 6 — +6 к числу атак.
+  '7d7c-c212-47a3-38e4': { aura: { onceMeleeAttacks: 6 } },
+
+  // Valerian: −1 AP и себе, и присоединённому юниту.
+  '8103-2e01-5d6a-b761': { aura: { apDelta: -1 } },
+
 };
 
 /** Ручные способности юнита; пустой объект, если юнита в слое нет. */
@@ -617,7 +762,11 @@ export function rerollOptionsOf(
   mode: 'ranged' | 'melee' | 'combined' = 'combined'
 ): { rerollHitOn?: number[]; rerollWoundOn?: number[] } {
   const ability = MANUAL_ABILITIES[unitId];
-  if (ability === undefined || ability.rerollHitOn === undefined) return {};
+  // Проверять надо ОБА вида переброса. Раньше стояло только `rerollHitOn === undefined`,
+  // и юнит, у которого есть лишь переброс ранения (Custodian Guard, Allarus,
+  // Aquilon, Adrasite), получал пустые опции целиком — тихо, без ошибки.
+  if (ability === undefined) return {};
+  if (ability.rerollHitOn === undefined && ability.rerollWoundOn === undefined) return {};
   const scope = ability.rerollPhase;
   if (scope !== undefined && scope !== null && mode !== 'combined' && scope !== mode) return {};
   return { rerollHitOn: ability.rerollHitOn, rerollWoundOn: ability.rerollWoundOn };
@@ -699,6 +848,11 @@ function applyAuraToWeapon(weapon: CombatWeapon, aura: LeaderAura): CombatWeapon
   if (aura.toHit !== undefined && weapon.skill !== null) {
     next.skill = Math.max(2, weapon.skill - aura.toHit);
   }
+  if (aura.apDelta !== undefined) {
+    // Valerian: −1 AP и себе, и присоединённому юниту. Знак правит знак правила:
+    // поле знаковое, поэтому просто складываем.
+    next.ap = Math.max(-10, Math.min(5, weapon.ap + aura.apDelta));
+  }
   if ((aura.weaponKeywords ?? []).length > 0) {
     const extra = parseKeywords(aura.weaponKeywords!).filter(
       (keyword) => !weapon.keywords.some((existing) => existing.name === keyword.name)
@@ -719,25 +873,42 @@ function applyAuraToWeapon(weapon: CombatWeapon, aura: LeaderAura): CombatWeapon
 export function withOnceEffects(unit: CombatUnit): CombatUnit {
   const ability = manualAbilityOf(unit.id);
   const aura = ability?.aura;
-  if (aura === undefined) return unit;
+  // Одноразовые эффекты живут на двух уровнях: в ауре (Trajann, Shield-Captain —
+  // они идут от способности персонажа) и прямо в способности (Allarus-щит,
+  // Custodian Guard). Уровень выбран по тому, откуда правило приходит в бой.
   const hasOnce =
-    (aura.onceMeleeAttacks ?? 0) > 0 ||
-    (aura.onceMeleeStrength ?? 0) > 0 ||
-    (aura.onceMeleeKeywords ?? []).length > 0;
+    (aura?.onceMeleeAttacks ?? 0) > 0 ||
+    (aura?.onceMeleeStrength ?? 0) > 0 ||
+    (aura?.onceMeleeKeywords ?? []).length > 0 ||
+    ability?.onceDamageCapPerRound !== undefined ||
+    ability?.onceExtraRangedVolley === true;
   if (!hasOnce) return unit;
   return {
     ...unit,
-    models: unit.models.map((model) => ({
-      ...model,
-      weapons: model.weapons.map((weapon) => applyOnceEffects(weapon, aura)),
-    })),
+    models: unit.models.map((model) => {
+      const next: CombatModel = { ...model, weapons: model.weapons.map((w) => applyOnceEffects(w, aura)) };
+      if (ability?.onceDamageCapPerRound !== undefined) {
+        next.damageCapPerRound = ability.onceDamageCapPerRound;
+      }
+      if (ability?.onceExtraRangedVolley === true) {
+        // «Стреляет повторно всем, что есть»: один дополнительный залп
+        // дальнобойным оружием. В замере это удвоение числа атак — ровно то,
+        // что даёт второй залп в том же раунде.
+        next.weapons = next.weapons.map((w) =>
+          w.kind === 'ranged' && w.attacks !== null
+            ? { ...w, attacks: { ...w.attacks, count: w.attacks.count * 2 } }
+            : w
+        );
+      }
+      return next;
+    }),
   };
 }
 
 /** Одноразовые эффекты на одном оружии: +атаки/+сила и кейворды в рукопашной. */
-function applyOnceEffects(weapon: CombatWeapon, aura: LeaderAura): CombatWeapon {
+function applyOnceEffects(weapon: CombatWeapon, aura: LeaderAura | undefined): CombatWeapon {
   const next: CombatWeapon = { ...weapon };
-  if (weapon.kind === 'melee') {
+  if (aura !== undefined && weapon.kind === 'melee') {
     if (aura.onceMeleeAttacks !== undefined && weapon.attacks !== null) {
       const bonus = Math.round(aura.onceMeleeAttacks / ONCE_DIVISOR);
       next.attacks = { ...weapon.attacks, count: weapon.attacks.count + bonus };
