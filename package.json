@@ -7,6 +7,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
+    "css:check": "node scripts/check-css.mjs",
     "build:data": "node scripts/build-tierlist.ts --out=web/public/data/tierlist.json",
     "dev": "vite",
     "build": "vite build",

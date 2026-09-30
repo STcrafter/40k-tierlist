@@ -5,7 +5,9 @@
  * скрижалей — холодный сине-чёрный фон, костяной текст, латунный акцент и
  * пять цветов тира как единственное яркое пятно на странице.
  *
- * Типографика несут работу: Cinzel (гравированные прописные) держит заголовки,
+ * Типографика несут работу: Oswald держит заголовки — узкий гротеск, и он, в
+ * отличие от Cinzel, умеет кириллицу: на русской странице дисплейный шрифт
+ * иначе молча откатывается на запасной serif.
  * IBM Plex Mono — все числа, IBM Plex Sans — прозу. Моноширинный набор цифр
  * не украшение: колонок шестнадцать, и без tabular-nums разряды «плавали» бы
  * при каждой перерисовке сортировки.
@@ -26,7 +28,7 @@
   --line-2: #303c49;
   --bone: #e7e3d8;
   --bone-dim: #8d95a0;
-  --bone-faint: #5d6672;
+  --bone-faint: #7d8794;
   --brass: #c8a86b;
   --brass-dim: #6b5a35;
 
@@ -36,7 +38,7 @@
   --tier-c: #5fa8d3;
   --tier-d: #6e7681;
 
-  --font-display: 'Cinzel', 'Times New Roman', serif;
+  --font-display: 'Oswald', 'Arial Narrow', sans-serif;
   --font-body: 'IBM Plex Sans', 'Helvetica Neue', sans-serif;
   --font-mono: 'IBM Plex Mono', 'Courier New', monospace;
 
@@ -140,9 +142,10 @@ body {
 h1 {
   margin: 8px 0 10px;
   font-family: var(--font-display);
-  font-size: clamp(28px, 4.5vw, 44px);
-  font-weight: 700;
-  letter-spacing: 0.04em;
+  font-size: clamp(30px, 4.6vw, 46px);
+  font-weight: 600;
+  line-height: 1.1;
+  letter-spacing: 0.06em;
   text-transform: uppercase;
   background: linear-gradient(180deg, #f4f1e8 0%, #b9ac8c 100%);
   -webkit-background-clip: text;
@@ -307,6 +310,9 @@ input[type='search']::placeholder {
   background: var(--iron-2);
   border-bottom: 1px solid var(--line);
   font-family: var(--font-mono);
+  font-size: 11.5px;
+  letter-spacing: 0.04em;
+}
 
 /* ─────────────────────────  Таблица  ───────────────────────── */
 
@@ -506,6 +512,15 @@ button.tier-badge:disabled {
 
 .bar {
   position: relative;
+  display: inline-block;
+  width: 44px;
+  height: 5px;
+  margin-right: 7px;
+  vertical-align: middle;
+  background: var(--iron-3);
+  border-radius: 1px;
+  overflow: hidden;
+}
 
 /* ─────────────────────────  Модальное окно  ───────────────────────── */
 
@@ -603,6 +618,20 @@ button.tier-badge:disabled {
 }
 /* Линейка с ромбом: заголовок отделяется от данных, а не висит над ними. */
 .dialog-body h3::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: linear-gradient(90deg, var(--line-2), transparent);
+}
+.dialog-body h3::before {
+  content: '';
+  order: 3;
+  flex: none;
+  width: 6px;
+  height: 6px;
+  background: var(--brass-dim);
+  transform: rotate(45deg);
+}
 
 /* ─────────────────────────  Секции и плитки  ───────────────────────── */
 
@@ -735,6 +764,8 @@ table.matrix .cell-total {
 /* Маркер архетипа (OC 3+, Move 10", FLY) — видно, но в скоре не участвует. */
 .flag-archetype {
   border-style: dashed;
+  opacity: 0.75;
+}
 
 /* ─────────────────────────  Анимация  ───────────────────────── */
 
@@ -813,8 +844,6 @@ table.matrix .cell-total {
   }
 }
 
-  opacity: 0.75;
-}
 /* Уже смоделировано в бою (FNP, Stealth) — вторично платить нельзя. */
 .flag-modeled {
   border-style: dotted;
@@ -856,21 +885,6 @@ table.matrix .cell-total {
   font-size: 10px;
 }
 
-  content: '';
-  flex: 1;
-  height: 1px;
-  background: linear-gradient(90deg, var(--line-2), transparent);
-}
-.dialog-body h3::before {
-  content: '';
-  order: 3;
-  flex: none;
-  width: 6px;
-  height: 6px;
-  background: var(--brass-dim);
-  transform: rotate(45deg);
-}
-
 .loading-note,
 .error {
   padding: 32px 0;
@@ -878,16 +892,6 @@ table.matrix .cell-total {
 }
 .error {
   color: var(--tier-s);
-}
-
-  display: inline-block;
-  width: 44px;
-  height: 5px;
-  margin-right: 7px;
-  vertical-align: middle;
-  background: var(--iron-3);
-  border-radius: 1px;
-  overflow: hidden;
 }
 .bar > i {
   position: absolute;
@@ -911,9 +915,5 @@ code {
   border-radius: 2px;
   font-family: var(--font-mono);
   font-size: 12px;
-}
-
-  font-size: 11.5px;
-  letter-spacing: 0.04em;
 }
 
