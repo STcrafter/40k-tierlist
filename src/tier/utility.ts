@@ -379,8 +379,3 @@ export function utilityScoreOf(flags: UtilityFlag[], onlyScored = true): number 
   return Math.min(UTILITY_MAX, sum);
 }
 
-/** Сколько всего баллов набрано по всем флагам, включая не влияющие на скор. */
-export function fullUtilityScoreOf(flags: UtilityFlag[]): number {
-  return utilityScoreOf(flags, false);
-}
-

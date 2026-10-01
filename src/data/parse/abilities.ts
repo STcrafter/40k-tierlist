@@ -107,9 +107,3 @@ export function parseDatasheetAbilities(
 
   return { abilities, unresolvedIds: [...new Set(unresolvedIds)] };
 }
-
-/** Текстовые способности (Datasheet/Wargear/…) конкретной модели по данным Wahapedia. */
-export function abilityMatchesModel(ability: Ability, modelName: string): boolean {
-  if (!ability.modelName) return false;
-  return cleanText(ability.modelName).toLowerCase() === cleanText(modelName).toLowerCase();
-}

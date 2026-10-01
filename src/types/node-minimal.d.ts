@@ -10,7 +10,6 @@
 declare module 'node:fs' {
   export function readFileSync(path: string, encoding: 'utf8'): string;
   export function readdirSync(path: string): string[];
-  export function existsSync(path: string): boolean;
   export function writeFileSync(path: string, data: string, encoding?: 'utf8'): void;
   export function mkdirSync(path: string, options?: { recursive?: boolean }): void;
   /**
@@ -28,7 +27,6 @@ declare module 'node:path' {
   export function join(...parts: string[]): string;
   export function resolve(...parts: string[]): string;
   export function dirname(path: string): string;
-  export function basename(path: string, ext?: string): string;
 }
 
 declare module 'node:url' {

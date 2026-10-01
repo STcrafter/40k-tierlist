@@ -218,11 +218,6 @@ function applyLeaderConditional(
 
   const models = unit.models.map((model) => {
     const next = { ...model };
-    if (rule.woundsPenalty !== undefined) {
-      // Пенальть не убивает модель: иначе юнит терял бы бойца ещё при
-      // постановке, и −1 рана превратилась бы в потерю юнита.
-      next.wounds = Math.max(1, model.wounds - rule.woundsPenalty);
-    }
     if ((rule.meleeWeaponKeywords ?? []).length > 0) {
       next.weapons = model.weapons.map((weapon) => {
         if (weapon.kind !== 'melee') return weapon;

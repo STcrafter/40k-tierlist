@@ -173,8 +173,3 @@ export const RAW_FILES: ReadonlyArray<{ key: RawFileKey; filename: string }> = [
   { key: 'leaders', filename: 'Datasheets_leader.csv' },
   { key: 'detachments', filename: 'Detachments.csv' },
 ];
-
-/** Файл сырых данных: имя → текст. */
-export interface RawFiles {
-  [filename: string]: string;
-}

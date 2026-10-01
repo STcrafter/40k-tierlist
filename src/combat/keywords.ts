@@ -36,6 +36,20 @@ const CANONICAL: Array<[RegExp, string]> = [
   [/^psychic/, 'psychic'],
 ];
 
+/**
+ * Канонические имена, которые движок действительно понимает.
+ *
+ * Нужен не для разбора, а для проверки разбора. `parseKeyword` на незнакомом
+ * тексте НЕ падает: он склеивает его в имя вида 'blah-blah' и отдаёт дальше. Такой
+ * кейворд молча доезжает до данных и ничего не делает — ни одно правило в
+ * `rules.ts`/`simulate.ts` его не читает, а ошибки не возникает (ровно так
+ * потерялся RENDAX у Shield-Captain: 'Active' превратился в 'active').
+ *
+ * Поэтому «строка разобралась» проверять недостаточно — нужно сверить имя со
+ * списком настоящих.
+ */
+export const CANONICAL_KEYWORD_NAMES: readonly string[] = CANONICAL.map(([, name]) => name);
+
 /** Разбор условия после двоеточия: 'non-MONSTER/VEHICLE' → { negate, keywords }. */
 function parseCondition(text: string): KeywordCondition | null {
   const raw = text.trim();

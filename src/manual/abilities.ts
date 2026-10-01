@@ -69,17 +69,6 @@ export interface MortalDamageBonus {
   phase: 'ranged' | 'melee';
 }
 
-/** Кейворд, выдаваемый оружию моделей. */
-export interface WeaponKeywordGrant {
-  /** Сырые строки BSData, разбираются через keywords.ts. */
-  keywords: string[];
-  /**
-   * Имена моделей, к оружию которых добавляется кейворд.
-   * null — всем моделям отряда.
-   */
-  models: string[] | null;
-}
-
 /**
  * Делитель для ОДНОРАЗОВЫХ эффектов.
  *
@@ -139,14 +128,6 @@ export interface LeaderAura {
 }
 
 export interface ManualAbility {
-  /**
-   * Кейворды, добавляемые собственному оружию отряда.
-   *
-   * @deprecated Используйте `aura.weaponKeywords`: у большинства лидеров
-   * Sororitas способность действует и на присоединённый юнит, а этот блок
-   * применяется только к самому юниту.
-   */
-  weaponKeywords?: WeaponKeywordGrant[];
   /** +N мортид, но только в указанной фазе. */
   mortalDamageBonus?: MortalDamageBonus;
   /**
@@ -271,8 +252,6 @@ export interface LeaderConditional {
    * все три, а не один.
    */
   leaderIds: string[] | null;
-  /** −N ран у каждой модели отряда (Celestian Sacresants: −1). */
-  woundsPenalty?: number;
   /** Кейворды рукопашному оружию отряда (Sanctifiers: Sustained Hits 1). */
   meleeWeaponKeywords?: string[];
   /**
@@ -288,17 +267,6 @@ export interface LeaderConditional {
    * (Sanctifiers + Ministorum Priest: D3). Ставится на модели ЛИДЕРА.
    */
   reviveCount?: number;
-}
-
-/**
- * Сколько моделей отряда лидера возвращать в присоединённый юнит за раунд.
- *
- * Считается по моделям, у которых `reviveLeader === true`: лидер остаётся в
- * строю, пока жив (Hospitaller), и каждую фазу командования возвращает одну
- * убитую модель юнита с полными ранами.
- */
-export function leaderReviveCount(unit: CombatUnit): number {
-  return unit.models.filter((model) => model.reviveLeader === true).length;
 }
 
 /**

@@ -558,15 +558,11 @@ function applyManualAbilities(unit: CombatUnit, datasheet: BsDatasheet): CombatU
       ? { models: unit.models, keywords: unit.keywords }
       : applyAuraToModels(unit.models, ability.aura, unit.keywords);
   const models = auraApplied.models.map((model) => {
-    const grant = ability.weaponKeywords?.find((entry) =>
-      entry.models === null || entry.models.includes(model.name)
-    );
     const bonus = ability.mortalDamageBonus;
     // FNP/атаки/сейв/кейворды в рукопашной — все причины пересобрать оружие
     // и профиль. Полный список обязателен: проверка по неполному молча
     // теряла эффекты (см. регрессию с meleeMortalPerWound у Palatine).
     const needsWeapons =
-      grant !== undefined ||
       bonus !== undefined ||
       ability.meleeMortalPerWound !== undefined ||
       ability.extraAttacks !== undefined ||
@@ -576,12 +572,6 @@ function applyManualAbilities(unit: CombatUnit, datasheet: BsDatasheet): CombatU
       ? model.weapons
       : model.weapons.map((weapon) => {
             const next = { ...weapon };
-            if (grant !== undefined) {
-              const extra = parseKeywords(grant.keywords).filter(
-                (keyword) => !weapon.keywords.some((existing) => existing.name === keyword.name)
-              );
-              if (extra.length > 0) next.keywords = [...weapon.keywords, ...extra];
-            }
             if (bonus !== undefined) {
               // Бонус вешается только на оружие своей фазы: способность
               // Daemonifuge про стрельбу не должна висеть на клинке.
