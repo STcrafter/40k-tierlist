@@ -304,24 +304,71 @@ function compareAttached(a: AttachedRow, b: AttachedRow, key: string): number {
  * Из-за этого перестал нужен костыль с возвратом фокуса в поиск: элемент
  * больше не исчезает из DOM при каждом нажатии клавиши. Заодно не теряются
  * позиция прокрутки и позиция курсора в строке.
+ *
+ * Прокручиваемый слой здесь один — `.scroll-shell`. Таблица без переноса ячеек
+ * шире любого окна, где её видно (шестнадцать колонок, около 1810px), поэтому
+ * горизонтальная прокрутка нужна; но пока ею владела `.table-wrap`, обёртка
+ * заодно становилась контейнером прокрутки и по вертикали — и липкая шапка
+ * прилипала к ней, а не к окну. Разбор целиком — в styles.css у
+ * `.scroll-shell`.
  */
 function mountShell(app: HTMLElement): void {
   app.innerHTML = `
     <div class="grain" aria-hidden="true"></div>
-    <header class="masthead">
-      <p class="eyebrow">Аналитический расчёт · 11-я редакция</p>
-      <h1>Тирлист 40K</h1>
-      <p class="subtitle">
-        Все числа посчитаны движком сборки: нормы, Total и тир приходят готовыми.
-        Клик по юниту открывает разбор — тир по всем видам боя, из чего сложились
-        урон и живучесть, и вклад каждой способности.
-      </p>
-      <dl class="readout" id="readout"></dl>
-    </header>
-    <div class="controls" id="controls"></div>
-    <p class="status" id="status" role="status" aria-live="polite"></p>
-    <div class="table-wrap" id="table-wrap"></div>
+    <div class="scroll-shell" id="scroll-shell">
+      <header class="masthead">
+        <p class="eyebrow">Аналитический расчёт · 11-я редакция</p>
+        <h1>Тирлист 40K</h1>
+        <p class="subtitle">
+          Все числа посчитаны движком сборки: нормы, Total и тир приходят готовыми.
+          Клик по юниту открывает разбор — тир по всем видам боя, из чего сложились
+          урон и живучесть, и вклад каждой способности.
+        </p>
+        <dl class="readout" id="readout"></dl>
+      </header>
+      <div class="controls" id="controls"></div>
+      <p class="status" id="status" role="status" aria-live="polite"></p>
+      <div class="table-wrap" id="table-wrap"></div>
+    </div>
     <div id="dialog-root"></div>`;
+}
+
+/**
+ * Высота панели управления — в CSS-переменную `--controls-h`.
+ *
+ * Шапка таблицы липнет ровно под панелью, но её высоту в CSS не выразить: на
+ * узком окне контролы переносятся на вторую строку, и 87px превращаются в
+ * 154px. Отсюда и взялось прежнее число 77px — оно не совпадало с настоящей
+ * высотой ни на одной ширине, поэтому шапка отъезжала вниз и накрывала первые
+ * строки.
+ *
+ * Меряется по факту и пересчитывается: шрифты приходят уже после первой
+ * отрисовки, а вместе с ними меняется высота панели.
+ *
+ * Наблюдатель держится в переменной не для красоты: без живой ссылки его
+ * забирает сборщик мусора, и панель, переехав на вторую строку, оставляет
+ * шапке старую высоту. `resize` стоит рядом с ним как страхующий — если
+ * наблюдателя всё-таки не окажется, окно всё равно пересчитает отступ.
+ */
+let controlsObserver: ResizeObserver | null = null;
+
+function syncControlsHeight(app: HTMLElement): void {
+  const controls = app.querySelector<HTMLElement>('#controls');
+  if (controls === null) return;
+  const apply = (): void => {
+    app.style.setProperty('--controls-h', `${controls.getBoundingClientRect().height}px`);
+  };
+  apply();
+  window.addEventListener('resize', apply);
+  if (typeof ResizeObserver !== 'undefined') {
+    controlsObserver = new ResizeObserver(apply);
+    controlsObserver.observe(controls);
+  }
+  /*
+   * Шрифты приезжают уже после первой отрисовки и меняют высоту панели:
+   * без этого шапка до первого ресайза стояла бы по «запасному» кеглю.
+   */
+  if (document.fonts !== undefined) void document.fonts.ready.then(apply);
 }
 
 /** Панель управления: собирается один раз, состояние — в aria-pressed. */
@@ -1133,6 +1180,7 @@ async function boot(): Promise<void> {
     state.index = await loadIndex();
     mountShell(app);
     mountControls(app);
+    syncControlsHeight(app);
     renderAll(app);
   } catch (error) {
     app.innerHTML = `<div class="empty">
