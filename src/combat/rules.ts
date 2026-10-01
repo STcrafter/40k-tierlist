@@ -167,6 +167,21 @@ export function standardRules(): CombatRules {
       (ctx) => keywordOf(ctx.weapon.keywords, 'devastating', targetKeywordsOf(ctx)) !== null,
     ],
 
+    armourTarget: [
+      // MELEE_AP_EVASION: рукопашная атака по модели с этим кейвордом теряет
+      // AP, то есть её броневой сейв становится на 1 легче для защитника
+      // (Valerian: «у каждой рукопашной атаки по отряду AP хуже на 1»).
+      //
+      // Этап отдельный от saveTarget из-за инвульни: AP сквозь неё не проходит,
+      // и общий хук ухудшал бы её вместе с бронёй.
+      (ctx, armour) => {
+        if (armour === null || ctx.phase !== 'melee') return armour;
+        const evasive =
+          ctx.target.keywords.includes('MELEE_AP_EVASION') || ctx.defender.keywords.includes('MELEE_AP_EVASION');
+        return evasive ? armour + 1 : armour;
+      },
+    ],
+
     saveTarget: [
       // Точное оружие (S = T, например Psycannon / снайперские ружья): сейв не
       // бросается вовсе. В 11-й редакции это способность игнорировать спасброск
@@ -201,6 +216,17 @@ export function standardRules(): CombatRules {
         if (!ctx.weapon.keywords.some((k) => k.name === 'lance')) return base;
         return base - 1;
       },
+      // RESOLUTE_WILL: «пока CHARACTER ведёт отряд, у атаки с S выше T отряда
+      // −1 к броску ранения». Бросок УХУДШАЕТСЯ, то есть порог на 1 хуже.
+      // Кейворд ставит ручной слой (Custodian Wardens с героем), поэтому у
+      // отряда без лидера он не появляется.
+      (ctx, base) => {
+        if (base === null) return base;
+        const resolute =
+          ctx.target.keywords.includes('RESOLUTE_WILL') || ctx.defender.keywords.includes('RESOLUTE_WILL');
+        if (!resolute || ctx.weapon.strength === null) return base;
+        return ctx.weapon.strength > ctx.target.toughness ? base + 1 : base;
+      },
     ],
   };
 }
@@ -219,6 +245,7 @@ export function extendRules(
     criticalWoundTarget: [...base.criticalWoundTarget],
     rerollWounds: [...base.rerollWounds],
     devastatingCritWounds: [...base.devastatingCritWounds],
+    armourTarget: [...base.armourTarget],
     saveTarget: [...base.saveTarget],
     damage: [...base.damage],
   };

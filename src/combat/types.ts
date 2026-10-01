@@ -189,7 +189,8 @@ export interface CombatContext {
  *  - criticalWoundTarget:   порог критического ранения (Anti-X Y+);
  *  - rerollWounds:          переброс неудачных ранений (Twin-linked);
  *  - devastatingCritWounds: крит. ранение → мортиды (Devastating Wounds);
- *  - saveTarget:            порог сейва после AP; null = сейва нет;
+ *  - armourTarget:          порог БРОНЕВОГО сейва (AP и укрытие учтены, инвульня ещё нет);
+ *  - saveTarget:            порог сейва после AP и инвульни; null = сейва нет;
  *  - damage:                урон за ранение (Melta X добавляет к D).
  */
 export interface CombatRules {
@@ -201,6 +202,7 @@ export interface CombatRules {
   criticalWoundTarget: Array<(ctx: CombatContext, base: number) => number>;
   rerollWounds: Array<(ctx: CombatContext) => boolean>;
   devastatingCritWounds: Array<(ctx: CombatContext) => boolean>;
+  armourTarget: Array<(ctx: CombatContext, armour: number | null) => number | null>;
   saveTarget: Array<(ctx: CombatContext, base: number | null) => number | null>;
   damage: Array<(ctx: CombatContext, base: DiceSpec) => DiceSpec>;
 }

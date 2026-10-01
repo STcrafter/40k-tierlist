@@ -142,9 +142,10 @@ describe("Martial Ka'tah", () => {
       if (melee.length === 0) continue;
       const chosen = katahStanceNameOf(stripStance(adapted));
       // Проверяется НАЛИЧИЕ выбранной стойки, а не «ровно один из двух
-      // ключевых слов»: у Custodian Guard с Adrasite/Pyrithite копья несут
-      // СВОЙ Lethal Hits, и к нему добавляется стойка. Это разные способности,
-      // и по правилам они сосуществуют.
+      // ключевых слов»: клинок может нести свои кейворды из BSData (у Blade
+      // Champion это [DEVASTATING WOUNDS]), и withStance обязан добавить стойку
+      // поверх, не выбросив родные. Это разные способности, и по правилам они
+      // сосуществуют.
       const canonical = parseKeywords([chosen]).map((keyword) => keyword.name);
       for (const weapon of melee) {
         for (const name of canonical) {
@@ -166,6 +167,24 @@ describe("Martial Ka'tah", () => {
     const produced = katahStanceNameOf(base);
     const reference = simulateStance(base, REF_SEEDS);
     expect(produced, `выбор: ${produced}, перебор: ${reference}`).toBe(reference);
+  });
+
+  it('база с родным Lethal Hits и база без него считаются независимо', () => {
+    // Регрессия на ключ кэша: он был id + сигнатура СТАТОВ оружия, без
+    // кейвордов. У клинка, который уже несёт [LETHAL HITS], рука RENDAX
+    // получается пустой, то есть такая база обязана считаться отдельно — иначе
+    // ей доставалось решение, посчитанное на копьях без Lethal, на другом
+    // юните в натуре.
+    const datasheet = katahUnits.find((d) => d.name.includes('Adrasite'));
+    expect(datasheet, 'нужен юнит с копьём для проверки').toBeDefined();
+    const bare = baseUnitOf(datasheet!);
+    const withLethal = withKeywords(bare, ['Lethal Hits']);
+    // Смысловой инвариант, а не сравнение чисел: RENDAX на таком клинке не
+    // добавляет ничего, поэтому осмыслен только DACATARAI.
+    expect(katahStanceNameOf(withLethal), 'RENDAX на клинке с родным Lethal пуст').toBe('Sustained Hits 1');
+    // А на копьях без родного Lethal RENDAX добавляет кейворд, и решение может
+    // быть другим: значит кэш не отдал одну и ту же цифру обеим базам.
+    expect(katahStanceNameOf(bare)).not.toBe(katahStanceNameOf(withLethal));
   });
 
   it('детерминирован: повторный подсчёт даёт тот же выбор', () => {

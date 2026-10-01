@@ -532,6 +532,9 @@ function woundTargetOf(
 /**
  * Порог сейва: броня с AP (и укрытием), затем инвуля — берётся лучший.
  * Укрытие улучшает сейв на 1, но не работает в рукопашной и для [IGNORES COVER].
+ *
+ * Хуки `armourTarget` висят на БРОНЕ (до инвульни, потому что AP сквозь
+ * инвульню не проходит), `saveTarget` — на общем пороге после неё.
  */
 function saveTargetOf(
   ctx: CombatContext,
@@ -552,6 +555,11 @@ function saveTargetOf(
       armor -= 1;
     }
     armor = Math.max(2, armor);
+    // Хуки броневого сейва: AP и укрытие к этому моменту уже учтены, инвульня
+    // ещё нет. Крюк вправе вернуть null (сейв отменяется целиком) или число
+    // вне 2…7, поэтому после прогонки порог зажимается заново.
+    for (const hook of rules.armourTarget) armor = hook(ctx, armor);
+    armor = armor === null ? null : Math.max(2, armor);
   }
   let best = armor;
   if (target.invuln !== null) {

@@ -463,6 +463,161 @@ describe('ручные способности отрядов Sororitas', () => {
   });
 });
 
+/**
+ * Ручной слой Adeptus Custodes.
+ *
+ * Каждая проверка — регрессия на конкретную ошибку, а не описание способности:
+ * в комментарии сказано, что именно стояло не так. Общий мотив всех семи —
+ * правило либо висело не на том носителе (оружие вместо модели), либо терялось
+ * из-за опечатки в id, либо было неверно по смыслу.
+ */
+describe('ручной слой Adeptus Custodes', () => {
+  const of = (name: string) => adaptUnit(find(name), { size: 'min' }).unit;
+  const leaderOf = (name: string): LeaderDefinition => {
+    const found = leaderDefinitionsOf(datasheets).find((item) => item.name === name);
+    if (!found) throw new Error(`лидер ${name} не найден`);
+    return found;
+  };
+
+  it('Valerian: Golden Laurels ухудшает чужую атаку, а не усиливает свою', () => {
+    // Регрессия: стояло apDelta: -1, а это поле меняет AP СОБСТВЕННОГО оружия,
+    // то есть клинок Valerian становился AP-2 вместо AP-3 — незаработанный
+    // атакующий бафф вместо правила. Теперь эффект защитный и лежит на модели.
+    const model = of('Valerian').models[0];
+    expect(model.keywords, 'защитный кейворд должен быть на модели').toContain('MELEE_AP_EVASION');
+    const melee = model.weapons.filter((weapon) => weapon.kind === 'melee');
+    expect(melee.length, 'нужно рукопашное оружие').toBeGreaterThan(0);
+    for (const weapon of melee) {
+      expect(weapon.ap, `«${weapon.name}»: AP своего оружия способность не улучшает`).toBeLessThanOrEqual(0);
+    }
+  });
+
+  it('Custodian Wardens: Resolute Will не отнимает раны у самих Стражей', () => {
+    // Регрессия: правило стояло как woundsPenalty, то есть минус рана у КАЖДОЙ
+    // модели за способность, ДАННУЮ ОТРЯДУ (W3 → W2, минус треть живучести).
+    // Правило ухудшает бросок ранения АТАКУЮЩЕГО, а не собственные ранки.
+    const wardens = of('Custodian Wardens');
+    expect(wardens.models.length, 'нужны Стражи').toBeGreaterThan(0);
+    for (const model of wardens.models) {
+      expect(model.wounds, `${model.name} не должен терять рану`).toBe(3);
+      // Без лидера способность не активна, значит и кейворда нет.
+      expect(model.keywords, `${model.name} без лидера`).not.toContain('RESOLUTE_WILL');
+    }
+  });
+
+  it('Custodian Wardens с героем получают RESOLUTE_WILL, а не минус рану', () => {
+    const wardens = of('Custodian Wardens');
+    const attached = attachLeaderToUnit(wardens, leaderOf('Trajann Valoris'));
+    const bodyguard = attached.models.slice(0, wardens.models.length);
+    expect(bodyguard.length, 'телохранители на месте').toBe(wardens.models.length);
+    for (const model of bodyguard) {
+      expect(model.wounds, `${model.name} не должен терять рану`).toBe(3);
+      expect(model.keywords, `${model.name} без RESOLUTE_WILL`).toContain('RESOLUTE_WILL');
+    }
+    // Способность ОТРЯДА: сам герой её не получает.
+    const hero = attached.models[wardens.models.length];
+    expect(hero?.keywords ?? [], 'герой не должен получать способность отряда').not.toContain('RESOLUTE_WILL');
+  });
+
+  it('No Foe Shall Stand: Lethal Hits разовый и только на стрельбе', () => {
+    // Регрессия: кейворд висел на отряде постоянно и попадал на ВСЁ оружие, а
+    // Ignores Cover не учитывался вовсе. По тексту правила — «Once per battle …
+    // ranged weapons … [LETHAL HITS] и [IGNORES COVER]», то есть разово и
+    // только стрельба.
+    const base = of('Custodian Guard with Adrasite and Pyrithite spears');
+    const weapons = base.models.flatMap((model) => model.weapons);
+    expect(
+      weapons.filter((weapon) => weapon.kind === 'ranged').length,
+      'нужна стрелковая способность'
+    ).toBeGreaterThan(0);
+    // В бою способности нет: она разовая.
+    for (const weapon of weapons) {
+      expect(
+        weapon.keywords.map((k) => k.name),
+        `«${weapon.name}»: Ignores Cover в бою быть не должно`
+      ).not.toContain('ignores-cover');
+    }
+    // В одноразовых эффектах — и только на стрельбе. (На рукопашном копье
+    // [LETHAL HITS] приходит отдельно, из стойки RENDAX, — это не способность.)
+    for (const weapon of withOnceEffects(base).models.flatMap((model) => model.weapons)) {
+      const names = weapon.keywords.map((k) => k.name);
+      if (weapon.kind === 'ranged') {
+        expect(names, `«${weapon.name}» без разового Lethal Hits`).toContain('lethal');
+        expect(names, `«${weapon.name}» без разового Ignores Cover`).toContain('ignores-cover');
+      } else {
+        expect(names, `«${weapon.name}» — рукопашное, разовые кейворды не достаются`).not.toContain('ignores-cover');
+      }
+    }
+  });
+
+  it('Living Fortress: FNP 4+ разовый, а не постоянный', () => {
+    // Регрессия: FNP 4+ стоял в ауре, то есть действовал весь бой и стоил примерно
+    // половины живучести отряда. Способность работает один раз и до конца фазы,
+    // поэтому в бою её нет, а в одноразовых эффектах — есть.
+    const wardens = of('Custodian Wardens');
+    for (const model of wardens.models) {
+      expect(model.fnp, `${model.name} без FNP в бою`).toBeNull();
+    }
+    for (const model of withOnceEffects(wardens).models) {
+      expect(model.fnp, `${model.name} без разового FNP`).toBe(4);
+      // Область из способности: 'mortals' был бы ограничением, а не защитой.
+      expect(model.fnpScope, `${model.name}: область`).toBe('all');
+    }
+  });
+
+  it('Shield-Captain: Master of the Stances даёт обе стойки, а не «Active»', () => {
+    // Регрессия: в списке стояло 'Active' — такого кейворда нет ни в одном правиле
+    // движка, поэтому RENDAX ([LETHAL HITS]) молча терялся, и в дельту попадало
+    // ровно то, что отряд и так получает от DACATARAI.
+    const captain = withOnceEffects(of('Shield-Captain'));
+    const melee = captain.models.flatMap((model) => model.weapons).filter((weapon) => weapon.kind === 'melee');
+    expect(melee.length, 'нужно рукопашное оружие').toBeGreaterThan(0);
+    for (const weapon of melee) {
+      const names = weapon.keywords.map((k) => k.name);
+      expect(names, `«${weapon.name}» без SUSTAINED HITS 1 (DACATARAI)`).toContain('sustained');
+      expect(names, `«${weapon.name}» без LETHAL HITS (RENDAX)`).toContain('lethal');
+      expect(names, `«${weapon.name}»: неизвестный кейворд 'active'`).not.toContain('active');
+    }
+  });
+
+  it('Knight-Centura: флаг EPIC HERO находится по правильному id', () => {
+    // Регрессия: в слое стояло '7099-71b2-…' вместо '7099-71b-…', и такого
+    // даташита в базе просто нет. Запись молча не срабатывала — вместе с флагом
+    // на 3 балла.
+    expect(
+      datasheets.some((sheet) => sheet.id === '7099-71b2-56e8-7191'),
+      'опечатка в id не должна существовать в базе'
+    ).toBe(false);
+    const flag = detectUtilityFlags(find('Knight-Centura')).find((item) => item.id === 'Custodes_Knight_Centura');
+    expect(flag, 'флаг не найден — сверь id в abilities.ts').toBeDefined();
+    expect(flag?.points).toBe(3);
+  });
+
+  it('Aleya: переброса попадания у неё нет', () => {
+    // Регрессия: rerollHitOn: [1] давал отряду постоянный переброс, которого нет ни
+    // в одном её правиле. Из её текста в бой идёт FNP 3+ против психики и мортид,
+    // остальное живёт флагом.
+    const aleya = find('Aleya');
+    expect(rerollOptionsOf(aleya.id, 'melee').rerollHitOn ?? []).toEqual([]);
+    expect(rerollOptionsOf(aleya.id, 'ranged').rerollHitOn ?? []).toEqual([]);
+    // Штатный переброс Stand Vigil у копий остался: это другой юнит.
+    const spears = find('Custodian Guard with Adrasite and Pyrithite spears');
+    expect(rerollOptionsOf(spears.id, 'ranged').rerollWoundOn).toEqual([1]);
+  });
+
+  it('слой не задевает соседние юниты Custodes', () => {
+    // Проверка на «лишний радиус»: способности соседей не должны протекать в
+    // отряд, у которого их нет. У Trajann нет ни одного из новых кейвордов.
+    const trajann = of('Trajann Valoris').models[0];
+    expect(trajann.keywords).not.toContain('MELEE_AP_EVASION');
+    expect(trajann.keywords).not.toContain('RESOLUTE_WILL');
+    const wardens = of('Custodian Wardens');
+    for (const model of wardens.models) {
+      expect(model.keywords, `${model.name}`).not.toContain('MELEE_AP_EVASION');
+    }
+  });
+});
+
 describe('способности, зависящие от присоединённого лидера', () => {
   const leaderOf = (name: string): LeaderDefinition => {
     const found = leaderDefinitionsOf(datasheets).find((item) => item.name === name);

@@ -232,6 +232,15 @@ function applyLeaderConditional(
         return extra.length === 0 ? weapon : { ...weapon, keywords: [...weapon.keywords, ...extra] };
       });
     }
+    const defensive = rule.defensiveKeywords ?? [];
+    if (defensive.length > 0) {
+      // Защитные кейворды висят на МОДЕЛИ, а не на оружии: их читает rules.ts
+      // по защитнику (Custodian Wardens с героем — RESOLUTE_WILL), и у клинка
+      // таких кейвордов не бывает.
+      const current = new Set(next.keywords);
+      for (const keyword of defensive) current.add(keyword);
+      next.keywords = [...current];
+    }
     return next;
   });
 

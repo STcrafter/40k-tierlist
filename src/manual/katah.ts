@@ -174,9 +174,32 @@ function hasMeleeWeapon(unit: CombatUnit): boolean {
   return unit.models.some((model) => model.weapons.some((weapon) => weapon.kind === 'melee'));
 }
 
-/** Ключ кэша: стойка зависит от оружия, поэтому в ключ входит состав, а не id. */
+/**
+ * Ключ кэша: стойка зависит от оружия, поэтому в ключ входит состав, а не id.
+ *
+ * Кейворды — часть ключа не для красоты. Выбор сравнивает две РУКИ оружия, и у
+ * клинка, который УЖЕ несёт [LETHAL HITS], рука RENDAX получается пустой:
+ * withStance отфильтрует дубль и ничего не добавит. Значит два юнита с
+ * одинаковыми статами, но разными кейвордами, получают РАЗНЫЕ стойки, и общий
+ * ключ отдал бы одному из них чужое решение — ровно это и ловит тест с родным
+ * Lethal Hits: решение, посчитанное на копьях без Lethal, доставалось копьям
+ * с Lethal.
+ */
 function cacheKeyOf(unit: CombatUnit): string {
-  return `${unit.id}|${weaponSignature(unit.models.flatMap((model) => model.weapons))}`;
+  const weapons = unit.models.flatMap((model) => model.weapons);
+  const keywords = weapons
+    .map((weapon) =>
+      weapon.keywords
+        .map((keyword) =>
+          // Условие тоже в ключе: [LETHAL HITS: non-VEHICLE] и [LETHAL HITS]
+          // для движка — разные кейворды, значит и разные руки оружия.
+          `${keyword.name}${keyword.condition ? `:${keyword.condition.keywords.join('/')}` : ''}`
+        )
+        .sort()
+        .join('+')
+    )
+    .join(';');
+  return `${unit.id}|${weaponSignature(weapons)}|${keywords}`;
 }
 
 /**

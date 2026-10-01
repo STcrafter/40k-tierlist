@@ -117,12 +117,14 @@ export interface LeaderAura {
   /** Кейворды оружию лидера (Morvenn Vahl — LANCE). */
   weaponKeywords?: string[];
   /**
-   * Изменение AP оружия: −1 ухудшает, +1 улучшает (Valerian: −1 AP и себе, и юниту).
+   * Ухудшение AP входящих рукопашных атак на N (Valerian: «Golden Laurels … у
+   * каждой рукопашной атаки по отряду AP хуже на 1»).
    *
-   * Знаковое поле, а не отдельные `apPenalty`/`apBonus`: правило может и ухудшать,
-   * и улучшать, а «−1» и «+1» — это одно сложение со знаком.
+   * Именно защита, поэтому эффект живёт на моделях, а не на оружии. Раньше
+   * здесь было `apDelta`, которое меняло AP СОБСТВЕННЫХ клинков: правило,
+   * ухудшающее чужую атаку, отдавалось юниту как усиление его атаки.
    */
-  apDelta?: number;
+  meleeApWorsening?: number;
 /**
  * Одноразовые эффекты оружию лидера: +N атак и +M силы в рукопашной.
  *
@@ -239,6 +241,24 @@ export interface ManualAbility {
    * второй залп в том же раунде.
    */
   onceExtraRangedVolley?: boolean;
+  /**
+   * Одноразовые кейворды дальнобойному оружию (Custodian Guard с Adrasite/
+   * Pyrithite: «Once per battle … до конца фазы дальнобойное получает [LETHAL
+   * HITS] и [IGNORES COVER]»).
+   *
+   * В бой не идёт — ровно как `onceMeleeKeywords`: одноразовый эффект живёт в
+   * дельте, а не в постоянном уроне. Отдельное поле, а не расширение
+   * `weaponKeywords`, потому что правило говорит именно о дальнобойном оружии.
+   */
+  onceRangedKeywords?: string[];
+  /**
+   * Одноразовый Feel No Pain (Custodian Wardens: «Living Fortress … до конца
+   * фазы модели отряда получают FNP 4+»).
+   *
+   * Тоже только в дельте: постоянный FNP 4+ стоил бы примерно половины
+   * живучести отряда, а способность работает один раз и до конца фазы.
+   */
+  onceFnp?: number;
 }
 
 /** Что юнит получает или теряет при присоединении лидера. */
@@ -255,6 +275,14 @@ export interface LeaderConditional {
   woundsPenalty?: number;
   /** Кейворды рукопашному оружию отряда (Sanctifiers: Sustained Hits 1). */
   meleeWeaponKeywords?: string[];
+  /**
+   * Кейворды на МОДЕЛИ отряда, а не на оружии (Custodian Wardens с героем:
+   * RESOLUTE_WILL).
+   *
+   * Защитные правила живут в rules.ts и смотрят на кейворды защитника, поэтому
+   * их нельзя выразить кейвордом оружия: удар получает юнит, а не его клинок.
+   */
+  defensiveKeywords?: string[];
   /**
    * Сколько моделей отряда лидер возвращает в бой за раунд, пока сам жив
    * (Sanctifiers + Ministorum Priest: D3). Ставится на модели ЛИДЕРА.
@@ -628,11 +656,25 @@ export const MANUAL_ABILITIES: Record<string, ManualAbility> = {
   // ── Adeptus Custodes ───────────────────────────────────────────────────────
   // ID — из `public/BSData/wh40k-11e/Imperium - Adeptus Custodes.json`.
 
-  // Aleya: переброс попадания на 1 всему отряду.
+  /*
+   * Aleya: Fights First отряду (Tactical Perception), FNP 3+ против психики и
+   * мортид (Daughter of the Abyss), снятие «поломки» преследования
+   * (Ceaseless Vigilance).
+   *
+   * Переброса попаданий у неё нет: раньше здесь стоял `rerollHitOn: [1]`, то
+   * есть юнит получал в постоянный бой переброс, которого нет ни в одном её
+   * правиле. Tenacious Spirit (+1 к попаданию и ранению, но только когда отряд
+   * потрёпан) движок не моделирует: замер идёт по свежему отряду, состояния
+   * «потрёпан» в контексте атаки просто нет — такую способность честнее
+   * оставить ценой флага, чем подменять другим перебросом.
+   */
   '9e42-7207-9c30-6122': {
-    rerollHitOn: [1],
     utilityFlags: [
-      { id: 'Custodes_Aleya', points: 1, reason: 'переброс попадания на 1 всему отряду' },
+      {
+        id: 'Custodes_Aleya',
+        points: 1,
+        reason: 'Fights First отряду и FNP 3+ против психики и мортид',
+      },
     ],
   },
 
@@ -672,32 +714,64 @@ export const MANUAL_ABILITIES: Record<string, ManualAbility> = {
       },
     ],
   },
-  '7099-71b2-56e8-7191': {
+  // Knight-Centura. ID сверен с базой: в прежней записи стояло `7099-71b2-…`
+  // вместо `7099-71b-…`, и ни один даташит под таким ключом не находился —
+  // запись молча не срабатывала, а вместе с ней и флаг на 3 балла.
+  '7099-71b-56e8-7191': {
     utilityFlags: [
-      { id: 'Custodes_Knight_Centura', points: 3, reason: 'EPIC HERO с FNP и перебросом ранения' },
+      {
+        id: 'Custodes_Knight_Centura',
+        points: 3,
+        reason:
+          'EPIC HERO Anathema Psykana: FNP 3+ против психики и мортид, +2 к Move и к броскам Advance/Charge отряда',
+      },
     ],
   },
 
   // Custodian Guard: переброс ранения на 1 и одноразовый повторный залп.
   '91b3-2e1c-e642-d213': { rerollWoundOn: [1], onceExtraRangedVolley: true },
 
-  // Custodian Guard with Adrasite and Pyrithite Spears: копья стреляют, поэтому
-  // одноразовые Lethal Hits вешаются на всё оружие отряда.
+  /*
+   * Custodian Guard with Adrasite and Pyrithite Spears: Stand Vigil плюс No Foe
+   * Shall Stand — «Once per battle … до конца фазы дальнобойное оружие получает
+   * [LETHAL HITS] и [IGNORES COVER]».
+   *
+   * Способность одноразовая и только для стрельбы, поэтому она уходит в дельту
+   * (`onceRangedKeywords`), а не в постоянные кейворды. Раньше Lethal Hits
+   * висел на отряде насовсем и попадал на ВСЁ оружие, включая рукопашное, а
+   * Ignores Cover не учитывался вовсе.
+   */
   'af0f-5212-907e-7125': {
     rerollWoundOn: [1],
-    weaponKeywords: [{ keywords: ['Lethal Hits'], models: null }],
+    onceRangedKeywords: ['Lethal Hits', 'Ignores Cover'],
   },
 
-  // Custodian Wardens: с героем атаки сильнее их Т дают −1 ранения. FNP 4+ —
-  // одноразовый, поэтому в ауре, а не в постоянном `fnp`.
+  /*
+   * Custodian Wardens:
+   *   Resolute Will — «пока CHARACTER ведёт отряд, у атаки с S выше T отряда
+   *   минус 1 к броску ранения». Это ухудшение ЧУЖОГО броска, а не потеря ран
+   *   у Стражей: раньше здесь стоял woundsPenalty, который отнимал 1 рану у
+   *   каждой модели (W3 → W2, минус треть живучести), то есть способность,
+   *   данная юниту, работала штрафом за него. Теперь это защитный кейворд на
+   *   моделях, который читает rules.ts.
+   *   Living Fortress — FNP 4+ один раз за бой до конца фазы, поэтому он ушёл
+   *   в одноразовые эффекты (дельту). Постоянный FNP 4+ стоил бы примерно
+   *   половины живучести отряда, а способность работает однократно.
+   */
   '9610-b148-8433-93b8': {
-    withLeader: { leaderIds: null, woundsPenalty: 1 },
-    aura: { fnp: 4 },
+    withLeader: { leaderIds: null, defensiveKeywords: ['RESOLUTE_WILL'] },
+    onceFnp: 4,
   },
 
-  // Shield-Captain: одноразовые Active и Sustained Hits 1 в рукопашной.
+  /*
+   * Shield-Captain: Master of the Stances включает ОБЕ стойки, то есть
+   * рукопашное оружие получает [SUSTAINED HITS 1] (DACATARAI) и [LETHAL HITS]
+   * (RENDAX). Раньше здесь стояло «Active» — такого кейворда нет ни в одном
+   * правиле движка, поэтому RENDAX молча терялся, и в дельту попадало ровно то,
+   * что отряд и так получает от DACATARAI.
+   */
   'b61c-b815-65c0-b1cc': {
-    aura: { onceMeleeKeywords: ['Active', 'Sustained Hits 1'] },
+    aura: { onceMeleeKeywords: ['Sustained Hits 1', 'Lethal Hits'] },
     utilityFlags: [
       {
         id: 'Custodes_Shield_Captain',
@@ -735,8 +809,14 @@ export const MANUAL_ABILITIES: Record<string, ManualAbility> = {
   // Trajann Valoris: одноразово 12 атак топором вместо 6 — +6 к числу атак.
   '7d7c-c212-47a3-38e4': { aura: { onceMeleeAttacks: 6 } },
 
-  // Valerian: −1 AP и себе, и присоединённому юниту.
-  '8103-2e01-5d6a-b761': { aura: { apDelta: -1 } },
+  /*
+   * Valerian: Golden Laurels — «пока ведёт отряд, у каждой рукопашной атаки по
+   * отряду AP хуже на 1». Это защита, а не усиление: раньше здесь стоял
+   * apDelta, который менял AP СОБСТВЕННОГО оружия (Gnosis AP-3 → AP-4), то
+   * есть незаработанный атакующий бафф вместо правила. Теперь эффект
+   * защитный и лежит на моделях: рукопашный урон по отряду слабее.
+   */
+  '8103-2e01-5d6a-b761': { aura: { meleeApWorsening: 1 } },
 
 };
 
@@ -806,6 +886,12 @@ export function applyAuraToModels(
     // Junith Eruita даёт его и себе, и присоединённому юниту.
     const modelKeywords = new Set(withStats.keywords);
     if (aura.stealth === true) modelKeywords.add('MELEE_EVASION');
+    // MELEE_AP_EVASION: рукопашные атаки по этой модели теряют столько AP.
+    // Valerian даёт его и себе, и присоединённому юниту. Читает rules.ts —
+    // поэтому кейворд и лежит на модели, а не на оружии.
+    if (aura.meleeApWorsening !== undefined && aura.meleeApWorsening > 0) {
+      modelKeywords.add('MELEE_AP_EVASION');
+    }
     const withKeywords = { ...withStats, keywords: [...modelKeywords] };
 
     return {
@@ -848,11 +934,6 @@ function applyAuraToWeapon(weapon: CombatWeapon, aura: LeaderAura): CombatWeapon
   if (aura.toHit !== undefined && weapon.skill !== null) {
     next.skill = Math.max(2, weapon.skill - aura.toHit);
   }
-  if (aura.apDelta !== undefined) {
-    // Valerian: −1 AP и себе, и присоединённому юниту. Знак правит знак правила:
-    // поле знаковое, поэтому просто складываем.
-    next.ap = Math.max(-10, Math.min(5, weapon.ap + aura.apDelta));
-  }
   if ((aura.weaponKeywords ?? []).length > 0) {
     const extra = parseKeywords(aura.weaponKeywords!).filter(
       (keyword) => !weapon.keywords.some((existing) => existing.name === keyword.name)
@@ -880,13 +961,37 @@ export function withOnceEffects(unit: CombatUnit): CombatUnit {
     (aura?.onceMeleeAttacks ?? 0) > 0 ||
     (aura?.onceMeleeStrength ?? 0) > 0 ||
     (aura?.onceMeleeKeywords ?? []).length > 0 ||
+    (ability?.onceRangedKeywords ?? []).length > 0 ||
+    ability?.onceFnp !== undefined ||
     ability?.onceDamageCapPerRound !== undefined ||
     ability?.onceExtraRangedVolley === true;
   if (!hasOnce) return unit;
+  // Разовые кейворды дальнобойному оружию: список одинаков для всех моделей,
+  // поэтому разбирается один раз на весь запуск, а не внутри map по моделям.
+  const rangedOnce = parseKeywords(ability?.onceRangedKeywords ?? []);
   return {
     ...unit,
     models: unit.models.map((model) => {
-      const next: CombatModel = { ...model, weapons: model.weapons.map((w) => applyOnceEffects(w, aura)) };
+      const next: CombatModel = {
+        ...model,
+        weapons: model.weapons.map((w) => {
+          const withMelee = applyOnceEffects(w, aura);
+          // Только стрельба: правило говорит о ranged-оружии, и рукопашному
+          // копью этот кейворд достаться не должен.
+          if (rangedOnce.length === 0 || w.kind !== 'ranged') return withMelee;
+          const extra = rangedOnce.filter(
+            (keyword) => !withMelee.keywords.some((existing) => existing.name === keyword.name)
+          );
+          return extra.length === 0 ? withMelee : { ...withMelee, keywords: [...withMelee.keywords, ...extra] };
+        }),
+      };
+      if (ability?.onceFnp !== undefined) {
+        // Living Fortress: FNP один раз до конца фазы. Постоянным его делать
+        // нельзя (см. поле onceFnp) — здесь он нужен только ради дельты.
+        next.fnp = model.fnp === null ? ability.onceFnp : Math.max(model.fnp, ability.onceFnp);
+        // Область из способности важнее: 'mortals' ограничивает и не защищает.
+        next.fnpScope = 'all';
+      }
       if (ability?.onceDamageCapPerRound !== undefined) {
         next.damageCapPerRound = ability.onceDamageCapPerRound;
       }

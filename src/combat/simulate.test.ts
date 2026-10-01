@@ -271,6 +271,66 @@ describe('Stealth', () => {
   });
 });
 
+describe('ухудшение чужой атаки (Golden Laurels, Resolute Will)', () => {
+  // Оба правила — Adeptus Custodes, и оба делают одно: ухудшают атаку
+  // ПРОТИВНИКА. Поэтому они живут в правилах по защитнику, а не в оружии
+  // атакующего, и проверяются на двух концах сразу: кейворд ставит ручной
+  // слой (adapter.test.ts), а читает его движок — здесь.
+  const evasive = (keywords: string[]): ReturnType<typeof model> =>
+    model({ toughness: 4, wounds: 9, save: 3, keywords: ['INFANTRY', ...keywords] });
+  const target = (keywords: string[]) => unit([evasive(keywords)]);
+
+  it('MELEE_AP_EVASION отнимает у рукопашной атаки 1 AP', () => {
+    // Sv3+ против AP-2 — броня 5+, с Golden Laurels выходит 6+. Бросок 5: по 2+
+    // попадание, по 3+ ранение, по 5+ сейв проходит, по 6+ — нет.
+    const blade = weapon({ kind: 'melee', range: null, skill: 2, strength: 5, ap: -2 });
+    expect(simulateTrial(gunner(blade), target([]), { rng: die(5), phase: 'melee' }).damage).toBe(0);
+    expect(
+      simulateTrial(gunner(blade), target(['MELEE_AP_EVASION']), { rng: die(5), phase: 'melee' }).damage
+    ).toBe(1);
+  });
+
+  it('MELEE_AP_EVASION не трогает стрельбу', () => {
+    // Те же числа и та же броня, но атака дальнобойная: правило рукопашное.
+    const gun = weapon({ skill: 2, strength: 5, ap: -2 });
+    expect(simulateTrial(gunner(gun), target(['MELEE_AP_EVASION']), { rng: die(5) }).damage).toBe(0);
+  });
+
+  it('MELEE_AP_EVASION не лезет в инвульню', () => {
+    // AP сквозь инвульню не проходит. Если бы хук сдвинул и её, сейв 3+ стал бы
+    // 4+, и бросок 3 пробил бы броню: ровно это проверяем.
+    const blade = weapon({ kind: 'melee', range: null, skill: 2, strength: 5, ap: -2 });
+    const invulnerable = unit([
+      model({ toughness: 4, wounds: 9, save: 3, invuln: 3, keywords: ['INFANTRY', 'MELEE_AP_EVASION'] }),
+    ]);
+    expect(simulateTrial(gunner(blade), invulnerable, { rng: die(3), phase: 'melee' }).damage).toBe(0);
+  });
+
+  it('RESOLUTE_WILL ухудшает ранение, когда S выше T', () => {
+    // Custodian Wardens T3: атака S5 даёт порог 3+ (S > T), Resolute Will — 4+.
+    // Sv6+ от любого броска отказывает, так что счёт ведёт только ранение.
+    // S6 мимо: там S ≥ 2T и порог 2+, и правило подняло бы его всего до 3+,
+    // поэтому для проверки берётся именно S5 — случай «S чуть выше T».
+    const sword = weapon({ kind: 'melee', range: null, skill: 2, strength: 5 });
+    const wardens = unit([model({ toughness: 3, wounds: 9, save: 6, keywords: ['INFANTRY'] })]);
+    const resolute = unit([
+      model({ toughness: 3, wounds: 9, save: 6, keywords: ['INFANTRY', 'RESOLUTE_WILL'] }),
+    ]);
+    expect(simulateTrial(gunner(sword), wardens, { rng: die(3), phase: 'melee' }).damage).toBe(1);
+    expect(simulateTrial(gunner(sword), resolute, { rng: die(3), phase: 'melee' }).damage).toBe(0);
+  });
+
+  it('RESOLUTE_WILL молчит при S = T', () => {
+    // S3 против T3 — порог 4+ и без кейворда. Сработало бы правило — стало бы
+    // 5+, и бросок 4 уже не ранил бы.
+    const sword = weapon({ kind: 'melee', range: null, skill: 2, strength: 3 });
+    const resolute = unit([
+      model({ toughness: 3, wounds: 9, save: 6, keywords: ['INFANTRY', 'RESOLUTE_WILL'] }),
+    ]);
+    expect(simulateTrial(gunner(sword), resolute, { rng: die(4), phase: 'melee' }).damage).toBe(1);
+  });
+});
+
 describe('кейворды 11-й редакции', () => {
   it('условный [LETHAL HITS: non-MONSTER/VEHICLE] не работает по технике', () => {
     // Регрессия: правило проверяло только имя кейворда и не смотрело на
