@@ -16,8 +16,15 @@
  */
 
 import type { CombatMode, TargetParadigm, Tier } from '../../src/tier/scoring.ts';
+import type { LeaderScoreRow } from '../../src/tier/leader-score.ts';
 
 export type { CombatMode, TargetParadigm, Tier };
+/**
+ * Строка сводки по лидеру переиспользуется из `src`: она уже описана там
+ * ровно для этого файла, а второй раз объявлять те же десять полей значило бы
+ * разрешить им разойтись при первой же правке сборки.
+ */
+export type { LeaderScoreRow };
 
 /** Сырая метрика юнита в одном режиме боя. */
 export interface UnitMetrics {
@@ -272,6 +279,43 @@ export interface AttachedData {
   generatedAt: string;
   attached: Record<TargetParadigm, Record<CombatMode, AttachedRow[]>>;
 }
+
+/**
+ * `data/leaders.json` — вкладка «Лидеры», грузится при переключении.
+ *
+ * Это НЕ строки пар, а свёртка по лидеру: одна строка отвечает на вопрос
+ * «какого лидера стоит взять», тогда как вкладка «с лидером» отвечает на
+ * «насколько хороша вот эта связка». Файл маленький (сотни строк), поэтому
+ * режим боя и парадигма цели к нему не относятся — в сборке он считается по
+ * объединённой сетке all/combined. Эти фильтры на вкладке скрываются.
+ */
+export interface LeaderScoreData {
+  generatedAt: string;
+  /** Сила усадки к среднему по рынку, заданная сборкой. */
+  shrinkage: number;
+  leaders: LeaderScoreRow[];
+}
+
+/**
+ * Ключи колонок вкладки «Лидеры».
+ *
+ * Живут в model.ts, а не в разметке, по одной причине: sortHeader берёт ключ
+ * строкой и обращается к нему как `row[key]`. Опечатка или переименование поля
+ * в сборке дали бы `undefined` → `Number(undefined)` = NaN → сравнение всегда
+ * ложно, то есть тихо застывшую сортировку без единой ошибки. Тест
+ * `model.test.ts` сверяет этот список с настоящими ключами LeaderScoreRow.
+ */
+export const LEADER_COLUMN_KEYS = [
+  'name',
+  'faction',
+  'points',
+  'pairs',
+  'lift',
+  'liftShrunk',
+  'result',
+  'score',
+  'improvedShare',
+] as const;
 
 /**
  * Принадлежит ли строка типу TargetParadigm.

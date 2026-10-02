@@ -24,10 +24,13 @@ import { withinCalculationBudget } from '../../src/combat/budget.ts';
 import { COLUMNS } from '../../src/tier/columns.ts';
 import {
   isTargetParadigm,
+  LEADER_COLUMN_KEYS,
   type AttachedData,
   type AttachedRow,
   type CombatMode,
   type IndexData,
+  type LeaderScoreData,
+  type LeaderScoreRow,
   type TargetParadigm,
   type Tier,
   type UnitCell,
@@ -39,6 +42,7 @@ import {
 
 const INDEX_URL = './data/tierlist.json';
 const ATTACHED_URL = './data/attached.json';
+const LEADERS_URL = './data/leaders.json';
 const UNIT_URL = (id: string): string => `./data/units/${encodeURIComponent(id)}.json`;
 
 const MODES: Array<{ id: CombatMode; title: string }> = [
@@ -54,6 +58,14 @@ const PARADIGM_FALLBACK: TargetParadigm[] = ['all', 'infantry', 'elite', 'armor'
 
 /** Задержка перед перерисовкой по вводу в поиск. */
 const SEARCH_DEBOUNCE_MS = 140;
+
+/**
+ * Раздел тирлиста: юниты, пары «отряд + лидер» или сводка по самим лидерам.
+ *
+ * Сводка отвечает на другой вопрос, чем пары: пара — «насколько хороша вот эта
+ * связка», сводка — «какого лидера стоит взять».
+ */
+type View = 'units' | 'attached' | 'leaders';
 
 const state = {
   index: null as IndexData | null,
@@ -74,7 +86,8 @@ const state = {
    * настоящих юнитов.
    */
   showLeaders: false,
-  view: 'units' as 'units' | 'attached',
+  view: 'units' as View,
+  leaders: null as LeaderScoreData | null,
   /** Открытая панель деталей: id юнита, сама запись и статус загрузки. */
   open: null as { id: string; detail: UnitDetail | null; error: string | null } | null,
 };
@@ -95,6 +108,14 @@ const detailCache = new Map<string, UnitDetail>();
  * одни и те же 6.7 МБ.
  */
 let attachedPromise: Promise<AttachedData> | null = null;
+
+/**
+ * Сводка по лидерам грузится один раз за сессию.
+ *
+ * Кэшируется промис, как `attachedPromise`, по той же причине: переключение
+ * туда-обратно не должно слать повторный запрос.
+ */
+let leadersPromise: Promise<LeaderScoreData> | null = null;
 
 /** Индекс — единственный файл, без которого таблица не рисуется. */
 async function loadIndex(): Promise<IndexData> {
@@ -121,6 +142,16 @@ function loadAttached(): Promise<AttachedData> {
     return (await response.json()) as AttachedData;
   })();
   return attachedPromise;
+}
+
+/** Сводка по лидерам; файл маленький, но запрос тоже кэшируется на сессию. */
+function loadLeaders(): Promise<LeaderScoreData> {
+  leadersPromise ??= (async () => {
+    const response = await fetch(LEADERS_URL);
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    return (await response.json()) as LeaderScoreData;
+  })();
+  return leadersPromise;
 }
 
 /* ─────────────────────────  Подписи и формат  ───────────────────────── */
@@ -317,6 +348,48 @@ function compareAttached(a: AttachedRow, b: AttachedRow, key: string): number {
   return Number(left) - Number(right) || byName;
 }
 
+/**
+ * Сортировка строк сводки по лидерам.
+ *
+ * Отдельная функция, а не переиспользование `compareAttached`: набор колонок
+ * другой и значения тут — средние, а не результаты отдельных пар. Имя в конце
+ * — по той же причине, что и в остальных компараторах: иначе строки с равным
+ * баллом переставлялись бы при каждой перерисовке.
+ */
+function compareLeader(a: LeaderScoreRow, b: LeaderScoreRow, key: string): number {
+  const byName = a.name.localeCompare(b.name, 'ru');
+  const left = a[key as keyof LeaderScoreRow];
+  const right = b[key as keyof LeaderScoreRow];
+  if (typeof left === 'string' || typeof right === 'string') {
+    return String(left).localeCompare(String(right), 'ru') || byName;
+  }
+  return Number(left) - Number(right) || byName;
+}
+
+/**
+ * Ключи колонок вкладки «Лидеры» берутся из model.ts: см. объявление и
+ * причину, почему список нельзя держать в разметке.
+ */
+const LEADER_COLUMNS = LEADER_COLUMN_KEYS;
+
+/**
+ * Отфильтрованные и отсортированные лидеры.
+ *
+ * Тиров и перцентилей здесь нет: сводка своя шкала, а не часть общей сетки.
+ * Поэтому фильтр по тирам на этой вкладке скрывается — оставлять его значило бы
+ * показать control, который тихо ничего не делает.
+ */
+function visibleLeaderRows(): LeaderScoreRow[] {
+  if (state.leaders === null) return [];
+  const needle = state.search.trim().toLowerCase();
+  const rows = state.leaders.leaders.filter((row) => {
+    if (state.faction && row.faction !== state.faction) return false;
+    return needle === '' || row.name.toLowerCase().includes(needle);
+  });
+  const dir = state.sortDesc ? -1 : 1;
+  return rows.sort((a, b) => compareLeader(a, b, state.sortKey) * dir);
+}
+
 /* ─────────────────────────  Каркас страницы  ───────────────────────── */
 
 /**
@@ -416,25 +489,29 @@ function mountControls(app: HTMLElement): void {
       <div class="segmented" role="group" aria-labelledby="label-view">
         <button type="button" data-view="units" aria-pressed="false">Юниты</button>
         <button type="button" data-view="attached" aria-pressed="false">С лидером</button>
+        <button type="button" data-view="leaders" aria-pressed="false"
+          title="Сводка по самим лидерам: насколько лидер поднимает свои отряды и во что они превращаются. Считается по объединённой сетке «все отряды, смешанный бой», поэтому режим боя и парадигма цели здесь не при чём.">
+          Лидеры
+        </button>
       </div>
     </div>
     <div class="control">
       <label class="control-label" for="faction">Фракция</label>
       <select id="faction"><option value="">Все фракции</option></select>
     </div>
-    <div class="control">
+    <div class="control" data-unit-view>
       <span class="control-label" id="label-mode">Режим боя</span>
       <div class="segmented" role="group" aria-labelledby="label-mode">${modes}</div>
     </div>
-    <div class="control">
+    <div class="control" data-unit-view>
       <span class="control-label" id="label-paradigm">Парадигма цели</span>
       <div class="segmented" role="group" aria-labelledby="label-paradigm">${paradigms}</div>
     </div>
-    <div class="control">
+    <div class="control" data-unit-view>
       <span class="control-label" id="label-tier">Тиры</span>
       <div class="segmented tier-filter" role="group" aria-labelledby="label-tier">${tierButtons}</div>
     </div>
-    <div class="control">
+    <div class="control" data-unit-view>
       <span class="control-label" id="label-leaders">Лидеры</span>
       <button type="button" data-show-leaders aria-pressed="false"
         title="Показать Leader и Support в основной вкладке. Они считаются в общей шкале с боевыми юнитами и почти всегда выглядят слабыми — но их собственные тиры посчитаны честно.">
@@ -474,12 +551,32 @@ function syncControls(app: HTMLElement): void {
   mark('[data-show-leaders]', () => state.showLeaders);
   const select = app.querySelector<HTMLSelectElement>('#faction');
   if (select !== null) select.value = state.faction;
+  /*
+   * Режим боя, парадигма цели и тиры к сводке по лидерам отношения не имеют:
+   * она считается по одной объединённой сетке. Эти контролы скрываются, а не
+   * остаются видимыми и бесполезными — иначе переключение режима на этой
+   * вкладке выглядело бы как поломка. Фильтр по тирам убрать пришлось
+   * отдельно от остальных: у лидеров своих тиров нет вовсе.
+   */
+  const leadersView = state.view === 'leaders';
+  for (const el of app.querySelectorAll<HTMLElement>('[data-unit-view]')) {
+    el.hidden = leadersView;
+  }
+  const search = app.querySelector<HTMLInputElement>('#search');
+  if (search !== null) search.placeholder = leadersView ? 'Название лидера' : 'Название юнита';
 }
 
 /** Сводка по тирам для строки состояния. */
 function renderStatus(app: HTMLElement): void {
   const status = app.querySelector<HTMLElement>('#status');
   if (status === null) return;
+  // У сводки по лидерам нет ни тиров, ни режима боя: это своя шкала по одной
+  // объединённой сетке. Печатать там «S:0·A:0» и название парадигмы значило бы
+  // показывать нули, будто это счёт.
+  if (state.view === 'leaders') {
+    status.textContent = `Лидеры · сводка по объединённой сетке «все отряды, смешанный бой» · всего ${visibleLeaderRows().length}`;
+    return;
+  }
   const attached = state.view === 'attached';
   const rows = attached ? visibleAttachedRows() : visibleUnits();
   const counts: Record<string, number> = {};
@@ -650,6 +747,80 @@ function renderAttachedTable(app: HTMLElement): void {
 
 function leaderNameOf(id: string): string {
   return state.index?.leaders.find((leader) => leader.id === id)?.name ?? id;
+}
+
+/**
+ * Таблица сводки по лидерам: «какого лидера стоит взять».
+ *
+ * Подъём и результат показываются и сырыми, и после усадки. Сырые — это то,
+ * что на самом деле вышло из пар, а усадка оттягивает строки с малым числом пар
+ * к среднему по рынку: у половины лидеров пар меньше трёх, и без неё таблица
+ * награждала бы шум. Число пар стоит рядом обязательно — по нему видно, чему
+ * верить в конкретной строке.
+ */
+function renderLeadersTable(app: HTMLElement): void {
+  const host = app.querySelector<HTMLElement>('#table-wrap');
+  if (host === null) return;
+  if (state.leaders === null) {
+    host.innerHTML = '<p class="empty">Загрузка сводки по лидерам…</p>';
+    return;
+  }
+  const rows = visibleLeaderRows();
+  if (rows.length === 0) {
+    host.innerHTML = '<p class="empty">Нет лидеров, подходящих под фильтры.</p>';
+    return;
+  }
+  const columns: Array<[string, string, boolean, string?]> = [
+    ['name', 'Лидер', false],
+    ['faction', 'Фракция', false],
+    ['points', 'Очки', true, 'Сколько стоит сам лидер.'],
+    [
+      'pairs',
+      'Пары',
+      true,
+      'Сколько пар за лидером. У половины лидеров их меньше трёх — такой строке и верь слабее.',
+    ],
+    [
+      'lift',
+      'Подъём',
+      true,
+      'На сколько мест в общей шкале лидер поднял свои отряды. Отвечает на вопрос «что он делает».',
+    ],
+    ['liftShrunk', 'Подъём (усад.)', true, 'То же, но стянутое к среднему по рынку по числу пар.'],
+    ['result', 'Результат', true, 'Во что превращаются отряды с лидером.'],
+    ['score', 'Балл', true, 'Итоговый балл = результат после усадки. Ранжирование по нему.'],
+    [
+      'improvedShare',
+      'Доля улучшений',
+      true,
+      'В скольких парах лидер поднял отряд, а не опустил.',
+    ],
+  ];
+  const head = columns
+    .map(([key, title, numeric, hint]) => sortHeader(key, title, numeric, hint))
+    .join('');
+  const body = rows
+    .map((row) => {
+      return `<tr>
+        <th scope="row" class="unit-cell">
+          <span class="unit-name plain">${esc(row.name)}</span>
+        </th>
+        <td>${esc(row.faction)}</td>
+        <td class="num">${row.points}</td>
+        <td class="num">${row.pairs}</td>
+        <td class="num ${deltaClass(row.lift)}">${signed(row.lift, 2)}</td>
+        <td class="num ${deltaClass(row.liftShrunk)}">${signed(row.liftShrunk, 2)}</td>
+        <td class="num">${num(row.result, 2)}</td>
+        <td class="num">${num(row.score, 2)}</td>
+        <td class="num">${(row.improvedShare * 100).toFixed(0)}%</td>
+      </tr>`;
+    })
+    .join('');
+  host.innerHTML = `<table>
+    <caption class="sr-only">Сводка по лидерам: насколько лидер поднимает свои отряды и во что они превращаются. Считается по объединённой сетке «все отряды, смешанный бой»</caption>
+    <thead><tr>${head}</tr></thead>
+    <tbody>${body}</tbody>
+  </table>`;
 }
 
 /* ─────────────────────────  Панель деталей  ───────────────────────── */
@@ -1068,6 +1239,7 @@ function focusablesIn(dialog: HTMLElement): HTMLElement[] {
 function render(app: HTMLElement): void {
   syncControls(app);
   if (state.view === 'attached') renderAttachedTable(app);
+  else if (state.view === 'leaders') renderLeadersTable(app);
   else renderTable(app);
   renderStatus(app);
   renderDialog(app);
@@ -1078,9 +1250,38 @@ function renderAll(app: HTMLElement): void {
   render(app);
 }
 
-/** Переключение вкладки «с лидерами» подтягивает отдельный файл. */
-async function switchView(app: HTMLElement, view: 'units' | 'attached'): Promise<void> {
+/** Переключение раздела подтягивает отдельный файл, если он ещё не гружен. */
+async function switchView(app: HTMLElement, view: View): Promise<void> {
   state.view = view;
+  /*
+   * Ключ сортировки приходит из прошлого раздела, а набор колонок у разделов
+   * разный. Оставить чужой нельзя: `Number(undefined)` даёт NaN, сравнение
+   * становится всегда ложным, и строки замирают в случайном порядке без
+   * всякой видимой причины. Список ключей сводки — единственный, который нужно
+   * знать наверняка: выйдя из неё, любой её ключ в других разделах не имеет
+   * смысла (кроме «name», который есть везде и сбрасывать незачем).
+   */
+  const leaderKeys = LEADER_COLUMNS as readonly string[];
+  const leaderOnly = leaderKeys.filter((key) => key !== 'name');
+  if (view === 'leaders' && !leaderKeys.includes(state.sortKey)) {
+    state.sortKey = 'score';
+    state.sortDesc = true;
+  } else if (view !== 'leaders' && leaderOnly.includes(state.sortKey)) {
+    state.sortKey = 'totalScore';
+    state.sortDesc = true;
+  }
+  if (view === 'leaders' && state.leaders === null) {
+    render(app);
+    try {
+      state.leaders = await loadLeaders();
+    } catch (error) {
+      const host = app.querySelector<HTMLElement>('#table-wrap');
+      if (host !== null) {
+        host.innerHTML = `<p class="empty">Не удалось загрузить сводку по лидерам: ${esc(String(error))}</p>`;
+      }
+      return;
+    }
+  }
   if (view === 'attached' && state.attached === null) {
     render(app);
     try {
@@ -1132,7 +1333,10 @@ function bindEvents(app: HTMLElement): void {
 
     const viewButton = target.closest<HTMLElement>('[data-view]');
     if (viewButton?.dataset.view !== undefined) {
-      void switchView(app, viewButton.dataset.view as 'units' | 'attached');
+      const view = viewButton.dataset.view;
+      if (view === 'units' || view === 'attached' || view === 'leaders') {
+        void switchView(app, view);
+      }
       return;
     }
 
