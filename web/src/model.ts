@@ -128,9 +128,16 @@ export type UnitCell = Pick<
 export interface UnitIndexEntry {
   id: string;
   name: string;
-  /** Основная фракция для отображения. */
+  /** Верхняя фракция: то, что стоит в списке фильтра. */
   faction: string;
-  /** Все фракции из BSData categoryLinks, включая Astartes и чаптер. */
+  /**
+   * Подразделение внутри гиперфракции (чаптер, легион, Ynnari) либо null.
+   *
+   * Нужно только переключателю подфракций: общие юниты (Intercessor Squad) с
+   * null видны в каждом подразделе своей фракции, а чаптерные — только в своём.
+   */
+  subFaction: string | null;
+  /** Верхние фракции юнита; в списке фильтра не используются. */
   factions: string[];
   points: number;
   models: number;
@@ -270,6 +277,15 @@ export interface IndexData {
   modes: CombatMode[];
   paradigms: TargetParadigm[];
   factions: string[];
+  /**
+   * Подфракции по верхним фракциям: `{ 'Adeptus Astartes': ['Blood Angels', …] }`.
+   *
+   * Ключ есть только у гиперфракций, у которых нашлись подразделения, поэтому
+   * переключатель строится по этому списку, а не по зашитому перечню. Сами
+   * подфракции в `factions` намеренно не попадают — иначе список фракций
+   * засорялся бы чаптерами.
+   */
+  subFactions: Record<string, string[]>;
   units: UnitIndexEntry[];
   leaders: LeaderSummary[];
 }

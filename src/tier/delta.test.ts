@@ -87,6 +87,7 @@ function fakeLeader(models: CombatModel[], bonuses: Partial<LeaderBonuses> = {})
     id: 'test-leader',
     name: 'Test Leader',
     faction: 'Imperium',
+    subFaction: null,
     factions: ['Imperium'],
     points: 0,
     keywords: ['Leader'],

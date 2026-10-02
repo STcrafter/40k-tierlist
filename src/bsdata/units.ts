@@ -12,6 +12,7 @@
 
 import { asArray, type BsDatabase } from './load.ts';
 import { buildDatasheet } from './datasheets.ts';
+import { factionFromCatalogue } from './factions.ts';
 import { asChoiceGroup, weaponsOf, withoutRoster } from './composition.ts';
 import { sizeTiersOf } from './points.ts';
 import type { BsDatasheet, BsParseReport, BsWargear } from './types.ts';
@@ -33,29 +34,32 @@ export interface BsParseOptions {
 
 /** 'Xenos - Orks' → 'Orks'; 'Imperium - Astra Militarum - Library' → 'Astra Militarum'. */
 export function factionFromCatalogueName(name: string): string {
-  const parts = name
-    .split(' - ')
-    .map((part) => part.trim())
-    .filter((part) => part !== '' && part.toLowerCase() !== 'library');
-  return parts.length > 1 ? parts[parts.length - 1] : parts[0] ?? name;
+  return factionFromCatalogue(name).faction;
 }
 
-/** Фракция каталога: самое частое «Faction: …» среди его даташитов. */
+/**
+ * Фракция каталога: самое частое «Faction: …» среди его даташитов.
+ *
+ * Запасной путь для юнитов без собственного `Faction:`. Имён каталогов в нём
+ * быть не должно: всё, что он выдаёт, обязано быть канонической фракцией,
+ * иначе в список фильтра попадал мусор из имён файлов.
+ */
 function factionOfCatalogue(datasheets: BsDatasheet[], catalogueRaw: BsCatalogueRaw): string {
   const counts = new Map<string, number>();
   for (const datasheet of datasheets) {
+    if (datasheet.faction === 'Unknown') continue;
     counts.set(datasheet.faction, (counts.get(datasheet.faction) ?? 0) + 1);
   }
   let best: string | null = null;
   let bestCount = 0;
   for (const [faction, count] of counts) {
-    if (faction === 'Unknown') continue;
     if (count > bestCount) {
       best = faction;
       bestCount = count;
     }
   }
-  return best ?? factionFromCatalogueName(String(catalogueRaw.name ?? 'Unknown'));
+  if (best !== null) return best;
+  return factionFromCatalogue(String(catalogueRaw.name ?? 'Unknown')).faction;
 }
 
 /** Оружейные профили и записи снаряжения даташита, разложенные по видам. */
@@ -148,7 +152,7 @@ export function parseBsDatabase(db: BsDatabase, options: BsParseOptions = {}): B
       const datasheet = options.roster === 'drop' ? withoutRosterDatasheet(built) : built;
       const resolved: BsDatasheet =
         datasheet.faction === 'Unknown'
-          ? { ...datasheet, faction, factions: datasheet.factions.includes(faction) ? datasheet.factions : [...datasheet.factions, faction] }
+          ? { ...datasheet, faction, factions: [faction] }
           : datasheet;
 
       // Дедупликация: одно и то же определение может быть связано из нескольких
@@ -156,12 +160,18 @@ export function parseBsDatabase(db: BsDatabase, options: BsParseOptions = {}): B
       const existing = byId.get(resolved.id);
       if (existing) {
         const mergedFactions = [...new Set([...existing.factions, ...resolved.factions])];
-        const merged: BsDatasheet = { ...existing, factions: mergedFactions };
-        const better =
+        /*
+         * Основная фракция берётся не из первого попавшегося каталога, а из
+         * того, где у юнита было СВОЁ `Faction:`. Порядок файлов задавал
+         * результат: Traitor Enforcer определён сразу в трёх каталогах и ни в
+         * одном не имеет своего ключевого слова, поэтому получал фракцию того,
+         * что прочиталось первым, — «Chaos Daemons» вместо Chaos Space Marines.
+         */
+        const preferResolved =
           (existing.faction === 'Unknown' && resolved.faction !== 'Unknown') ||
-          resolved.variants.length > existing.variants.length;
-        if (better) byId.set(resolved.id, { ...resolved, factions: mergedFactions });
-        else if (mergedFactions.length > existing.factions.length) byId.set(resolved.id, merged);
+          (existing.subFaction === null && resolved.subFaction !== null);
+        const better = preferResolved || resolved.variants.length > existing.variants.length;
+        byId.set(resolved.id, { ...(better ? resolved : existing), factions: mergedFactions });
         continue;
       }
 

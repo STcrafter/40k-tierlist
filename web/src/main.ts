@@ -73,6 +73,14 @@ const state = {
   mode: 'combined' as CombatMode,
   targetParadigm: 'all' as TargetParadigm,
   faction: '',
+  /**
+   * Подфракция внутри выбранной гиперфракции (чаптер, легион, Ynnari).
+   *
+   * Пустая строка — «все подфракции». Отдельное поле, а не часть `faction`:
+   * в списке фракций 12 чаптеров Adeptus Astartes засоряли бы его сильнее, чем
+   * дают реальную пользу.
+   */
+  subFaction: '',
   tierFilter: new Set<Tier>(),
   search: '',
   sortKey: 'totalScore',
@@ -292,6 +300,12 @@ function visibleUnits(): UnitIndexEntry[] {
     if (!withinCalculationBudget(unit.points)) return false;
     if (unit.isLeader && !state.showLeaders) return false;
     if (state.faction && !unit.factions.includes(state.faction)) return false;
+    // Общие юниты (subFaction === null) видны в каждом подразделении: по
+    // решению владельца проекта Intercessor Squad показывается и под Blood
+    // Angels, и под Ultramarines, потому что он реально годятся обоим.
+    if (state.subFaction && unit.subFaction !== null && unit.subFaction !== state.subFaction) {
+      return false;
+    }
     if (needle && !unit.name.toLowerCase().includes(needle)) return false;
     const tier = cellOf(unit, state.targetParadigm, state.mode)?.tier;
     if (state.tierFilter.size > 0 && (tier === undefined || !state.tierFilter.has(tier))) {
@@ -499,6 +513,10 @@ function mountControls(app: HTMLElement): void {
       <label class="control-label" for="faction">Фракция</label>
       <select id="faction"><option value="">Все фракции</option></select>
     </div>
+    <div class="control" id="subfaction-control" hidden>
+      <label class="control-label" for="subfaction">Подфракция</label>
+      <select id="subfaction"></select>
+    </div>
     <div class="control" data-unit-view>
       <span class="control-label" id="label-mode">Режим боя</span>
       <div class="segmented" role="group" aria-labelledby="label-mode">${modes}</div>
@@ -551,6 +569,7 @@ function syncControls(app: HTMLElement): void {
   mark('[data-show-leaders]', () => state.showLeaders);
   const select = app.querySelector<HTMLSelectElement>('#faction');
   if (select !== null) select.value = state.faction;
+  syncSubFactionControl(app);
   /*
    * Режим боя, парадигма цели и тиры к сводке по лидерам отношения не имеют:
    * она считается по одной объединённой сетке. Эти контролы скрываются, а не
@@ -564,6 +583,45 @@ function syncControls(app: HTMLElement): void {
   }
   const search = app.querySelector<HTMLInputElement>('#search');
   if (search !== null) search.placeholder = leadersView ? 'Название лидера' : 'Название юнита';
+}
+
+/**
+ * Переключатель подфракций: показывается только у гиперфракций.
+ *
+ * Опции берутся из данных (`index.subFactions`), а не из зашитого списка: после
+ * обновления BSData подразделение без юнитов исчезнет само, а не останется
+ * пустым пунктом. Пересобирается только состав опций — сам select живёт в
+ * каркасе, иначе терялся бы фокус при каждом изменении фракции.
+ */
+function syncSubFactionControl(app: HTMLElement): void {
+  const host = app.querySelector<HTMLElement>('#subfaction-control');
+  const select = app.querySelector<HTMLSelectElement>('#subfaction');
+  if (host === null || select === null) return;
+
+  const options = state.faction === '' ? undefined : state.index?.subFactions[state.faction];
+  const available = options ?? [];
+  host.hidden = available.length === 0;
+  if (available.length === 0) {
+    state.subFaction = '';
+    return;
+  }
+  // Значение сбрасывается, если подразделения в новой фракции нет: иначе после
+  // перехода «Adeptus Astartes → Aeldari» остался бы ключ от другой
+  // гиперфракции и фильтр молча отсёк бы всё.
+  if (state.subFaction !== '' && !available.includes(state.subFaction)) state.subFaction = '';
+
+  const wanted = ['', ...available];
+  const current = [...select.options].map((option) => option.value);
+  if (current.join(' ') !== wanted.join(' ')) {
+    select.innerHTML = '';
+    for (const value of wanted) {
+      const option = document.createElement('option');
+      option.value = value;
+      option.textContent = value === '' ? 'Все подфракции' : value;
+      select.append(option);
+    }
+  }
+  select.value = state.subFaction;
 }
 
 /** Сводка по тирам для строки состояния. */
@@ -1376,6 +1434,13 @@ function bindEvents(app: HTMLElement): void {
     const target = event.target as HTMLSelectElement;
     if (target.id === 'faction') {
       state.faction = target.value;
+      // Подфракция чужой гиперфракции сбрасывается в syncSubFactionControl:
+      // «Adeptus Astartes → Blood Angels» иначе оставил бы ключ от астартесов.
+      render(app);
+      return;
+    }
+    if (target.id === 'subfaction') {
+      state.subFaction = target.value;
       render(app);
     }
   });

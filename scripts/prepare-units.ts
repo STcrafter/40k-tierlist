@@ -68,7 +68,20 @@ export function prepareUnits(bsDataDir: string): {
   return { prepared, leaders };
 }
 
-/** Общий Astartes-юнит принадлежит каждому чаптеру через factions, а не через одну строку faction. */
+/**
+ * Относятся ли отряд и лидер к одной фракции.
+ *
+ * Именно это правило владельца проекта: лидер ведёт отряд своей фракции, а
+ * присоединения к чужой фракции (Aleya к Seekers, Abaddon к Terminator Squad)
+ * в расчёте не участвуют. Поэтому проверка фракции ОСТАЁТСЯ — она не страховка,
+ * а предметное решение; `allowedUnitIds` при этом всё равно ограничивает список
+ * разрешённых отрядов.
+ *
+ * Сравниваются верхние фракции. Раньше здесь пересекались массивы `factions`, куда
+ * попадали чаптеры, и потому `Sternguard Veteran Squad` с фракцией
+ * `Black Templars` не находился ни для одного астартес-лидера: 15 пар, которые
+ * разрешены и по правилам, и по таблице, просто не существовали.
+ */
 function sharesFaction(unit: BsDatasheet, leader: { factions: string[] }): boolean {
   return leader.factions.some((faction) => unit.factions.includes(faction));
 }

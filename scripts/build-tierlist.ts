@@ -32,9 +32,11 @@ import {
   type TargetParadigm,
 } from '../src/tier/scoring.ts';
 import { INDEX_CELL_KEYS } from '../src/tier/columns.ts';
+import { HYPERFACTIONS } from '../src/bsdata/factions.ts';
+import type { LeaderDefinition } from '../src/tier/leaders.ts';
 import { withOnceEffects } from '../src/manual/abilities.ts';
 import { groupByLeader, leaderScoresOf } from '../src/tier/leader-score.ts';
-import { emptyParadigmGrid, prepareUnits, type AttachedPayload, type TrimmedRow } from './prepare-units.ts';
+import { emptyParadigmGrid, prepareUnits, type AttachedPayload, type PreparedUnit, type TrimmedRow } from './prepare-units.ts';
 import type {
   ComboJob,
   ComboResult,
@@ -44,6 +46,41 @@ import type {
 } from './tier-worker.ts';
 import type { BsDatasheet } from '../src/bsdata/types.ts';
 import type { CombatUnit } from '../src/combat/types.ts';
+
+/**
+ * Подфракции, сгруппированные по гиперфракции: `{ 'Adeptus Astartes': [...] }`.
+ *
+ * Считается из данных, а не берётся из таблицы factions.ts: так в переключатель
+ * не попадёт подразделение, у которого не осталось ни одного юнита. После
+ * обновления BSData оно исчезло бы само, а не осталось бы пустым пунктом.
+ *
+ * Учитываются и юниты, и лидеры. Иначе подразделение, у которого в базе есть
+ * только глава — скажем, Imperial Fists с Lysander'ом — не попало бы в
+ * переключатель, и его юниты (общие даташиты с subFaction = null) нельзя было бы
+ * отобрать по своему подразделению.
+ *
+ * Ключи вставляются только для гиперфракций с непустым списком: переключатель
+ * и так показывается лишь у них.
+ */
+function subFactionsOf(
+  prepared: ReadonlyArray<PreparedUnit>,
+  leaders: ReadonlyArray<LeaderDefinition>
+): Record<string, string[]> {
+  const grouped: Record<string, Set<string>> = {};
+  const add = (faction: string, subFaction: string | null): void => {
+    if (subFaction === null) return;
+    if (!HYPERFACTIONS.includes(faction)) return;
+    (grouped[faction] ??= new Set()).add(subFaction);
+  };
+  for (const { datasheet } of prepared) add(datasheet.faction, datasheet.subFaction);
+  for (const leader of leaders) add(leader.faction, leader.subFaction);
+  const result: Record<string, string[]> = {};
+  for (const faction of HYPERFACTIONS) {
+    const values = grouped[faction];
+    if (values !== undefined) result[faction] = [...values].sort();
+  }
+  return result;
+}
 
 const argv = process.argv.slice(2);
 const flagValue = (name: string): string | null => {
@@ -342,6 +379,10 @@ const payload = {
   modes,
   paradigms,
   factions: [...new Set(prepared.flatMap((item) => item.datasheet.factions))].sort(),
+  // Переключатель подфракций строится из этого списка. Сами подфракции в
+  // `factions` намеренно не попадают: иначе в списке фракций было бы 47
+  // пунктов, из которых двенадцать — чаптеры Adeptus Astartes.
+  subFactions: subFactionsOf(prepared, leaders),
   units: prepared.map(({ datasheet, unit, points, loadouts }) => {
     const base = byParadigm.all.combined.find((row) => row.id === datasheet.id);
     const sensitivityRow = sensitivity.get(datasheet.id);
@@ -393,6 +434,7 @@ const payload = {
       id: datasheet.id,
       name: datasheet.name,
       faction: datasheet.faction,
+      subFaction: datasheet.subFaction,
       factions: datasheet.factions,
       points,
       models: unit.models.length,
@@ -471,11 +513,13 @@ const indexPayload = {
   modes: payload.modes,
   paradigms: payload.paradigms,
   factions: payload.factions,
+  subFactions: payload.subFactions,
   leaders: leadersPayload,
   units: payload.units.map((unit) => ({
     id: unit.id,
     name: unit.name,
     faction: unit.faction,
+    subFaction: unit.subFaction,
     factions: unit.factions,
     points: unit.points,
     models: unit.models,

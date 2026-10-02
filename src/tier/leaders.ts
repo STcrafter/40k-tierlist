@@ -34,6 +34,8 @@ export interface LeaderDefinition {
   id: string;
   name: string;
   faction: string;
+  /** Подразделение внутри гиперфракции; у лидера важно для переключателя. */
+  subFaction: string | null;
   factions: string[];
   points: number;
   keywords: string[];
@@ -91,6 +93,7 @@ export function leaderDefinitionsOf(datasheets: BsDatasheet[]): LeaderDefinition
       id: datasheet.id,
       name: datasheet.name,
       faction: datasheet.faction,
+      subFaction: datasheet.subFaction,
       factions: datasheet.factions,
       points: adapted.points,
       keywords: datasheet.keywords,

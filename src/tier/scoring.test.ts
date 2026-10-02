@@ -171,7 +171,7 @@ describe('аура лидера в полезности пары', () => {
     const plain = rawScoreOf(sheet, adapted.unit, adapted.points, {
       ...fast,
       mode: 'combined',
-      leader: { id: 'test-leader', name: 'Test', faction: 'X', factions: ['X'], points: 0, keywords: ['Leader'], allowedUnitIds: [sheet.id], bonuses: noBonuses(), abilities: [], unit: adapted.unit },
+      leader: { id: 'test-leader', name: 'Test', faction: 'X', subFaction: null, factions: ['X'], points: 0, keywords: ['Leader'], allowedUnitIds: [sheet.id], bonuses: noBonuses(), abilities: [], unit: adapted.unit },
     });
     expect(plain.utilityFlags.map((f) => f.id)).toEqual(bare.utilityFlags.map((f) => f.id));
     expect(plain.utilityScore).toBe(bare.utilityScore);
@@ -572,7 +572,10 @@ describe('тирлист', () => {
 
     const lysander = definitions.find((leader) => leader.name === 'Darnath Lysander');
     expect(lysander?.faction).toBe('Adeptus Astartes');
-    expect(lysander?.factions).toContain('Imperial Fists');
+    // Чаптер уехал в отдельное поле: в `factions` его быть не должно, иначе в
+    // списке фракций появилось бы двенадцать пунктов Adeptus Astartes.
+    expect(lysander?.subFaction).toBe('Imperial Fists');
+    expect(lysander?.factions).toEqual(['Adeptus Astartes']);
     expect(lysander?.allowedUnitIds.length).toBeGreaterThan(0);
   });
 

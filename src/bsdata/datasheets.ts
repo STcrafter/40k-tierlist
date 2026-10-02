@@ -16,6 +16,7 @@ import { asArray, type BsDatabase } from './load.ts';
 import { costFormula } from './constraints.ts';
 import { allAbilities, allRules, transportCapacityOf } from './profiles.ts';
 import { modelGroupsOf, wargearAbilitiesOf } from './composition.ts';
+import { canonicalFaction } from './factions.ts';
 import type { BsEntryLinkRaw, BsSelectionNodeRaw } from './raw/types.ts';
 import type { BsAbility, BsDatasheet, BsModelGroup } from './types.ts';
 
@@ -49,29 +50,24 @@ export function knownIdsOf(groups: BsModelGroup[], datasheetId: string): Set<str
   return ids;
 }
 
-/** Чаптеры, для которых BSData использует общие Astartes-даташиты. */
-export const ASTARTES_CHAPTERS = [
-  'Black Templars', 'Blood Angels', 'Dark Angels', 'Deathwatch', "Emperor's Children",
-  'Imperial Fists', 'Iron Hands', 'Raven Guard', 'Salamanders', 'Space Wolves',
-  'Ultramarines', 'White Scars',
-] as const;
-
-export const ASTARTES_CHAPTER_SET = new Set<string>(ASTARTES_CHAPTERS);
-
-/** Гиперфракция и подфракции Chaos Daemons. */
-export const CHAOS_DAEMONS_FACTION = 'Legiones Daemonica';
-export const CHAOS_DAEMONS_LEGIONS = [
-  'Blood Legions', 'Plague Legions', 'Scintillating Legions', 'Legions of Excess',
-] as const;
-
-export const CHAOS_DAEMONS_LEGION_SET = new Set<string>(CHAOS_DAEMONS_LEGIONS);
-
-/** Ключевые слова и фракция из categoryLinks ('Faction: Orks'). */
+/**
+ * Ключевые слова и фракция из categoryLinks ('Faction: Orks').
+ *
+ * Возвращается РОВНО ОДНА верхняя фракция плюс её подразделение. Раньше здесь
+ * был другой уклад: в `factions` добавлялись все чаптеры Astartes и все легионы
+ * демонов, чтобы лидер чаптера находил общие даташиты. Теперь это не нужно —
+ * сопоставление лидера и отряда идёт по верхним фракциям, а подразделение
+ * живёт отдельным полем `subFaction` и в подборе пар не участвует.
+ *
+ * Побочный эффект, который стоит знать: раньше `Sternguard Veteran Squad`
+ * получал фракцию `Black Templars` и не находился ни для одного астартес-лидера,
+ * хотя Black Templars — чаптер, а не отдельная армия. Теперь это 15 пар,
+ * которые были разрешены правилами, но молча терялись.
+ */
 export function categoriesOf(
   link: BsEntryLinkRaw,
-  target: BsSelectionNodeRaw,
-  catalogueFaction: string | null = null
-): { keywords: string[]; faction: string | null; factions: string[] } {
+  target: BsSelectionNodeRaw
+): { keywords: string[]; faction: string; subFaction: string | null } {
   const names = new Set<string>();
 
   for (const category of asArray(target.categoryLinks)) {
@@ -82,40 +78,24 @@ export function categoriesOf(
   }
 
   const keywords = [...names];
-  // В BSData общий Astartes-даташит и конкретный чаптер — это две categoryLinks,
-  // а не альтернативные значения одного поля. Основная faction всегда
-  // Adeptus Astartes, а factions сохраняет оба значения для фильтра чаптера.
-  const rawFactions = [...new Set(
-    keywords
-      .filter((keyword) => keyword.startsWith('Faction: '))
-      .map((keyword) => keyword.slice('Faction: '.length))
-  )];
-  // null-каталог (например, служебные файлы) не должен проходить в Set<string>.
-  const catalogue = catalogueFaction ?? '';
-  const isHyperFactionChild = catalogue !== '' &&
-    (ASTARTES_CHAPTER_SET.has(catalogue) || CHAOS_DAEMONS_LEGION_SET.has(catalogue));
-  const factions = [...new Set(
-    isHyperFactionChild && rawFactions.includes('Adeptus Astartes')
-      ? [...rawFactions, catalogue]
-      : CHAOS_DAEMONS_LEGION_SET.has(catalogue)
-        ? [CHAOS_DAEMONS_FACTION, catalogue]
-        : rawFactions
-  )];
-  const explicitChapter = factions.find((value) => ASTARTES_CHAPTER_SET.has(value));
-  const explicitChaosLegion = factions.find((value) => CHAOS_DAEMONS_LEGION_SET.has(value));
-  // Общий Astartes-даташит и общий Chaos Daemon-даташит входят в ростер каждого
-  // подразделения своей гиперфракции. Специфичные даташиты остаются только в
-  // своём подразделении и в гиперфракции.
-  const expandedFactions = [
-    ...factions,
-    ...(factions.includes('Adeptus Astartes') && explicitChapter === undefined ? ASTARTES_CHAPTERS : []),
-    ...(factions.includes(CHAOS_DAEMONS_FACTION) && explicitChaosLegion === undefined ? CHAOS_DAEMONS_LEGIONS : []),
-    ...(explicitChaosLegion !== undefined ? [CHAOS_DAEMONS_FACTION] : []),
+  const rawFactions = [
+    ...new Set(
+      keywords
+        .filter((keyword) => keyword.startsWith('Faction: '))
+        .map((keyword) => keyword.slice('Faction: '.length))
+    ),
   ];
-  const faction = factions.includes('Adeptus Astartes') || factions.includes(CHAOS_DAEMONS_FACTION)
-    ? factions.includes('Adeptus Astartes') ? 'Adeptus Astartes' : CHAOS_DAEMONS_FACTION
-    : factions[0] ?? null;
-  return { keywords, faction, factions: [...new Set(expandedFactions)] };
+  // В BSData общий даташит и конкретный чаптер — это две разные categoryLinks:
+// «Faction: Adeptus Astartes» и «Faction: Imperial Fists» на одном юните.
+// Порядок их хранения ничем не гарантирован, поэтому берётся не первое значение,
+// а то, которое даёт ПОДРАЗДЕЛЕНИЕ: иначе у Lysander'а и его отрядов пропадал бы
+// чаптер и подфракция молча не появлялась бы в переключателе.
+const refs = rawFactions.map((raw) => canonicalFaction(raw));
+  const chosen = refs.find((ref) => ref.subFaction !== null) ?? refs[0];
+  if (chosen === undefined) {
+    return { keywords, faction: 'Unknown', subFaction: null };
+  }
+  return { keywords, faction: chosen.faction, subFaction: chosen.subFaction };
 }
 
 export interface DatasheetBuildResult {
@@ -157,7 +137,7 @@ export function buildDatasheet(
 
   const groups = modelGroupsOf(entry, db);
   const id = String(entry.id ?? link.targetId ?? '');
-  const categories = categoriesOf(link, entry, context.catalogueFaction);
+  const categories = categoriesOf(link, entry);
   const cost = costFormula(entry, knownIdsOf(groups, id), db);
 
   if (cost.base === 0) return { datasheet: null, reason: 'no-cost' };
@@ -181,10 +161,14 @@ export function buildDatasheet(
       id,
       name: String(entry.name ?? link.name ?? ''),
       kind: entry.type,
-      faction: categories.faction ?? context.catalogueFaction ?? 'Unknown',
-      factions: categories.factions.length > 0
-        ? categories.factions
-        : [categories.faction ?? context.catalogueFaction ?? 'Unknown'],
+      // Фракция подставляется ниже, в parseBsDatabase, где известна фракция
+      // каталога целиком. Пустой массив означает «своего Faction: нет».
+      faction: categories.faction,
+      subFaction: categories.subFaction,
+      // Пока в `factions` одна верхняя фракция. Массив сохранён, потому что
+      // строкам пар он нужен объединённым: пара «Aleya + Seekers» находится и
+      // по фильтру Custodes, и по фильтру демонов.
+      factions: categories.faction === 'Unknown' ? [] : [categories.faction],
       catalogue: context.catalogueName,
       sourceFile: context.sourceFile,
       keywords: categories.keywords,

@@ -150,9 +150,15 @@ export interface BsDatasheet {
   name: string;
   /** 'unit' — отряд, 'model' — одиночный даташит (техника, персонаж). */
   kind: 'unit' | 'model';
-  /** Основная фракция для обратной совместимости; для Astartes — Adeptus Astartes. */
+  /** Верхняя фракция: то, что стоит в списке фильтра. */
   faction: string;
-  /** Все фракционные categoryLinks, включая Adeptus Astartes и конкретный чаптер. */
+  /** Подразделение внутри гиперфракции (чаптер, легион, Ynnari); null у обычных. */
+  subFaction: string | null;
+  /**
+   * Верхние фракции юнита. Сейчас обычно одна, но массив нужен строкам пар:
+   * пара «лидер Custodes + отряд демонов» находится и по фильтру Custodes,
+   * и по фильтру демонов.
+   */
   factions: string[];
   catalogue: string;
   sourceFile: string;

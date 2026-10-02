@@ -11,6 +11,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
+import { HYPERFACTIONS } from './factions.ts';
 import { resolve } from 'node:path';
 import { bsFilesFromDir } from './node-source.ts';
 import { loadBsData } from './load.ts';
@@ -121,25 +122,98 @@ describe('parseBsDatabase', () => {
     expect(report.datasheetsWithoutModels.length).toBeLessThan(50);
   });
 
-  it('сохраняет Astartes как гиперфракцию и добавляет чаптеры к общим юнитам', () => {
+  it('сводит чаптеров Astartes в одну фракцию и хранит чаптер отдельно', () => {
+    // Black Templars — чаптер, а не отдельная армия. Пока он был фракцией,
+    // Sternguard Veteran Squad не находился ни для одного астартес-лидера.
     const intercessors = findByName('Intercessor Squad');
     expect(intercessors.faction).toBe('Adeptus Astartes');
-    expect(intercessors.factions).toEqual(expect.arrayContaining([
-      'Adeptus Astartes', 'Space Wolves', 'Blood Angels', 'Black Templars', 'Ultramarines',
-    ]));
+    expect(intercessors.subFaction).toBeNull();
+    expect(intercessors.factions).toEqual(['Adeptus Astartes']);
     const lysander = findByName('Darnath Lysander');
     expect(lysander.faction).toBe('Adeptus Astartes');
-    expect(lysander.factions).toContain('Imperial Fists');
+    expect(lysander.subFaction).toBe('Imperial Fists');
+    const sternguard = findByName('Sternguard Veteran Squad');
+    expect(sternguard.faction).toBe('Adeptus Astartes');
+    expect(sternguard.subFaction).toBe('Black Templars');
   });
 
-  it('раскрывает Chaos Daemons как гиперфракцию с четырьмя легионами', () => {
+  it('сводит Chaos Daemons в одну фракцию, легионы уходят в subFaction', () => {
+    // Легионов в `factions` быть не должно: иначе они снова занимали бы
+    // отдельные места в фильтре, ради чего всё и затевалось.
     const common = findByName('Be\'lakor');
     expect(common.faction).toBe('Legiones Daemonica');
-    expect(common.factions).toEqual(expect.arrayContaining([
-      'Legiones Daemonica', 'Blood Legions', 'Plague Legions', 'Scintillating Legions', 'Legions of Excess',
-    ]));
-    const blood = datasheets.find((datasheet) => datasheet.name === 'Bloodcrushers' && datasheet.faction === 'Blood Legions');
-    expect(blood?.factions).toEqual(expect.arrayContaining(['Legiones Daemonica', 'Blood Legions']));
+    expect(common.factions).toEqual(['Legiones Daemonica']);
+    const legionUnit = datasheets.find(
+      (datasheet) => datasheet.subFaction !== null && datasheet.faction === 'Legiones Daemonica'
+    );
+    expect(legionUnit, 'нужен юнит с легионом').toBeDefined();
+    expect(['Blood Legions', 'Plague Legions', 'Scintillating Legions', 'Legions of Excess']).toContain(
+      legionUnit!.subFaction
+    );
+  });
+
+  it('эльдари, друкари и CSM разведены по своим фракциям', () => {
+    // Решение владельца проекта: Aeldari и Drukhari — разные фракции, несмотря
+    // на общее происхождение. Harlequins и Ynnari — подразделения внутри Aeldari.
+    expect(findByName('Wraithknight').faction).toBe('Aeldari');
+    expect(findByName('Death Jester').faction).toBe('Aeldari');
+    expect(findByName('Death Jester').subFaction).toBe('Harlequins');
+    expect(findByName('Archon').faction).toBe('Drukhari');
+    expect(findByName('Abaddon the Despoiler').faction).toBe('Chaos Space Marines');
+    // Fabius Bile без своего `Faction:` — фракция берётся у каталога CSM.
+    expect(findByName('Fabius Bile').faction).toBe('Chaos Space Marines');
+  });
+
+  it('ни одна фракция не равна имени файла каталога', () => {
+    // Так в списке появлялись «Chaos Knights Library» и «Chaos Daemons Library».
+    // Перечислены ТОЛЬКО мусорные имена: «Chaos Knights», «Chaos Space Marines»
+    // и «Aeldari» после канонизации — законные фракции, и в список их
+    // записывать нельзя, иначе тест браковал бы сотни нормальных юнитов.
+    const catalogueNames = new Set([
+      'Library', 'Chaos Daemons', 'Chaos Daemons Library', 'Chaos Knights Library', 'Craftworlds',
+    ]);
+    const suspects = datasheets.filter(
+      (datasheet) => catalogueNames.has(datasheet.faction) || catalogueNames.has(datasheet.factions[0] ?? '')
+    );
+    expect(suspects.map((datasheet) => `${datasheet.name} → ${datasheet.faction}`)).toEqual([]);
+  });
+
+  it('подфракция встречается только у гиперфракций', () => {
+    const wrong = datasheets.filter(
+      (datasheet) => datasheet.subFaction !== null && !HYPERFACTIONS.includes(datasheet.faction)
+    );
+    expect(
+      wrong.map((datasheet) => `${datasheet.name}: ${datasheet.faction}/${datasheet.subFaction}`)
+    ).toEqual([]);
+  });
+
+  it('основная фракция всегда входит в список factions', () => {
+    // `factions` у пары собирается объединением, и лишние значения там — это
+    // честные случаи: даташит без своего `Faction:` определён сразу в
+    // нескольких каталогах (Traitor Enforcer — в трёх). При этом основная
+    // фракция обязана входить в список: иначе фильтр по ней показал бы
+    // строку, которая сама себе противоречит.
+    const broken = datasheets.filter((datasheet) => !datasheet.factions.includes(datasheet.faction));
+    expect(broken.map((datasheet) => `${datasheet.name}: ${datasheet.faction} ∉ ${datasheet.factions}`)).toEqual([]);
+  });
+
+  it('одинаковые имена не схлопнуты в один юнит', () => {
+    // Решение владельца проекта: «юнит сразу в нескольких фракциях» выражен в
+    // BSData отдельными даташитами, и СКЛЕИВАТЬ их нельзя — у половины таких
+    // групп разная стоимость, то есть это разные варианты снаряжения.
+    const byName = new Map<string, BsDatasheet[]>();
+    for (const datasheet of datasheets) {
+      byName.set(datasheet.name, [...(byName.get(datasheet.name) ?? []), datasheet]);
+    }
+    const duplicated = [...byName.entries()].filter(([, group]) => group.length > 1);
+    // Разные очки у одного имени — верный признак, что это разные юниты.
+    const differingCost = duplicated.filter(([, group]) =>
+      new Set(group.map((item) => item.cost.base)).size > 1
+    );
+    expect(differingCost.length, 'групп с одинаковым именем и разной ценой').toBeGreaterThan(0);
+    // Дубликаты стоят в РАЗНЫХ фракциях — значит это не задвоение одного юнита.
+    const crossFaction = duplicated.filter(([, group]) => new Set(group.map((item) => item.faction)).size > 1);
+    expect(crossFaction.length).toBeGreaterThan(0);
   });
 
   it('дедуплицирует даташиты библиотечных каталогов', () => {
