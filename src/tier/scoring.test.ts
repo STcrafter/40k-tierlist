@@ -39,6 +39,7 @@ const noBonuses = (): LeaderBonuses => ({
   weaponKeywords: [], rerollHitOn: [], rerollWoundOn: [], rerollSaveOn: [],
 });
 import { attachLeaderToUnit, leaderDefinitionsOf, type LeaderBonuses } from './leaders.ts';
+import { MANUAL_ABILITIES } from '../manual/abilities.ts';
 import type { BsDatasheet } from '../bsdata/types.ts';
 
 const { datasheets } = parseBsDatabase(loadBsData(bsFilesFromDir('public/BSData/wh40k-11e')));
@@ -110,27 +111,56 @@ describe('utility-флаги', () => {
     expect(lost.some((flag) => flag.id === 'Scouts')).toBe(false);
   });
 describe('аура лидера в полезности пары', () => {
-  // Счётчики по базе, а не «нашёлся хоть один»: молчаливый сбой разбора здесь
-  // выглядел бы как «полезность чуть сдвинулась» и заметен был бы сильно позже.
+  // Счётчики по базе, а не «нашёлся хоть один»: молчаливый сбой здесь выглядел
+  // бы как «полезность чуть сдвинулась» и заметен был бы сильно позже.
   const withAura = leaderDefinitionsOf(datasheets).filter((l) => detectLeaderAuraFlags(l).length > 0);
   const pairs = withAura.reduce((s, l) => s + l.allowedUnitIds.length, 0);
+  /** id, помеченные в ручном слое полем wardAura. */
+  const manualIds = Object.entries(MANUAL_ABILITIES)
+    .filter(([, ab]) => ab.aura?.wardAura === true)
+    .map(([id]) => id);
 
-  it('аура достаётся ограниченному числу лидеров', () => {
-    // 26 лидеров выдают отряду FNP/ward-ауру, из них 25 засчитаны: у
-    // Hospitaller FNP-аура смоделирована руками и повторно не оплачивается.
-    // Число намеренно зафиксировано: падение ниже нуля — разбор сломался, резкий
-    // рост — файл начал цепляться к чужим способностям.
-    expect(withAura).toHaveLength(25);
-    expect(pairs).toBeGreaterThan(100);
+  it('ручной список не содержит мёртвых id', () => {
+    // ГЛАВНЫЙ тест блока. Разбор текста способностей молчал бы о поломке:
+    // переписали правило в BSData — фаг пропал, и это видно только по сдвигу
+    // тиров через месяц. Здесь лишний или переименованный id падает сразу, и
+    // сообщение содержит имя, по которому запись можно найти глазами.
+    const leaderIds = new Set(leaderDefinitionsOf(datasheets).map((l) => l.id));
+    const missing = manualIds.filter((id) => !leaderIds.has(id));
+    expect(
+      missing,
+      `в abilities.ts есть id, которых нет среди лидеров BSData: ${missing
+        .map((id) => `${id} (${datasheets.find((d) => d.id === id)?.name ?? 'нет такого даташита'})`)
+        .join(', ')}`
+    ).toEqual([]);
+    expect(manualIds).toHaveLength(25);
   });
 
-  it('аура не достаётся лидеру, чей текст говорит только о нём самом', () => {
-    const plain = {
-      id: 'test-leader',
-      name: 'Test',
-      abilities: [{ name: 'Leader', description: 'This model can be attached to the following units: BOYZ' }],
-    };
-    expect(detectLeaderAuraFlags(plain)).toEqual([]);
+  it('аура достаётся ограниченному числу лидеров', () => {
+    // 25 лидеров выдают отряду FNP/ward-ауру. Число намеренно зафиксировано:
+    // падение — кто-то удалён, рост — запись попала не туда. Hospitaller здесь
+    // НЕ должен появляться: его FNP-аура смоделирована полем aura.fnp, и
+    // повторный флаг удвоил бы её вклад.
+    expect(withAura).toHaveLength(25);
+    // 117, а НЕ 105: 105 строк в собранном листе и 117 разрешённых пар — разные
+    // числа. 12 пар отсекает `scoring.ts` (isEligibleForCalculations от очков
+    // отряда ПЛЮС очки лидера), то есть они выходят за бюджет расчёта. Проверять
+    // здесь 117 — это проверять ровно то, что описано в MANUAL_ABILITIES;
+    // число строк в листе зависит ещё и от бюджета, и отдельно не закреплено.
+    expect(pairs).toBe(117);
+    expect(withAura.map((l) => l.id).sort()).toEqual([...manualIds].sort());
+    expect(withAura.map((l) => l.id)).not.toContain('938e-1c24-4e63-4cf3');
+  });
+
+  it('текст способностей НЕ решает, выдаётся ли аура', () => {
+    // Способности выписываются руками по решению владельца проекта. Тест
+    // фиксирует сам принцип: лидер с текстом про FNP, но без отметки в ручном
+    // слое не получает ничего, а отмеченный получает флаг, даже если его
+    // текст пуст или переписан.
+    const fromText = { id: 'test-leader', name: 'Test' };
+    expect(detectLeaderAuraFlags(fromText)).toEqual([]);
+    const marked = leaderDefinitionsOf(datasheets).find((l) => detectLeaderAuraFlags(l).length > 0)!;
+    expect(detectLeaderAuraFlags({ id: marked.id, name: marked.name })).toHaveLength(1);
   });
 
   it('лидер без ауры не меняет полезность пары', () => {
@@ -158,14 +188,12 @@ describe('аура лидера в полезности пары', () => {
 
   it('перебросы не оплачиваются повторно', () => {
     // Перебросы уже учитываются в бою через leaderBonusesOf, поэтому в utility
-    // они не идут: иначе платили бы дважды за один эффект.
-    const rerollLeader = leaderDefinitionsOf(datasheets).find((l) =>
-      l.abilities.some(
-        (ab) => /re-?roll/i.test(ab.description) && /models in that unit|leading a unit/i.test(ab.description)
-      )
-    );
-    expect(rerollLeader, 'нужен лидер с перебросом').toBeDefined();
-    expect(detectLeaderAuraFlags(rerollLeader!).map((f) => f.id)).not.toContain('Aura_Re_roll_1s');
+    // они не идут: иначе платили бы дважды за один эффект. Раньше для этого
+    // приходилось отделять перебросы от ауры разбором текста; теперь у функции
+    // просто нет второго источника флагов — проверить это дешевле, чем
+    // оплачивать лишнее.
+    const ids = new Set(withAura.flatMap((l) => detectLeaderAuraFlags(l).map((f) => f.id)));
+    expect([...ids]).toEqual(['Aura_Ward']);
   });
 });
 

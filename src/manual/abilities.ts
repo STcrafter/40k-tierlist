@@ -91,6 +91,16 @@ export interface LeaderAura {
   stealth?: boolean;
   /** Лидер и юнит перебрасывают неудачные броски попадания (1 = «of a 1»). */
   rerollHitOn?: number[];
+  /**
+   * Лидер даёт присоединённому отряду защиту (FNP / ward).
+   *
+   * Единственное поле в ауре, которое НИЧЕГО не меняет в бою: это метка для
+   * utility-флага `Aura_Ward`. Так сделано намеренно — см. `detectLeaderAuraFlags`.
+   * Одно поле вместо разбора текста: способности лидеров переписываются раз в
+   * сезон, и молча пропавший флаг обнаружился бы только по сдвигу тиров через
+   * месяц. Здесь же лишний id падает в тесте сразу и с точным именем лидера.
+   */
+  wardAura?: boolean;
   /** Лидер и юнит перебрасывают неудачные броски ранений. */
   rerollWoundOn?: number[];
   /** Feel No Pain лидеру и юниту (Hospitaller). */
@@ -322,8 +332,10 @@ export const MANUAL_ABILITIES: Record<string, ManualAbility> = {
   },
 
   // Triumph of Saint Katherine — большой стратегический флаг: способность
-  // меняет игру сильнее, чем её собственный урон.
+  // меняет игру сильнее, чем её собственный урон. Ауру защиты она тоже даёт,
+  // поэтому wardAura живёт здесь, а не в общем списке ниже.
   '9f5f-d769-7900-c8a1': {
+    aura: { wardAura: true },
     utilityFlags: [
       {
         id: 'Triumph_Relic_Blessing',
@@ -420,8 +432,49 @@ export const MANUAL_ABILITIES: Record<string, ManualAbility> = {
     ],
   },
 
+  // ── Аура защиты присоединённого отряда ────────────────────────────────
+  //
+  // Отмечается флагом `wardAura` (см. LeaderAura): это ЧИСТО utility-метка, она
+  // ничего не меняет в бою. Смысл в том, чтобы такие лидеры получали кредит за
+  // реальную ценность, которой модель не выдаёт.
+  //
+  // Список отобран по базе BSData cc1830f: лидеры, у которых текст про
+  // FNP/ward относится к присоединённому отряду. 25 лидеров, 105 пар.
+  //
+  // Перебросы сюда НЕ внесены сознательно: они уже учитываются в бою через
+  // `leaderBonusesOf` → `leaderCombatOptionsOf` у тех лидеров, чей текст
+  // разбирается. У остальных переброс в модели не работает — это дыра в
+  // способностях, а не внебоевая ценность, и оплачивать её значило бы платить
+  // за эффект, которого нет.
+  //
+  // Hospitaller тоже не здесь: его FNP-аура смоделирована полем `aura.fnp`.
+  'e367-b2cb-d22a-b17c': { aura: { wardAura: true } }, // Acolyte Iconward
+  '5412-1f01-b7cc-bf12': { aura: { wardAura: true } }, // Brotherhood Librarian
+  '74ba-6762-ef01-32d6': { aura: { wardAura: true } }, // Champion of the Chapter [Crucible]
+  'c026-b762-d0a6-5ef1': { aura: { wardAura: true } }, // Chaplain in Terminator Armour
+  '3ef1-1647-cd7b-a40b': { aura: { wardAura: true } }, // Chief Librarian Tigurius
+  '36df-8f40-8a6b-7d4c': { aura: { wardAura: true } }, // Contorted Epitome
+  '5e66-6f0-a181-cc4d': { aura: { wardAura: true } }, // Ethereal
+  '38c9-66a1-fe60-46af': { aura: { wardAura: true } }, // Ezekiel
+  'd3a3-2d20-bd7e-6778': { aura: { wardAura: true } }, // Grimnyr
+  '2ba9-e97a-909d-3ac5': { aura: { wardAura: true } }, // Hordeboss [Crucible]
+  '6c9d-4ec3-69dd-90b2': { aura: { wardAura: true } }, // Iron Father Feirros
+  'bb34-e371-33ee-397': { aura: { wardAura: true } }, // Kroot Flesh Shaper
+  '78eb-9334-f5c0-6095': { aura: { wardAura: true } }, // Librarian
+  '137c-2add-1a51-ee96': { aura: { wardAura: true } }, // Librarian in Phobos Armour
+  '2468-24f5-ad9b-8388': { aura: { wardAura: true } }, // Librarian in Terminator Armour
+  '0385-0e03-0eac-d91c': { aura: { wardAura: true } }, // Librarius Adept [Crucible]
+  '51e8-dac1-561a-aaa9': { aura: { wardAura: true } }, // Locus
+  '4ad0-e988-a513-9530': { aura: { wardAura: true } }, // Primaris Psyker
+  'f80-be5-d17c-db23': { aura: { wardAura: true } }, // Sanguinary Priest
+  '6424-ed86-9e15-3e14': { aura: { wardAura: true } }, // Tech-Priest Dominus
+  '852a-ba39-e93f-6b62': { aura: { wardAura: true } }, // Technomancer
+  'dd79-c2fe-59d6-d2': { aura: { wardAura: true } }, // The Visarch
+  '6a69-8e75-49ae-408f': { aura: { wardAura: true } }, // Upstart Gretchin [Crucible]
+  '54de-2004-bbc1-3ac6': { aura: { wardAura: true } }, // Warphead [Crucible]
+
   // Hospitaller: FNP 5+ себе и юниту + возврат 1 модели в юнит за ход, пока
-  // Hospitaller жив. FNP — смоделированная величина, флаг за неё не платится.
+  // жив. FNP — смоделированная величина, флаг за неё не платится.
   '938e-1c24-4e63-4cf3': {
     aura: { fnp: 5 },
     reviveModelPerRound: 1,
