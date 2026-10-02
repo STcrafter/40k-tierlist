@@ -967,6 +967,56 @@ table.matrix .cell-total {
   background: var(--void);
   border: 1px solid var(--line);
 }
+/*
+ * Сборка снаряжения, выбранная в открытом режиме боя. Подсветка намеренно
+ * сдержанная: вариантов бывает несколько, и выбранный должен читаться, не
+ * перетягивая внимание с самих чисел.
+ */
+.weapon-card.chosen {
+  border-color: var(--brass-dim);
+  background: var(--iron);
+}
+.badge {
+  margin-left: 8px;
+  padding: 1px 6px;
+  border: 1px solid var(--brass-dim);
+  color: var(--brass);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+/* Выбор снаряжения по каждому режиму боя: дальний, ближний и обе фазы. */
+.loadout-modes {
+  width: 100%;
+  margin: 10px 0 4px;
+  border-collapse: collapse;
+}
+.loadout-modes th,
+.loadout-modes td {
+  padding: 5px 9px;
+  border-bottom: 1px solid var(--line);
+  text-align: left;
+  font-weight: 400;
+  font-size: 12px;
+}
+.loadout-modes thead th {
+  color: var(--bone-faint);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.loadout-modes .num {
+  text-align: right;
+  font-family: var(--font-mono);
+}
+/* Открытый режим боя: строка выбора должна выделяться, но не кричать. */
+.loadout-modes tbody tr.active th,
+.loadout-modes tbody tr.active td {
+  color: var(--bone);
+  background: var(--iron-2);
+}
 .whead {
   display: flex;
   align-items: baseline;

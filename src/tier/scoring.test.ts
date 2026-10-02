@@ -10,7 +10,7 @@ import { describe, expect, it } from 'vitest';
 import { bsFilesFromDir } from '../bsdata/node-source.ts';
 import { loadBsData } from '../bsdata/load.ts';
 import { parseBsDatabase } from '../bsdata/units.ts';
-import { adaptUnit } from '../combat/adapter.ts';
+import { adaptUnit, type LoadoutCandidate } from '../combat/adapter.ts';
 import {
   minMaxNormalize,
   meleeTax,
@@ -41,6 +41,7 @@ const noBonuses = (): LeaderBonuses => ({
 import { attachLeaderToUnit, leaderDefinitionsOf, type LeaderBonuses } from './leaders.ts';
 import { MANUAL_ABILITIES } from '../manual/abilities.ts';
 import type { BsDatasheet } from '../bsdata/types.ts';
+import type { CombatUnit } from '../combat/types.ts';
 
 const { datasheets } = parseBsDatabase(loadBsData(bsFilesFromDir('public/BSData/wh40k-11e')));
 const find = (name: string): BsDatasheet => {
@@ -704,6 +705,118 @@ function pearson(xs: number[], ys: number[]): number {
   const meanX = xs.reduce((a, b) => a + b, 0) / xs.length;
   const meanY = ys.reduce((a, b) => a + b, 0) / ys.length;
   let cov = 0;
+describe('выбор лучшего снаряжения', () => {
+  const sheet = find('Intercessor Squad');
+  const adapted = adaptUnit(sheet, { size: 'min' });
+
+  /** Отряд с усиленным оружием заданного типа — для проверки выбора сборки. */
+  const amplified = (unit: CombatUnit, kind: 'ranged' | 'melee', factor: number): CombatUnit => ({
+    ...unit,
+    models: unit.models.map((model) => ({
+      ...model,
+      weapons: model.weapons.map((weapon) =>
+        weapon.kind === kind
+          ? {
+              ...weapon,
+              // DiceSpec требует все три поля явными: спред по DiceSpec с
+              // необязательным `sides` неassignается в CombatWeapon.
+              damage:
+                weapon.damage === null
+                  ? null
+                  : {
+                      count: weapon.damage.count * factor,
+                      sides: weapon.damage.sides,
+                      plus: weapon.damage.plus,
+                    },
+              strength: weapon.strength === null ? null : weapon.strength + factor,
+            }
+          : weapon
+      ),
+    })),
+  });
+
+  it('без снаряжения победителем считается базовый отряд', () => {
+    const raw = rawScoreOf(sheet, adapted.unit, adapted.points, { ...fast, mode: 'combined' });
+    expect(raw.bestLoadoutId).toBe('base');
+    expect(raw.bestLoadoutName).toBe('Базовый');
+    expect(raw.bestLoadoutPoints).toBe(adapted.points);
+  });
+
+  it('снаряжение платится: боево тот же отряд вдвое дороже — вдвое хуже', () => {
+    // Ключевой инвариант. Если бы урон считался на 100 очков БАЗОВОГО отряда,
+    // дорогое снаряжение досталось бы бесплатно и тем сильнее завысило юнит,
+    // чем богаче был его выбор.
+    const pricier: LoadoutCandidate = {
+      id: 'test:pricier',
+      name: 'То же самое, но дороже',
+      unit: adapted.unit,
+      points: adapted.points * 2,
+    };
+    const raw = rawScoreOf(sheet, adapted.unit, adapted.points, {
+      ...fast,
+      mode: 'combined',
+      loadouts: [pricier],
+    });
+    expect(raw.bestLoadoutId).toBe('base');
+    for (const [target, loadout] of Object.entries(raw.loadoutByTarget)) {
+      expect({ target, id: loadout.id }).toEqual({ target, id: 'base' });
+    }
+  });
+
+  it('снаряжение лучше базового выигрывает и запоминается', () => {
+    const better: LoadoutCandidate = {
+      id: 'test:better',
+      name: 'Сильные выстрелы',
+      unit: amplified(adapted.unit, 'ranged', 3),
+      points: adapted.points + 20,
+    };
+    const bare = rawScoreOf(sheet, adapted.unit, adapted.points, { ...fast, mode: 'ranged' });
+    const loaded = rawScoreOf(sheet, adapted.unit, adapted.points, {
+      ...fast,
+      mode: 'ranged',
+      loadouts: [better],
+    });
+    expect(loaded.bestLoadoutId).toBe('test:better');
+    expect(loaded.bestLoadoutPoints).toBe(adapted.points + 20);
+    expect(loaded.rawMaxDamage).toBeGreaterThan(bare.rawMaxDamage);
+  });
+
+  it('melee и ranged выбирают разные сборки', () => {
+    // Смысл подбора по целям и режиму: одна «лучшая» сборка на всё время была бы
+    // компромиссом, которого в игре не бывает.
+    const shooter: LoadoutCandidate = {
+      id: 'test:shooter',
+      name: 'Стрелок',
+      unit: amplified(adapted.unit, 'ranged', 3),
+      points: adapted.points,
+    };
+    const striker: LoadoutCandidate = {
+      id: 'test:striker',
+      name: 'Боец',
+      unit: amplified(adapted.unit, 'melee', 3),
+      points: adapted.points,
+    };
+    const options = { ...fast, loadouts: [striker, shooter] };
+    expect(rawScoreOf(sheet, adapted.unit, adapted.points, { ...options, mode: 'ranged' }).bestLoadoutId)
+      .toBe('test:shooter');
+    expect(rawScoreOf(sheet, adapted.unit, adapted.points, { ...options, mode: 'melee' }).bestLoadoutId)
+      .toBe('test:striker');
+  });
+
+  it('выбор детерминирован при одинаковых входных данных', () => {
+    const loadouts: LoadoutCandidate[] = [
+      { id: 'test:a', name: 'A', unit: amplified(adapted.unit, 'ranged', 2), points: adapted.points },
+      { id: 'test:b', name: 'B', unit: amplified(adapted.unit, 'melee', 2), points: adapted.points },
+    ];
+    const run = (): ReturnType<typeof rawScoreOf> =>
+      rawScoreOf(sheet, adapted.unit, adapted.points, { ...fast, mode: 'combined', loadouts });
+    const first = run();
+    const second = run();
+    expect(second.bestLoadoutId).toBe(first.bestLoadoutId);
+    expect(second.rawMaxDamage).toBe(first.rawMaxDamage);
+    expect(second.destroyedPointsByTarget).toEqual(first.destroyedPointsByTarget);
+  });
+});
   let varX = 0;
   let varY = 0;
   for (let i = 0; i < xs.length; i += 1) {

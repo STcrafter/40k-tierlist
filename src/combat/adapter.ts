@@ -290,22 +290,24 @@ function allocateVariants(
 ): Map<string, number> {
   const counts = new Map<string, number>();
   if (size === 'min') {
-    // У группы может быть min=5, а у каждого варианта min=0 (например,
-    // Deathwatch Veterans). Сначала берём явные минимумы, затем добираем
-    // оставшиеся модели до group.min в порядке вариантов.
     for (const variant of variants) {
       if (variant.min > 0) counts.set(variant.id, variant.min);
     }
-    let remaining = 0;
     const explicitTotal = [...counts.values()].reduce((sum, value) => sum + value, 0);
-    // Если варианты имеют явные минимумы, они уже описывают минимальный
-    // состав (например Boyz: 6 Boy + 1 Nob, хотя группа называется 9-18).
-    // Добирать до group.min в таком случае нельзя. Для наборов вроде
-    // Deathwatch Veterans, где у всех вариантов min=0, group.min наоборот
-    // является единственным источником размера.
-    if (explicitTotal === 0) {
-      remaining = Math.max(0, group.min);
-    }
+    // Нижняя граница группы — это оба ограничения сразу: объявленный group.min
+    // И сумма обязательных вариантов внутри группы. То же правило, что в
+    // sizeRangeOf (bsdata/points.ts), чтобы минимальный размер считался везде
+    // одинаково.
+    //
+    // Явные минимумы вариантов описывают СОСТАВ моделей, а не размер группы.
+    // У Boyz это 6 Boy + 1 Nob, но group.min = 9, и по правилам отряд начинается
+    // с 9 моделей. Раньше group.min игнорировался при непустых минимумах
+    // вариантов, и отряд собирался из 7 моделей — то есть был недостроен и
+    // получал доступ к меньшему набору опциональных профилей, чем заслуживал.
+    // Для наборов вроде Deathwatch Veterans, где у всех вариантов min = 0,
+    // group.min остаётся единственным источником размера.
+    const target = Math.max(group.min > 0 ? group.min : 0, explicitTotal);
+    let remaining = Math.max(0, target - explicitTotal);
     for (const variant of variants) {
       if (remaining <= 0) break;
       const current = counts.get(variant.id) ?? 0;
@@ -700,6 +702,59 @@ function weaponSignatureOf(variant: BsModelVariant): string[] {
 }
 
 /**
+ * Имя первого оружия варианта — запасная подпись для вариантов без имени.
+ *
+ * Нужна немногим юнитам (Sekhetar Robots, «w/ warpflame projector and claw»),
+ * где ни у варианта, ни у профиля имени нет, а различать сборки приходится
+ * именно по оружию.
+ */
+function firstWeaponNameOf(variant: BsModelVariant): string | null {
+  for (const item of [...variant.defaultWargear, ...variant.optionalWargear]) {
+    const weapon = item.profiles.find((profile) => profile.kind === 'ranged' || profile.kind === 'melee');
+    if (weapon) return weapon.name;
+  }
+  return null;
+}
+
+/**
+ * Боевой отпечаток отряда: что реально влияет на бой.
+ *
+ * Название оружия в отпечаток НЕ входит намеренно. В базе много вариантов,
+ * различающихся только именем при одинаковых характеристиках, и такие
+ * loadout'ы считаются отдельно впустую: на 128 перечисленных вариантах
+ * боевых профилей меньше пяти.
+ *
+ * Отпечаток используется и для отбрасывания дублирующих loadout'ов, и как
+ * ключ кеша замеров в perRound: сид там зависит только от цели, поэтому
+ * одинаковый отпечаток означает буквально те же числа и повторный расчёт не
+ * нужен.
+ */
+export function combatFingerprintOf(unit: CombatUnit): string {
+  const weaponFingerprint = (weapon: CombatWeapon): unknown[] => [
+    weapon.kind,
+    weapon.range,
+    weapon.attacks,
+    weapon.skill,
+    weapon.strength,
+    weapon.ap,
+    weapon.damage,
+    weapon.keywords.map((keyword) => keyword.name).sort(),
+  ];
+  return JSON.stringify({
+    keywords: [...unit.keywords].sort(),
+    models: unit.models.map((model) => [
+      model.toughness,
+      model.wounds,
+      model.save,
+      model.invuln,
+      model.fnp,
+      model.fnpScope,
+      model.weapons.map(weaponFingerprint).sort(),
+    ]),
+  });
+}
+
+/**
  * Ограниченный перебор loadout-вариантов datasheet.
  *
  * Перебираются ДВА вида альтернатив:
@@ -783,10 +838,14 @@ export function loadoutVariantsOf(
   // что отряд вооружён «w/ warpflame projector and claw», а не «Базовый».
   for (const groupIndex of variantGroupIndexes) {
     const variant = datasheet.modelGroups[groupIndex]?.variants[variants[`modelGroup:${groupIndex}`] ?? 0];
-    if (variant) parts.push(variant.name || variant.profile?.name || '?');
+    // У части вариантов модели нет ни имени, ни имени профиля — у Sekhetar
+    // Robots это «w/ warpflame projector and claw». Заглушка '?' в названии
+    // ничего не сообщает, поэтому берём имя оружия варианта.
+    if (variant) parts.push(variant.name || variant.profile?.name || firstWeaponNameOf(variant) || 'Без названия');
   }
   for (const group of groups) {
-    parts.push(group.item.nested.filter((item) => containsWeapon(item))[choices[group.item.id] ?? 0]?.name ?? '?');
+    const chosen = group.item.nested.filter((item) => containsWeapon(item))[choices[group.item.id] ?? 0];
+    parts.push(chosen?.name ?? 'Базовый вариант');
   }
   const name = parts.length === 0 ? 'Базовый' : parts.join(' / ');
     candidates.push({

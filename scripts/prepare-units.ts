@@ -14,7 +14,7 @@
 
 import { bsFilesFromDir } from '../src/bsdata/node-source.ts';
 import { loadBsData, parseBsDatabase } from '../src/bsdata/index.ts';
-import { adaptUnit, loadoutVariantsOf, type LoadoutCandidate } from '../src/combat/adapter.ts';
+import { adaptUnit, combatFingerprintOf, loadoutVariantsOf, type LoadoutCandidate } from '../src/combat/adapter.ts';
 import { isEligibleForCalculations } from '../src/combat/budget.ts';
 import { leaderDefinitionsOf, type LeaderDefinition } from '../src/tier/leaders.ts';
 import type { BsDatasheet } from '../src/bsdata/types.ts';
@@ -41,6 +41,38 @@ export interface AttachedEntry {
 }
 
 /**
+ * Сколько вариантов снаряжения перебирать на юнита.
+ *
+ * Кривая полноты очень пологая: на 4 вариантах приходится ~2 боевых профиля,
+ * на 128 — ~4.9, на 512 — ~6.4. То есть перебор дорожает в разы, а находит
+ * почти столько же. Старый предел в 4 обрезал 389 юнитов из 1458, причём
+ * произвольно — первые четыре по порядку перебора, а не лучшие четыре.
+ */
+const LOADOUT_LIMIT = 128;
+
+/**
+ * Убирает варианты, неотличимые в бою от базового отряда или от более раннего.
+ *
+ * Без этого за каждый дубликат платится полная симуляция: при лимите 128 на
+ * юнита перечисляется около семи комбинаций, а боевых профилей среди них
+ * меньше пяти — остальные отличаются только названием оружия.
+ *
+ * Базовый отряд в сравнение не попадает: он и так отдельный кандидат в
+ * скоринге, а повторная симуляция того же отряда не даёт ничего нового.
+ */
+function dedupeLoadouts(base: CombatUnit, loadouts: LoadoutCandidate[]): LoadoutCandidate[] {
+  const seen = new Set<string>([combatFingerprintOf(base)]);
+  const result: LoadoutCandidate[] = [];
+  for (const loadout of loadouts) {
+    const fingerprint = combatFingerprintOf(loadout.unit);
+    if (seen.has(fingerprint)) continue;
+    seen.add(fingerprint);
+    result.push(loadout);
+  }
+  return result;
+}
+
+/**
  * Разбор базы и отбор пригодных юнитов. Вызывается и в главном процессе, и в
  * каждом воркере, поэтому возвращаемое состояние самодостаточно.
  */
@@ -58,7 +90,10 @@ export function prepareUnits(bsDataDir: string): {
     ) {
       continue;
     }
-    const loadouts = loadoutVariantsOf(datasheet, { size: 'min', limit: 4 });
+    const loadouts = dedupeLoadouts(
+      adapted.unit,
+      loadoutVariantsOf(datasheet, { size: 'min', limit: LOADOUT_LIMIT })
+    );
     prepared.push({ datasheet, unit: adapted.unit, points: adapted.points, loadouts });
   }
   const leaders = leaderDefinitionsOf(datasheets);
@@ -137,6 +172,12 @@ export interface TrimmedRow {
   rawMaxDamage: number;
   bestTarget: string;
   bestTargetName: string;
+  /** Сборка снаряжения, победившая в этом режиме боя. */
+  bestLoadoutId: string;
+  bestLoadoutName: string;
+  bestLoadoutPoints: number;
+  /** Победившая сборка против каждого типа цели. */
+  loadoutByTarget: Record<string, { id: string; name: string; points: number }>;
   destroyedPointsByTarget: Record<string, number>;
   defenseVector: Record<string, number>;
   effectiveOffenseVector: Record<string, number>;
@@ -170,6 +211,10 @@ export function trimRow(row: TierRow): TrimmedRow {
     rawMaxDamage: row.rawMaxDamage,
     bestTarget: row.bestTarget,
     bestTargetName: row.bestTargetName,
+    bestLoadoutId: row.bestLoadoutId,
+    bestLoadoutName: row.bestLoadoutName,
+    bestLoadoutPoints: row.bestLoadoutPoints,
+    loadoutByTarget: row.loadoutByTarget,
     destroyedPointsByTarget: row.destroyedPointsByTarget,
     defenseVector: row.defenseVector,
     effectiveOffenseVector: row.effectiveOffenseVector,

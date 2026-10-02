@@ -45,6 +45,7 @@ import {
 } from '../combat/archetypes.ts';
 import { naturalBreaks } from '../combat/clustering.ts';
 import { countSimulations } from '../combat/counters.ts';
+import type { LoadoutCandidate } from '../combat/adapter.ts';
 import type { CombatUnit } from '../combat/types.ts';
 import { isEligibleForCalculations } from '../combat/budget.ts';
 import type { BsDatasheet } from '../bsdata/types.ts';
@@ -156,6 +157,18 @@ export interface RawScore {
   bestTargetName: string;
   /** Уничтоженные очки по каждому типу цели, на 100 очков атакующего. */
   destroyedPointsByTarget: Record<string, number>;
+  /**
+   * Какая сборка снаряжения победила против каждого типа цели.
+   *
+   * Ключ — тип цели, значение — отряд, который против него оказался лучшим.
+   * Один и тот же отряд может побеждать против пехоты одним комплектом, а
+   * против брони — другим.
+   */
+  loadoutByTarget: Record<string, { id: string; name: string; points: number }>;
+  /** Сборка-победитель для bestTarget: по ней считаются итоговые метрики. */
+  bestLoadoutId: string;
+  bestLoadoutName: string;
+  bestLoadoutPoints: number;
   /** Вектор защиты: 100 / (1 + takenPer100) по каждой группе оружия. */
   defenseVector: Record<string, number>;
   /** Вектор атаки после Melee Tax, по каждой цели. */
@@ -237,6 +250,18 @@ export interface TieringOptions {
   leader?: LeaderDefinition;
   /** Дополнительный признак «флай/депт-страйк» (снаружи — по данным). */
   hasFlyOrDeepStrike?: (datasheet: BsDatasheet) => boolean;
+  /**
+   * Варианты снаряжения, из которых выбирается лучший.
+   *
+   * Лучший подбирается ОТДЕЛЬНО против каждого типа цели: снаряжение, которое
+   * бьёт броню, часто хуже базового против пехоты, и одна «лучшая» сборка на
+   * все случаи была бы компромиссом, которого в игре не бывает.
+   *
+   * У каждого варианта своя цена: снаряжение, стоящее 5-10 очков, обязано быть
+   * оплачено, иначе юнит получил бы его бесплатно и тем сильнее завышался бы,
+   * чем богаче был его выбор.
+   */
+  loadouts?: LoadoutCandidate[];
 }
 
 /** Среднее по списку. */
@@ -288,28 +313,99 @@ export function rawScoreOf(
     : options.targets ?? targetsForParadigm(options.targetParadigm);
   const survival = { ...(options.survival ?? {}), phase: phaseOf(mode), ...ownOptions, ...leaderOptions };
   countSimulations('damageRuns');
-  const damage = damagePerRound(baseUnit, {
-    ...combat,
-    targets,
-    archetypes: options.archetypes ?? null,
-  });
-  const scale = points > 0 ? 100 / points : 0;
-  // Режим боя выбирает, из какой ветки разбивки берём цифры: в «ranged»
-  // рукопашная часть просто не участвует в оценке.
-  const slice = mode === 'ranged' ? damage.ranged : mode === 'melee' ? damage.melee : damage.total;
-  const destroyedPer100 = (id: ArchetypeId): number =>
-    (slice.destroyedPoints.byArchetype[id]?.mean ?? 0) * scale;
-  const destroyedPointsByTarget: Record<string, number> = Object.fromEntries(
-    targets.map((id) => [id, destroyedPer100(id)])
-  );
-  const vsInfantry = mean(INFANTRY_ARCHETYPES.map(destroyedPer100));
-  const vsArmor = mean(ARMOR_ARCHETYPES.map(destroyedPer100));
-  const universal = slice.destroyedPoints.overall.mean * scale;
-  const damagePer100 = slice.overall.mean * scale;
+  /**
+   * Кандидат — это один отряд в одной сборке снаряжения. У каждого своя цена:
+   * снаряжение, стоящее 10 очков, обязано быть оплачено, иначе юнит получил бы
+   * его бесплатно и тем сильнее завышался бы, чем богаче был его выбор.
+   */
+  interface DamageCandidate {
+    id: string;
+    name: string;
+    points: number;
+    /** Уничтоженные очки на 100 очков СВОЕГО отряда, по каждому типу цели. */
+    byTarget: Record<string, number>;
+    /** Уничтоженные очки на 100 очков, сводно по целям, в режиме боя. */
+    sliceDestroyed: number;
+    /** Нанесённый урон на 100 очков, сводно, в режиме боя. */
+    sliceOverall: number;
+    rangedOverall: number;
+    meleeOverall: number;
+  }
+  const measureCandidate = (
+    candidateUnit: CombatUnit,
+    candidatePoints: number,
+    id: string,
+    name: string
+  ): DamageCandidate => {
+    const result = damagePerRound(candidateUnit, {
+      ...combat,
+      targets,
+      archetypes: options.archetypes ?? null,
+    });
+    const candidateScale = candidatePoints > 0 ? 100 / candidatePoints : 0;
+    // Режим боя выбирает, из какой ветки разбивки берём цифры: в «ranged»
+    // рукопашная часть просто не участвует в оценке.
+    const slice = mode === 'ranged' ? result.ranged : mode === 'melee' ? result.melee : result.total;
+    return {
+      id,
+      name,
+      points: candidatePoints,
+      byTarget: Object.fromEntries(
+        targets.map((target) => [
+          target,
+          (slice.destroyedPoints.byArchetype[target]?.mean ?? 0) * candidateScale,
+        ])
+      ),
+      sliceDestroyed: slice.destroyedPoints.overall.mean * candidateScale,
+      sliceOverall: slice.overall.mean * candidateScale,
+      rangedOverall: result.ranged.overall.mean * candidateScale,
+      meleeOverall: result.melee.overall.mean * candidateScale,
+    };
+  };
+
+  const candidates: DamageCandidate[] = [
+    measureCandidate(baseUnit, points, 'base', 'Базовый'),
+  ];
+  for (const loadout of options.loadouts ?? []) {
+    if (loadout.unit.models.length === 0 || loadout.points <= 0) continue;
+    candidates.push(measureCandidate(loadout.unit, loadout.points, loadout.id, loadout.name));
+  }
+
+  /**
+   * Лучшая сборка подбирается ОТДЕЛЬНО против каждого типа цели: то, что бьёт
+   * броню, часто хуже базового против пехоты. Одна «лучшая на все случаи»
+   * сборка — это компромисс, которого в игре не бывает.
+   */
+  const destroyedPointsByTarget: Record<string, number> = {};
+  const winnerByTarget: Record<string, DamageCandidate> = {};
+  for (const target of targets) {
+    let bestValue = -Infinity;
+    let bestCandidate = candidates[0];
+    for (const candidate of candidates) {
+      const value = candidate.byTarget[target] ?? 0;
+      if (value > bestValue) {
+        bestValue = value;
+        bestCandidate = candidate;
+      }
+    }
+    destroyedPointsByTarget[target] = Math.max(0, bestValue);
+    winnerByTarget[target] = bestCandidate;
+  }
+  const vsInfantry = mean(INFANTRY_ARCHETYPES.map((id) => destroyedPointsByTarget[id] ?? 0));
+  const vsArmor = mean(ARMOR_ARCHETYPES.map((id) => destroyedPointsByTarget[id] ?? 0));
   const [bestTarget, rawMaxDamage] = targets.reduce<[ArchetypeId, number]>(
-    (best, id) => (destroyedPer100(id) > best[1] ? [id, destroyedPer100(id)] : best),
+    (best, id) =>
+      (destroyedPointsByTarget[id] ?? 0) > best[1] ? [id, destroyedPointsByTarget[id]] : best,
     [targets[0] ?? INFANTRY_ARCHETYPES[0] ?? ARCHETYPES[0]?.id ?? 'unknown', 0]
   );
+  /**
+   * Итоговые цифры берём у сборки-победителя ЦЕЛИКОМ, а не по максимуму по
+   * каждой метрике отдельно: иначе метрики описывали бы смесь разных
+   * комплектов снаряжения, которой в армии не существует.
+   */
+  const winner = winnerByTarget[bestTarget] ?? candidates[0];
+  const universal = winner.sliceDestroyed;
+  const damagePer100 = winner.sliceOverall;
   // Ищем по списку, а не через archetypeById: тот бросает на неизвестном id,
   // а `targets` может быть задан вызывающим кодом вручную.
   const bestArchetype = ARCHETYPES.find((archetype) => archetype.id === bestTarget);
@@ -321,8 +417,10 @@ export function rawScoreOf(
       : 'universal';
 
   // Тип отряда — по тому, что фактически наносит больше урона на 100 очков.
-  const rangedPer100 = damage.ranged.overall.mean * scale;
-  const meleePer100 = damage.melee.overall.mean * scale;
+  // Считается у сборки-победителя: снаряжение может добавить рукопашное оружие
+  // и перевести отряд в Melee, поэтому класс считается на каждую сборку свою.
+  const rangedPer100 = winner.rangedOverall;
+  const meleePer100 = winner.meleeOverall;
   const unitType: UnitType = meleePer100 > rangedPer100 ? 'Melee' : 'Ranged';
   const hasFlyOrDeepStrike = options.hasFlyOrDeepStrike?.(datasheet) ?? detectFlyOrDeepStrike(datasheet);
   // В режиме ranged рукопашная фаза не участвует, поэтому melee-штраф
@@ -366,6 +464,17 @@ export function rawScoreOf(
     bestTarget,
     bestTargetName,
     destroyedPointsByTarget,
+    /** Какая сборка снаряжения победила против каждого типа цели. */
+    loadoutByTarget: Object.fromEntries(
+      Object.entries(winnerByTarget).map(([id, candidate]) => [
+        id,
+        { id: candidate.id, name: candidate.name, points: candidate.points },
+      ])
+    ),
+    /** Сборка-победитель для bestTarget: по ней считаются итоговые метрики. */
+    bestLoadoutId: winner.id,
+    bestLoadoutName: winner.name,
+    bestLoadoutPoints: winner.points,
     effectiveOffenseVector,
     defenseVector,
     vsInfantry,
@@ -557,16 +666,31 @@ interface DraftRow extends RawScore {
  * Порядок строк — по убыванию Total (готовый вид тирлиста).
  */
 export function tierList(
-  entries: Array<{ datasheet: BsDatasheet; unit: CombatUnit; points: number; leader?: LeaderDefinition; rowId?: string; faction?: string }>,
+  entries: Array<{
+    datasheet: BsDatasheet;
+    unit: CombatUnit;
+    points: number;
+    /**
+     * Варианты снаряжения для выбора лучшего против каждой цели.
+     *
+     * Отдельное поле, а не часть TieringOptions, потому что у отряда с
+     * лидером набор один и тот же, а перебирать его для каждой пары лидеров
+     * незачем.
+     */
+    loadouts?: LoadoutCandidate[];
+    leader?: LeaderDefinition;
+    rowId?: string;
+    faction?: string;
+  }>,
   options: TieringOptions = {}
 ): TierRow[] {
   const eligibleEntries = entries.filter(({ datasheet, points, leader }) =>
     isEligibleForCalculations(datasheet.name, points + (leader?.points ?? 0))
   );
-  const drafts: DraftRow[] = eligibleEntries.map(({ datasheet, unit, points, leader, rowId, faction }) => {
+  const drafts: DraftRow[] = eligibleEntries.map(({ datasheet, unit, points, leader, rowId, faction, loadouts }) => {
     const totalPoints = points + (leader?.points ?? 0);
     return {
-    ...rawScoreOf(datasheet, unit, totalPoints, { ...options, leader }),
+    ...rawScoreOf(datasheet, unit, totalPoints, { ...options, leader, loadouts }),
     id: rowId ?? datasheet.id,
     name: leader ? `${datasheet.name} + ${leader.name}` : datasheet.name,
     faction: faction ?? datasheet.faction,

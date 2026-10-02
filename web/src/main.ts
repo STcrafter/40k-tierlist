@@ -1089,23 +1089,64 @@ function renderOnceEffectDetails(detail: UnitDetail): string {
  */
 function renderLoadoutDetails(detail: UnitDetail): string {
   const loadouts = detail.loadouts ?? [];
+  // Что выбрано в режиме, который сейчас открыт, и по каждому типу цели внутри
+  // него. Сборки без снаряжения в списке нет — базовый отряд вынесен отдельно.
+  const current = detailCell(detail);
+  const chosenId = current?.bestLoadoutId ?? 'base';
+  const byTarget = current?.loadoutByTarget ?? {};
+
+  // Выбор показывается по всем трём режимам: против техники и против пехоты
+  // лучшими могут быть разные сборки, а одна «лучшая на всё время» сборка —
+  // это компромисс, которого в игре не бывает.
+  const modeRows = (['ranged', 'melee', 'combined'] as CombatMode[])
+    .map((mode) => {
+      const metrics = detail.metricsByParadigm?.[state.targetParadigm]?.[mode];
+      const name = metrics?.bestLoadoutName ?? 'Базовый';
+      const points = metrics?.bestLoadoutPoints ?? detail.points;
+      const active = mode === state.mode ? ' class="active"' : '';
+      return `<tr${active}><th scope="row">${esc(MODE_LABELS[mode] ?? mode)}</th>` +
+        `<td>${esc(name)}</td><td class="num">${points}</td></tr>`;
+    })
+    .join('');
+  const modeTable = `<table class="loadout-modes">
+      <thead><tr><th scope="col">Режим боя</th><th scope="col">Выбранное снаряжение</th><th scope="col" class="num">Очки</th></tr></thead>
+      <tbody>${modeRows}</tbody>
+    </table>`;
+
+  // Какие типы цели выбирают снаряжение, отличное от базового отряда.
+  const specialised = Object.entries(byTarget).filter(([, loadout]) => loadout.id !== 'base');
+  const specialisedHint = specialised.length === 0
+    ? '<p class="hint">Во всех режимах лучшим остаётся базовый отряд.</p>'
+    : `<p class="hint">Снаряжение выбирается против: ${specialised
+        .map(([id, loadout]) => `${esc(TARGET_LABELS[id] ?? id)} — ${esc(loadout.name)}`)
+        .join('; ')}.</p>`;
+
   if (loadouts.length === 0) {
-    return '<section><h3>Loadout-варианты</h3><p class="hint">Для этого юнита нет отдельных вариантов снаряжения.</p></section>';
+    return `<section><h3>Снаряжение</h3>${modeTable}${specialisedHint}</section>`;
   }
   const body = loadouts
     .map((loadout) => {
       const weapons = loadout.unit?.models?.[0]?.weapons ?? [];
       const list = weapons.length === 0 ? '—' : weapons.map((weapon) => esc(weapon.name)).join(', ');
-      return `<div class="weapon-card">
+      const chosen = loadout.id === chosenId ? ' chosen' : '';
+      const badge = chosen
+        ? '<span class="badge">выбрано в этом режиме</span>'
+        : '';
+      return `<div class="weapon-card${chosen}">
         <div class="whead">
           <span class="name">${esc(loadout.name)}</span>
-          <span class="profile">${loadout.points} очков</span>
+          <span class="profile">${loadout.points} очков ${badge}</span>
         </div>
         <div class="profile">${list}</div>
       </div>`;
     })
     .join('');
-  return `<section><h3>Loadout-варианты</h3>${body}</section>`;
+  return `<section>
+    <h3>Снаряжение</h3>
+    ${modeTable}
+    ${specialisedHint}
+    ${body}
+  </section>`;
 }
 
 /** Варианты «юнит + лидер» для выбранных вида боя и парадигмы. */

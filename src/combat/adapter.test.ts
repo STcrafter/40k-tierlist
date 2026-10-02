@@ -11,6 +11,7 @@ import { bsFilesFromDir } from '../bsdata/node-source.ts';
 import { loadBsData } from '../bsdata/load.ts';
 import { parseBsDatabase } from '../bsdata/units.ts';
 import type { BsDatasheet } from '../bsdata/types.ts';
+import { sizeRangeOf } from '../bsdata/points.ts';
 import { adaptUnit } from './adapter.ts';
 import { monteCarlo } from './simulate.ts';
 import { withOnceEffects, rerollOptionsOf } from '../manual/abilities.ts';
@@ -26,14 +27,34 @@ const find = (name: string): BsDatasheet => {
 };
 
 describe('размер отряда по ограничениям', () => {
-  it('минимальный состав берёт минимумы вариантов', () => {
+  it('минимальный состав добирает каждую группу до её group.min', () => {
     const boyz = adaptUnit(find('Boyz'), { size: 'min' });
-    // 9-18 Boyz + 1-2 Nobz: 6 Boy + 1 Nob = 7 моделей.
+    // Группы: 9-18 Boyz и 1-2 Nobz → 9 + 1 = 10 моделей. Явные минимумы
+    // вариантов (6 Boy + 1 Nob) описывают состав моделей внутри группы, но не
+    // её размер: если у группы задан group.min, он и есть нижняя граница.
+    // Это то же правило, что в sizeRangeOf (bsdata/points.ts).
     // Числа — из BSData на коммите cc1830f: стоимость Boyz снижена 90 → 85,
-    // верхний тир (18 моделей) 180 → 170.
-    expect(boyz.unit.models).toHaveLength(7);
+    // верхний тир (20 моделей) 180 → 170.
+    expect(boyz.unit.models).toHaveLength(10);
     expect(boyz.counts.size).toBe(2);
     expect(boyz.points).toBe(85);
+  });
+
+  it('минимальный состав совпадает с sizeRangeOf', () => {
+    // Раньше эти два модуля считали минимум по-разному: sizeRangeOf брал
+    // group.min, а allocateVariants — только явные минимумы вариантов. Из-за
+    // расхождения 66 юнитов собирались меньше разрешённого минимума.
+    const rows = ['Boyz', 'Kroot Farstalkers', 'Cadian Recon Squad', 'Battle Sisters Squad'].map((name) => {
+      const sheet = find(name);
+      return {
+        name,
+        actual: adaptUnit(sheet, { size: 'min' }).unit.models.length,
+        expected: sizeRangeOf(sheet).min,
+      };
+    });
+    // Ожидаемое значение подставляем в обе колонки, чтобы при падении diff
+    // показывал, какой именно юнит разошёлся с ожиданием.
+    expect(rows).toEqual(rows.map((row) => ({ ...row, actual: row.expected })));
   });
 
   it('максимальный состав не превышает максимум группы и лимиты снаряжения', () => {

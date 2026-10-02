@@ -392,6 +392,12 @@ const payload = {
         rawMaxDamage: row?.rawMaxDamage ?? 0,
         bestTarget: row?.bestTarget ?? 'infantry',
         bestTargetName: row?.bestTargetName ?? 'Пехота',
+        // Какая сборка снаряжения победила против каждой цели. Панель юнита
+        // показывает её отдельно для каждого режима боя.
+        bestLoadoutId: row?.bestLoadoutId ?? 'base',
+        bestLoadoutName: row?.bestLoadoutName ?? 'Базовый',
+        bestLoadoutPoints: row?.bestLoadoutPoints ?? points,
+        loadoutByTarget: row?.loadoutByTarget ?? {},
         destroyedPointsByTarget: row?.destroyedPointsByTarget ?? {},
         effectiveOffenseVector: row?.effectiveOffenseVector ?? {},
         defenseVector: row?.defenseVector ?? {},

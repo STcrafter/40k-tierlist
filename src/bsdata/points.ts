@@ -91,8 +91,26 @@ export function pointsFor(datasheet: BsDatasheet, counts: Map<string, number>): 
 export function pointsForMinimumSize(datasheet: BsDatasheet): number {
   const counts = new Map<string, number>();
   for (const group of datasheet.modelGroups) {
+    let explicitTotal = 0;
     for (const variant of group.variants) {
-      if (variant.min > 0) counts.set(variant.id, variant.min);
+      if (variant.min > 0) {
+        counts.set(variant.id, variant.min);
+        explicitTotal += variant.min;
+      }
+    }
+    // Нижний предел группы — тот же, что в sizeRangeOf и allocateVariants:
+    // максимум из объявленного group.min и суммы обязательных вариантов.
+    // Без добора до этого предела (Boyz: 6 Boy + 1 Nob при group.min = 9) цена
+    // считалась бы для недобранного отряда.
+    let remaining = Math.max(group.min > 0 ? group.min : 0, explicitTotal) - explicitTotal;
+    for (const variant of group.variants) {
+      if (remaining <= 0) break;
+      const current = counts.get(variant.id) ?? 0;
+      const capacity = variant.max === null ? remaining : Math.max(0, variant.max - current);
+      const take = Math.min(remaining, capacity);
+      if (take <= 0) continue;
+      counts.set(variant.id, current + take);
+      remaining -= take;
     }
   }
   if (counts.size === 0 && datasheet.variants.length > 0) {
@@ -112,7 +130,13 @@ export function sizeRangeOf(datasheet: BsDatasheet): SizeRange {
   let max: number | null = 0;
 
   for (const group of datasheet.modelGroups) {
-    const groupMin = group.min > 0 ? group.min : group.variants.reduce((sum, v) => sum + v.min, 0);
+    // Нижняя граница группы — это ОБА ограничения сразу, а не только group.min:
+    // и объявленный минимум, и сумма обязательных вариантов внутри группы.
+    // У Death Korps of Krieg одна группа с group.min = 1, но варианты с
+    // обязательными минимумами 5 + 1 + 10 + 2 требуют 18 моделей — по одному
+    // group.min отряд считался бы одномодельным.
+    const mandatory = group.variants.reduce((sum, v) => sum + v.min, 0);
+    const groupMin = Math.max(group.min > 0 ? group.min : 0, mandatory);
     min += groupMin;
     if (max === null || group.max === null) {
       max = null;

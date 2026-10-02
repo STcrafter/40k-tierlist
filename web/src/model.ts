@@ -32,6 +32,17 @@ export interface UnitMetrics {
   rawMaxDamage: number;
   bestTarget: string;
   bestTargetName: string;
+  /**
+   * Сборка снаряжения, победившая в этом режиме боя (против `bestTarget`).
+   *
+   * Поля необязательные: тирлист мог остаться в кеше браузера со сборки, где
+   * снаряжение ещё не участвовало в расчёте.
+   */
+  bestLoadoutId?: string;
+  bestLoadoutName?: string;
+  bestLoadoutPoints?: number;
+  /** Победившая сборка против каждого типа цели, по отдельности. */
+  loadoutByTarget?: Record<string, { id: string; name: string; points: number }>;
   destroyedPointsByTarget: Record<string, number>;
   /** Вектор защиты по группам оружия (сырой, до общей нормировки). */
   defenseVector: Record<string, number>;
