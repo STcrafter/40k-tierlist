@@ -33,6 +33,7 @@ import {
 } from '../src/tier/scoring.ts';
 import { INDEX_CELL_KEYS } from '../src/tier/columns.ts';
 import { withOnceEffects } from '../src/manual/abilities.ts';
+import { groupByLeader, leaderScoresOf } from '../src/tier/leader-score.ts';
 import { emptyParadigmGrid, prepareUnits, type AttachedPayload, type TrimmedRow } from './prepare-units.ts';
 import type {
   ComboJob,
@@ -553,9 +554,27 @@ const attachedBytes = writeJson(attachedPath, {
   attached: attachedPayload,
 });
 
+/**
+ * Сводка по лидерам — те же пары, свёрнутые по лидеру.
+ *
+ * Считается в главном процессе, а не в воркере: воркер отвечает за строки, а
+ * свёртка одна и та же для всех, и в шести процессах она посчиталась бы
+ * шесть раз впустую. Дефолтное значение сетки пар — «все», merged/combined:
+ * это полная картина по всем отрядам без парадигмы и режима.
+ */
+const leaderPath = resolve(dirname(outPath), 'leaders.json');
+const leaderRows = leaderScoresOf(groupByLeader(attachedPayload.all.combined, leaders));
+const leaderBytes = writeJson(leaderPath, {
+  generatedAt: payload.generatedAt,
+  // Сжатие по числу пар, а не проценту: игрок смотрит на абсолютную строку.
+  shrinkage: 3,
+  leaders: leaderRows,
+});
+
 const mb = (bytes: number): string => (bytes / 1024 / 1024).toFixed(2);
 const elapsed = ((Date.now() - started) / 1000).toFixed(1);
 console.log(`\nГотово за ${elapsed} с`);
 console.log(`  ${indexPath} — ${mb(indexBytes)} МБ (загружается сразу)`);
 console.log(`  ${attachedPath} — ${mb(attachedBytes)} МБ (вкладка «с лидерами»)`);
+console.log(`  ${leaderPath} — ${mb(leaderBytes)} МБ на ${leaderRows.length} лидеров (сводка)`);
 console.log(`  ${unitsDir}/ — ${mb(detailBytes)} МБ на ${payload.units.length} юнитов (по клику)`);

@@ -209,6 +209,23 @@ export interface AttachedRow {
    * поэтому пара сравнима с обычным юнитом из основной вкладки.
    */
   percentile: number;
+  /**
+   * Дельты пары относительно голого отряда в той же объединённой сетке.
+   *
+   * `deltaPercentile` — главная из них: на сколько мест в общей шкале лидер
+   * поднял (или опустил) отряд. Проверяется по файлу как
+   * `percentile − barePercentile`.
+   */
+  deltaPercentile: number;
+  deltaTotal: number;
+  deltaDamage: number;
+  deltaSurvivability: number;
+  /** Перцентиль и тир того же отряда без лидера, в той же сетке. */
+  barePercentile: number;
+  bareTier: Tier;
+  /** Сколько очков стоит лидер и какую долю цены пары он забирает. */
+  leaderPoints: number;
+  leaderCostShare: number;
   rawMaxDamage: number;
   bestTarget: string;
   bestTargetName: string;

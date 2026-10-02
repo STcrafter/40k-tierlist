@@ -208,6 +208,37 @@ export interface AttachedPayload {
   effectiveSurvivability: number;
   utilityScore: number;
   utilityFlags: UtilityFlag[];
+  /**
+   * Дельты пары относительно ГОЛОГО отряда в той же объединённой сетке.
+   *
+   * Все три считаются в одной шкале, поэтому сопоставимы и между собой, и с
+   * абсолютными величинами пары. Знак читается прямо: «сколько очков позиции
+   * добавил лидер» (deltaPercentile), «насколько выросло качество пары» по
+   * двум осям модели.
+   *
+   * Оговорка про deltaDamage и deltaSurvivability: обе величины нормированы на
+   * 100 очков, а у пары очков больше, чем у отряда, — в знаменатель вошёл лидер.
+   * Поэтому отрицательная дельта читается как «на эти затраченные очки отряд
+   * стал хуже», а не «лидер ослабил бой». Это разные вещи, и второе — частный
+   * случай первого. Для оценки вклада без поправки на цену есть deltaPercentile.
+   */
+  deltaPercentile: number;
+  deltaTotal: number;
+  deltaDamage: number;
+  deltaSurvivability: number;
+  /**
+   * Перцентиль и тир ГОЛОГО отряда в той же сетке.
+   *
+   * Нужны не для красоты: без них дельту нельзя проверить по самому файлу.
+   * `deltaPercentile` обязан равняться `percentile − barePercentile`, и без
+   * голого значения это утверждение нельзя ни подтвердить, ни опровергнуть.
+   */
+  barePercentile: number;
+  bareTier: TierRow['tier'];
+  /** Сколько очков стоит сам лидер. */
+  leaderPoints: number;
+  /** Доля цены лидера в цене пары: сколько забрал лидер у отряда. */
+  leaderCostShare: number;
 }
 
 /**
@@ -233,28 +264,54 @@ export function emptyParadigmGrid<T>(
   return grid;
 }
 
-/** Обрезка строк вкладки «юнит + лидер» до формы, уходящей в JSON. */
+/**
+ * Обрезка строк вкладки «юнит + лидер» до формы, уходящей в JSON.
+ *
+ * `bareById` — голые отряды ТОЙ ЖЕ объединённой сетки. Он нужен ради дельт:
+ * без него пара не с чем сравнить, и вся идея «лидер поднял отряд» теряется.
+ * Пропавший голый отряд — не тихая нулевая дельта, а ошибка сборки, поэтому
+ * здесь бросаем.
+ */
 export function trimAttached(
   rows: TierRow[],
+  bareById: Map<string, TierRow>,
   prepared: PreparedUnit[],
   leaders: LeaderDefinition[]
 ): AttachedPayload[] {
-  return rows.map((row) => ({
-    unitId: row.id.split('+')[0],
-    leaderId: row.id.split('+')[1] ?? null,
-    name: row.name,
-    faction: row.faction,
-    factions: pairFactionsOf(row.id, prepared, leaders),
-    models: row.models,
-    points: row.points,
-    tier: row.tier,
-    totalScore: row.totalScore,
-    percentile: row.percentile,
-    rawMaxDamage: row.rawMaxDamage,
-    bestTarget: row.bestTarget,
-    bestTargetName: row.bestTargetName,
-    effectiveSurvivability: row.effectiveSurvivability,
-    utilityScore: row.utilityScore,
-    utilityFlags: row.utilityFlags,
-  }));
+  return rows.map((row) => {
+    const unitId = row.id.split('+')[0];
+    const leaderId = row.id.split('+')[1] ?? null;
+    const bare = bareById.get(unitId);
+    if (bare === undefined) {
+      throw new Error(`нет голого отряда «${unitId}» для пары «${row.id}»: дельта посчитать не от чего`);
+    }
+    const leader = leaders.find((item) => item.id === leaderId);
+    const leaderPoints = leader?.points ?? 0;
+    return {
+      unitId,
+      leaderId,
+      name: row.name,
+      faction: row.faction,
+      factions: pairFactionsOf(row.id, prepared, leaders),
+      models: row.models,
+      points: row.points,
+      tier: row.tier,
+      totalScore: row.totalScore,
+      percentile: row.percentile,
+      rawMaxDamage: row.rawMaxDamage,
+      bestTarget: row.bestTarget,
+      bestTargetName: row.bestTargetName,
+      effectiveSurvivability: row.effectiveSurvivability,
+      utilityScore: row.utilityScore,
+      utilityFlags: row.utilityFlags,
+      deltaPercentile: row.percentile - bare.percentile,
+      deltaTotal: row.totalScore - bare.totalScore,
+      deltaDamage: row.rawMaxDamage - bare.rawMaxDamage,
+      deltaSurvivability: row.effectiveSurvivability - bare.effectiveSurvivability,
+      barePercentile: bare.percentile,
+      bareTier: bare.tier,
+      leaderPoints,
+      leaderCostShare: row.points > 0 ? leaderPoints / row.points : 0,
+    };
+  });
 }

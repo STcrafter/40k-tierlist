@@ -119,6 +119,17 @@ function loadAttached(): Promise<AttachedData> {
 /** Форматирование чисел для таблицы. */
 const num = (value: number, digits = 1): string => value.toFixed(digits);
 
+/**
+ * Дельта со знаком: плюс виден глазом сразу, а в колонке без знака минус легко
+ * пропустить, а дельта — это ровно та величина, ради которой смотрят в столбец.
+ */
+const signed = (value: number, digits = 1): string =>
+  `${value > 0 ? '+' : ''}${value.toFixed(digits)}`;
+
+/** Класс подписи дельты. Нулевую подсвечивать незачем — её и так не видно. */
+const deltaClass = (value: number): string =>
+  value > 0 ? 'delta-up' : value < 0 ? 'delta-down' : '';
+
 /** Полоса значения 0–100 для наглядности в таблице. */
 function bar(value: number): string {
   const width = Math.max(0, Math.min(100, value));
@@ -576,6 +587,9 @@ function renderAttachedTable(app: HTMLElement): void {
     ['bestTargetName', 'Лучшая цель', false],
     ['effectiveSurvivability', 'Живучесть', true],
     ['utilityScore', 'Полезность', true],
+    ['deltaPercentile', 'Δ Перц.', true],
+    ['deltaDamage', 'Δ Урон', true],
+    ['deltaSurvivability', 'Δ Живуч.', true],
     ['totalScore', 'TOTAL', true],
     // Перцентиль показывает, ЧТО ИМЕННО сравнивается: пары стоят в одной шкале
     // с обычными юнитами основной вкладки, а не среди себе. Без этой колонки
@@ -601,6 +615,9 @@ function renderAttachedTable(app: HTMLElement): void {
         <td>${esc(row.bestTargetName)}</td>
         <td class="num">${num(row.effectiveSurvivability, 1)}</td>
         <td class="num">${row.utilityScore}</td>
+        <td class="num ${deltaClass(row.deltaPercentile)}">${signed(row.deltaPercentile)}</td>
+        <td class="num ${deltaClass(row.deltaDamage)}">${signed(row.deltaDamage)}</td>
+        <td class="num ${deltaClass(row.deltaSurvivability)}">${signed(row.deltaSurvivability)}</td>
         <td class="num">${num(row.totalScore, 1)}</td>
         <td class="num">${num(row.percentile, 1)}</td>
       </tr>`;

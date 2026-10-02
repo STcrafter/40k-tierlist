@@ -187,12 +187,15 @@ for (const job of jobs) {
   const pairIds = new Set(attachedEntries.map((entry) => entry.rowId));
   const merged = tierList([...prepared, ...attachedEntries], options);
   const attachedRows = merged.filter((row) => pairIds.has(row.id));
+  // Голые отряды той же сетки — база для дельт. Брать их из основного прохода
+  // нельзя: там другая нормализация и другие перцентили.
+  const bareById = new Map(merged.filter((row) => !pairIds.has(row.id)).map((row) => [row.id, row]));
   const result: ComboResult = {
     kind: 'combo',
     paradigm: job.paradigm,
     mode: job.mode,
     rows: rows.map(trimRow),
-    attached: trimAttached(attachedRows, prepared, leaders),
+    attached: trimAttached(attachedRows, bareById, prepared, leaders),
     elapsedMs: Date.now() - started,
   };
   process.send?.({ preparedMs, result, counters: simulationCounters() });
