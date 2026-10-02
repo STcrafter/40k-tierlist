@@ -129,6 +129,15 @@ export interface UnitIndexEntry {
   models: number;
   archetype: string;
   /**
+   * Лидер или Support-юнит: в листе он существует только рядом с отрядом,
+   * которому присоединён, и в самостоятельной ротации не ставится.
+   *
+   * Флаг чисто интерфейсный: он прячет такие строки из основной вкладки по
+   * умолчанию, но НЕ меняет расчёт — тиры считаются по всем строкам. Иначе
+   * скрытие сдвинуло бы положение настоящих боевых юнитов.
+   */
+  isLeader: boolean;
+  /**
    * Дельты одноразовых способностей — справочные величины, в Total и нормы
    * они не входят.
    *
@@ -180,6 +189,13 @@ export interface UnitDetail {
   loadouts?: Array<{ id: string; name: string; points: number; unit: UnitProfile }>;
 }
 
+/**
+ * Лидер в индексе — только то, чем пользуется интерфейс.
+ *
+ * Раньше здесь были `bonuses`, `abilities` и полный `unit` (модели и оружие):
+ * 0.70 МБ балласта в файле, который грузится сразу. Убрано при сборке индекса;
+ * расчёту эти поля не нужны, он идёт по полным LeaderDefinition.
+ */
 export interface LeaderSummary {
   id: string;
   name: string;
@@ -187,10 +203,8 @@ export interface LeaderSummary {
   factions: string[];
   points: number;
   keywords: string[];
+  /** Сколько отрядов берёт лидер: видно, насколько он универсален. */
   allowedUnitIds: string[];
-  bonuses: import('../../src/tier/leaders.ts').LeaderBonuses;
-  abilities: Array<{ name: string; description: string }>;
-  unit: UnitProfile;
 }
 
 export interface AttachedRow {

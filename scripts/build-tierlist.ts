@@ -423,6 +423,18 @@ const payload = {
   }),
 };
 
+/**
+ * Лидеры в индексе — только то, чем пользуется интерфейс.
+ *
+ * Раньше сюда ехали `bonuses`, `abilities` и полный `unit` (модели и оружие).
+ * Замерено: блок leaders занимал 0.90 МБ из 6.13 МБ индекса, из них unit —
+ * 0.36 МБ, abilities (проза) — 0.34 МБ. Интерфейс читает только id и name
+ * (см. leaderNameOf), а остальное нужно лишь для расчёта, который уже
+ * выполнен к моменту записи.
+ *
+ * `allowedUnitIds` остаётся: он копеечный и по нему видно, сколько отрядов
+ * берёт лидер.
+ */
 const leadersPayload = leaders.map((leader) => ({
   id: leader.id,
   name: leader.name,
@@ -431,10 +443,9 @@ const leadersPayload = leaders.map((leader) => ({
   points: leader.points,
   keywords: leader.keywords,
   allowedUnitIds: leader.allowedUnitIds,
-  bonuses: leader.bonuses,
-  abilities: leader.abilities,
-  unit: unitProfileOf(leader.unit, leader.points),
 }));
+
+const leaderIds = new Set(leaders.map((leader) => leader.id));
 
 const attachedPayload = Object.fromEntries(
   paradigms.map((paradigm) => [paradigm, attachedByParadigm[paradigm]])
@@ -469,6 +480,12 @@ const indexPayload = {
     points: unit.points,
     models: unit.models,
     archetype: unit.archetype,
+    // Лидеры и Support — не боевые отряды: в листе они занимают место только
+    // рядом с юнитом, которому присоединены. Флаг нужен интерфейсу, чтобы
+    // скрыть их по умолчанию. НА РАСЧЁТ НЕ ВЛИЯЕТ: перцентили и тиры по-прежнему
+    // считаются по всем 1093 строкам, иначе сдвинулось бы положение всех
+    // боевых юнитов.
+    isLeader: leaderIds.has(unit.id),
     onceEffectDeltas: unit.onceEffectDeltas,
     sensitivity: unit.sensitivity,
     utilityFlags: unit.utilityFlags,

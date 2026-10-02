@@ -65,6 +65,15 @@ const state = {
   search: '',
   sortKey: 'totalScore',
   sortDesc: true,
+  /**
+   * Показывать лидеров и Support в основной вкладке. По умолчанию выключено:
+   * это не боевые отряды, они стоят в общей шкале и выглядят слабыми.
+   *
+   * Расчёта это НЕ касается — перцентили и тиры считаются по всем строкам.
+   * Фильтр чисто интерфейсный, иначе скрытие сдвинуло бы положение всех
+   * настоящих юнитов.
+   */
+  showLeaders: false,
   view: 'units' as 'units' | 'attached',
   /** Открытая панель деталей: id юнита, сама запись и статус загрузки. */
   open: null as { id: string; detail: UnitDetail | null; error: string | null } | null,
@@ -250,6 +259,7 @@ function visibleUnits(): UnitIndexEntry[] {
   const needle = state.search.trim().toLowerCase();
   const rows = index.units.filter((unit) => {
     if (!withinCalculationBudget(unit.points)) return false;
+    if (unit.isLeader && !state.showLeaders) return false;
     if (state.faction && !unit.factions.includes(state.faction)) return false;
     if (needle && !unit.name.toLowerCase().includes(needle)) return false;
     const tier = cellOf(unit, state.targetParadigm, state.mode)?.tier;
@@ -424,6 +434,13 @@ function mountControls(app: HTMLElement): void {
       <span class="control-label" id="label-tier">Тиры</span>
       <div class="segmented tier-filter" role="group" aria-labelledby="label-tier">${tierButtons}</div>
     </div>
+    <div class="control">
+      <span class="control-label" id="label-leaders">Лидеры</span>
+      <button type="button" data-show-leaders aria-pressed="false"
+        title="Показать Leader и Support в основной вкладке. Они считаются в общей шкале с боевыми юнитами и почти всегда выглядят слабыми — но их собственные тиры посчитаны честно.">
+        Показать
+      </button>
+    </div>
     <div class="control grow">
       <label class="control-label" for="search">Поиск</label>
       <input id="search" type="search" placeholder="Название юнита" autocomplete="off" spellcheck="false" />
@@ -454,6 +471,7 @@ function syncControls(app: HTMLElement): void {
   mark('[data-mode]', (el) => el.dataset.mode === state.mode);
   mark('[data-paradigm]', (el) => el.dataset.paradigm === state.targetParadigm);
   mark('[data-tier-only]', (el) => state.tierFilter.has(el.dataset.tierOnly as Tier));
+  mark('[data-show-leaders]', () => state.showLeaders);
   const select = app.querySelector<HTMLSelectElement>('#faction');
   if (select !== null) select.value = state.faction;
 }
@@ -1137,6 +1155,15 @@ function bindEvents(app: HTMLElement): void {
       const tier = tierButton.dataset.tierOnly as Tier;
       if (state.tierFilter.has(tier)) state.tierFilter.delete(tier);
       else state.tierFilter.add(tier);
+      render(app);
+      return;
+    }
+
+    // Переключатель лидеров виден только в основной вкладке: во вкладке пар
+    // лидер и так стоит в каждой строке отдельной колонкой.
+    const leadersButton = target.closest<HTMLElement>('[data-show-leaders]');
+    if (leadersButton !== null && state.view === 'units') {
+      state.showLeaders = !state.showLeaders;
       render(app);
     }
   });
