@@ -46,6 +46,7 @@
  * импортирующий этот файл, замкнул бы цикл.
  */
 
+import { countSimulations } from '../combat/counters.ts';
 import { damagePerRound } from '../combat/perRound.ts';
 import { ARCHETYPES } from '../combat/archetypes.ts';
 import { parseKeywords } from '../combat/keywords.ts';
@@ -131,6 +132,10 @@ function withStance(unit: CombatUnit, raw: string[]): CombatUnit {
  * Усредняется по KATAH_SEEDS: см. там, почему одного сида мало.
  */
 function scoreOf(unit: CombatUnit): number {
+  // Один замер стойки: по два на юнит (RENDAX против DACATARAI). Считается
+  // здесь, а не в pickStance, потому что выбор кэшируется, а счётчик должен
+  // показывать правду — сколько на самом деле просчитано.
+  countSimulations('katahStanceScores');
   let total = 0;
   for (const seed of KATAH_SEEDS) {
     const result = damagePerRound(unit, {

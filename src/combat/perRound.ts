@@ -17,6 +17,7 @@
  * иначе сумма фаз систематически занижала бы разброс.
  */
 
+import { countSimulations } from './counters.ts';
 import { monteCarlo, type CombatOptions } from './simulate.ts';
 import {
   ARCHETYPES,
@@ -135,6 +136,7 @@ function measureAgainst(
   destroyed: { ranged: DamageStat; melee: DamageStat; total: DamageStat };
 } {
   const trials = options.trials ?? 200;
+  countSimulations('archetypeRuns');
   const target = targetUnitOf(archetype);
   const pointPerModel = archetype.points / Math.max(1, target.models.length);
   const destroyedFromKills = (value: { mean: number; stdev: number }): DamageStat => ({

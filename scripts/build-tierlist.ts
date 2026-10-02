@@ -20,6 +20,13 @@ import { fork } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { ARCHETYPES, archetypeOf } from '../src/combat/archetypes.ts';
 import {
+  addSimulationCounters,
+  countSimulations,
+  simulationCounters,
+  SIMULATION_COUNTER_LABELS,
+  type SimulationKind,
+} from '../src/combat/counters.ts';
+import {
   rawScoreOf,
   type CombatMode,
   type TargetParadigm,
@@ -27,7 +34,7 @@ import {
 import { INDEX_CELL_KEYS } from '../src/tier/columns.ts';
 import { withOnceEffects } from '../src/manual/abilities.ts';
 import { emptyParadigmGrid, prepareUnits, type AttachedPayload, type TrimmedRow } from './prepare-units.ts';
-import type { ComboResult, SensitivityResult, TierJob, TierWorkerResult } from './tier-worker.ts';
+import type { ComboResult, SensitivityResult, TierJob, WorkerMessage } from './tier-worker.ts';
 import type { BsDatasheet } from '../src/bsdata/types.ts';
 import type { CombatUnit } from '../src/combat/types.ts';
 
@@ -126,6 +133,9 @@ function onceEffectDeltasOf(
   if (boosted === unit) return { damage: 0, survivability: 0 };
 
   const options = { mode: 'combined' as const, targetParadigm: 'all' as const };
+  // Два прогона на юнит: с эффектом и без. Именно они, а не весь тирлист, и есть
+  // цена дельты — счётчик показывает это прямо.
+  countSimulations('onceDeltaRuns', 2);
   // Считается для единиц юнитов, но дельты — справочные величины: сбой
   // расчёта не должен ронять всю сборку тирлиста, поэтому перехватываем.
   try {
@@ -141,6 +151,18 @@ function onceEffectDeltasOf(
     return { damage: 0, survivability: 0 };
   }
 }
+
+/** Накопитель счётчиков: сумма по всем воркерам плюс главный процесс. */
+const totalCounters = simulationCounters();
+
+/**
+ * Сколько юнитов ранжировалось — нужно, чтобы перевести «сколько вызовов» в
+ * «сколько вызовов на юнит». Берётся из первого же combo-ответа.
+ */
+let rankedUnits = 0;
+
+/** Сколько пар «юнит + лидер» ранжировалось — см. rankedUnits. */
+let rankedAttached = 0;
 
 /**
  * Задачи раздаются воркерам по кругу.
@@ -171,15 +193,18 @@ function runPool(tasks: TierJob[]): Promise<void> {
       ];
       const child = fork(workerScript, args, { stdio: ['ignore', 'inherit', 'inherit', 'ipc'] });
 
-      child.on('message', (message: { preparedMs: number; result: TierWorkerResult }) => {
+      child.on('message', (message: WorkerMessage) => {
         if (message.preparedMs > 3000) {
           console.log(`  воркер ${index + 1}: подготовка ${message.preparedMs} мс`);
         }
+        addSimulationCounters(totalCounters, message.counters);
         const result = message.result;
         if (result.kind === 'combo') {
           const combo = result as ComboResult;
           byParadigm[combo.paradigm][combo.mode] = combo.rows;
+          if (rankedUnits === 0) rankedUnits = combo.rows.length;
           attachedByParadigm[combo.paradigm][combo.mode] = combo.attached;
+          if (rankedAttached === 0) rankedAttached = combo.attached.length;
           console.log(
             `Парадигма ${combo.paradigm}/${combo.mode}: ${combo.rows.length} юнитов, ` +
               `${combo.attached.length} с лидерами (${combo.elapsedMs} мс, воркер ${index + 1})`
@@ -444,6 +469,31 @@ for (const unit of payload.units) {
   detailBytes += writeJson(resolve(unitsDir, `${unit.id}.json`), unit);
 }
 
+/*
+ * Отчёт о счётчиках — в конце, а не сразу после пула: дельты одноразовых
+ * эффектов считаются позже, при сборке payload, и без них картина была бы
+ * неполной (а именно они показывают, чего стоит справочная величина).
+ *
+ * Смысл отчёта — не «сколько», а «во сколько раз больше нужного». Поэтому
+ * последней строкой идёт число замеров на одну пару (юнит/лидер × режим):
+ * если оно равно числу проходов, то каждый юнит пересчитывается заново под
+ * каждую парадигму — и это первое, что стоит чинить.
+ */
+addSimulationCounters(totalCounters, simulationCounters());
+const spaced = (value: number): string => value.toLocaleString('ru-RU');
+console.log('\nСчётчики вычислений (все воркеры + главный процесс):');
+for (const kind of Object.keys(SIMULATION_COUNTER_LABELS) as SimulationKind[]) {
+  console.log(`  ${SIMULATION_COUNTER_LABELS[kind].padEnd(38)} ${spaced(totalCounters[kind])}`);
+}
+const pairCount = rankedUnits + rankedAttached;
+const passes = paradigms.length * modes.length + (skipSensitivity ? 0 : 1);
+if (pairCount > 0 && modes.length > 0) {
+  const perPairMode = totalCounters.damageRuns / (pairCount * modes.length);
+  console.log(
+    `  замеров урона на пару (юнит/лидер × режим): ${perPairMode.toFixed(2)} ` +
+      `при ${passes} проходах и ${modes.length} режимах`
+  );
+}
 // Строки «юнит + лидер» нужны только во второй вкладке, а весят больше всех
 // юнитов вместе взятых, поэтому тоже вынесены в отдельный файл.
 const attachedPath = resolve(dirname(outPath), 'attached.json');

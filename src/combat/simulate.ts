@@ -19,6 +19,7 @@
  *    (модели MONSTER/VEHICLE из-под ограничения выведены).
  */
 
+import { countSimulations } from './counters.ts';
 import { diceMean, mulberry32, rollDie, rollDice } from './dice.ts';
 import { keywordOf } from './keywords.ts';
 import { clampTarget, standardRules, woundThresholdByStrength } from './rules.ts';
@@ -927,6 +928,8 @@ export function monteCarlo(
   // Опции разрешаются один раз: иначе каждый прогон получил бы свежий
   // mulberry32 с одинаковым сидом и все результаты совпали бы.
   const opts = resolveCombatOptions(options);
+  // Пачкой, а не в цикле: счётчик не должен сам стать нагрузкой.
+  countSimulations('monteCarloTrials', trials);
 
   for (let i = 0; i < trials; i += 1) {
     const trial = simulateTrial(attacker, defender, opts);

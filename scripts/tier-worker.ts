@@ -14,6 +14,11 @@
  */
 
 import { ARCHETYPES } from '../src/combat/archetypes.ts';
+import {
+  resetSimulationCounters,
+  simulationCounters,
+  type SimulationCounters,
+} from '../src/combat/counters.ts';
 import { sensitivityAnalysis, tierList, type CombatMode, type TargetParadigm } from '../src/tier/scoring.ts';
 import {
   attachedEntriesOf,
@@ -64,6 +69,19 @@ export interface SensitivityResult {
 }
 
 export type TierWorkerResult = ComboResult | SensitivityResult;
+
+/**
+ * Ответ воркера целиком: счётчики идут рядом с результатом, а не внутрь него.
+ *
+ * Счётчики живут в памяти процесса, поэтому наверх они уезжают отдельным
+ * полем конверта: типы результата описывают строки тирлиста и ничего не знают
+ * про наблюдение, а главному процессу нужна сумма по всем воркерам.
+ */
+export interface WorkerMessage {
+  preparedMs: number;
+  result: TierWorkerResult;
+  counters: SimulationCounters;
+}
 
 const argv = process.argv.slice(2);
 const flagValue = (name: string): string | null => {
@@ -125,7 +143,12 @@ for (const job of jobs) {
       size: report.size,
       elapsedMs: Date.now() - started,
     };
-    process.send?.({ preparedMs, result });
+    process.send?.({ preparedMs, result, counters: simulationCounters() });
+    // Обнуляем ПОСЛЕ отправки: счётчик в процессе накопительный, а сообщений по
+    // одному на задачу, и без сброса главный процесс сложил бы 1+2+3 вместо 3.
+    // Подготовка (adaptUnit с подбором стоек) попадает в первое сообщение — это
+    // честная работа, просто никому больше не принадлежит.
+    resetSimulationCounters();
     continue;
   }
 
@@ -146,5 +169,6 @@ for (const job of jobs) {
     attached: trimAttached(attachedRows, prepared, leaders),
     elapsedMs: Date.now() - started,
   };
-  process.send?.({ preparedMs, result });
+  process.send?.({ preparedMs, result, counters: simulationCounters() });
+  resetSimulationCounters();
 }

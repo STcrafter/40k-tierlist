@@ -20,6 +20,7 @@
  * глубину живучести отвечает `takenPer100Points`, а не число раундов.
  */
 
+import { countSimulations } from './counters.ts';
 import { simulateBattle } from './simulate.ts';
 import {
   WEAPON_ARCHETYPES,
@@ -194,6 +195,9 @@ function threatAgainst(
 ): WeaponThreat {
   const trials = options.trials ?? 200;
   const maxRounds = options.maxRounds ?? 20;
+  // Пачкой за весь замер шаблона: замеров столько, сколько шаблонов оружия, и
+  // каждый тянет trials боёв — именно это и нужно видеть в счётчиках сборки.
+  countSimulations('survivalTrials', trials);
   const attacker = weaponUnitOf(weapon);
   const attackerPoints = weaponPointsOf(weapon);
   // Общий поток бросков на прогон: имитация нескольких боёв подряд.

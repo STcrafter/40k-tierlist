@@ -44,6 +44,7 @@ import {
   type UnitArchetype,
 } from '../combat/archetypes.ts';
 import { naturalBreaks } from '../combat/clustering.ts';
+import { countSimulations } from '../combat/counters.ts';
 import type { CombatUnit } from '../combat/types.ts';
 import { isEligibleForCalculations } from '../combat/budget.ts';
 import type { BsDatasheet } from '../bsdata/types.ts';
@@ -286,6 +287,7 @@ export function rawScoreOf(
     ? targetsForParadigm('all')
     : options.targets ?? targetsForParadigm(options.targetParadigm);
   const survival = { ...(options.survival ?? {}), phase: phaseOf(mode), ...ownOptions, ...leaderOptions };
+  countSimulations('damageRuns');
   const damage = damagePerRound(baseUnit, {
     ...combat,
     targets,
@@ -331,6 +333,7 @@ export function rawScoreOf(
   // обязан потратить, чтобы удалить юнит, на 100 его очков. Больше = живучее,
   // поэтому в отличие от прежней 100/(1+taken) здесь нет инверсии: юнит,
   // поглотивший много урона, получает высокую оценку, а не низкую.
+  countSimulations('survivalRuns');
   const surv = survivabilityAgainstUnit(baseUnit, points, survival);
   const absorbedPer100 = surv.overall.absorbedPer100Points.mean;
   // Ось выживаемости — «сколько боевых фаз юнит прожил на 100 своих очков».
