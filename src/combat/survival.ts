@@ -278,11 +278,62 @@ export function survivabilityAgainstArchetype(
   });
 }
 
+/**
+ * Кэш замеров живучести: цель → сводка по ключу параметров.
+ *
+ * Живучесть не зависит от парадигмы ВООБЩЕ: в опциях нет ни набора целей, ни их
+ * id. Но `rawScoreOf` зовёт её на каждую пару «парадигма × режим», то есть один
+ * и тот же замер считается четыре раза. Здесь он считается один раз, а три
+ * остальных берут из кэша — по замерам это самая дешёвая из всех выгод.
+ *
+ * Кэш выключается при своём `rng` (чужой поток бросков переиспользовать нельзя)
+ * и держится на WeakMap, поэтому отряд, до которого держится payload, освобождает
+ * кэш вместе с собой.
+ */
+const survivalCache = new WeakMap<CombatUnit, Map<string, SurvivalResult>>();
+
+/** Ключ параметров замера живучести; null — кэш использовать нельзя. */
+function survivalCacheKey(targetPoints: number, options: SurvivalOptions): string | null {
+  if (options.rng !== undefined) return null;
+  return [
+    targetPoints,
+    options.seed ?? 0x5_1c_e,
+    options.trials ?? 200,
+    options.maxRounds ?? 20,
+    options.phase ?? 'all',
+    options.distance ?? 'null',
+    (options.groups ?? []).join('.'),
+    (options.weapons ?? []).join('.'),
+  ].join(',');
+}
+
 /** Выживаемость произвольного отряда-цели. */
 export function survivabilityAgainstUnit(
   target: CombatUnit,
   targetPoints: number,
   options: SurvivalOptions = {}
+): SurvivalResult {
+  const key = survivalCacheKey(targetPoints, options);
+  if (key !== null) {
+    const cached = survivalCache.get(target)?.get(key);
+    if (cached !== undefined) return cached;
+  }
+  const result = measureSurvivability(target, targetPoints, options);
+  if (key === null) return result;
+  let byKey = survivalCache.get(target);
+  if (byKey === undefined) {
+    byKey = new Map<string, SurvivalResult>();
+    survivalCache.set(target, byKey);
+  }
+  byKey.set(key, result);
+  return result;
+}
+
+/** Сам расчёт, без кэша. */
+function measureSurvivability(
+  target: CombatUnit,
+  targetPoints: number,
+  options: SurvivalOptions
 ): SurvivalResult {
   const seed = options.seed ?? 0x5_1c_e;
   const weapons = weaponsOf(options);

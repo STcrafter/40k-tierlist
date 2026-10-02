@@ -593,3 +593,68 @@ describe('замер не зависит от парадигмы', () => {
     }
   });
 });
+
+/**
+ * Замеры кэшируются: парадигмы берут из таблицы то, что уже посчитано, иначе
+ * сетка считает одно и то же четыре раза.
+ *
+ * Тут проверяется не скорость, а СОВПАДЕНИЕ: значение из кэша обязано
+ * сойтись с холодным расчётом до последнего разряда. Для сравнения берётся
+ * второй, равный по составу отряд: он в кэше не лежит, поэтому считается
+ * «с нуля» — и любое расхождение означает, что кэш отдал чужой замер.
+ */
+describe('кэш замеров отдаёт те же числа, что и холодный расчёт', () => {
+  it('замер по подмножеству целей совпадает с холодным', () => {
+    const warm = fighter(5);
+    const cold = fighter(5);
+    const full = targetsForParadigm('all');
+    const infantry = targetsForParadigm('infantry');
+
+    damagePerRound(warm, { trials: 25, targets: full });
+    const cached = damagePerRound(warm, { trials: 25, targets: infantry });
+    const fresh = damagePerRound(cold, { trials: 25, targets: infantry });
+
+    expect(cached.total.destroyedPoints.overall.mean).toBe(fresh.total.destroyedPoints.overall.mean);
+    for (const id of infantry) {
+      expect(cached.total.destroyedPoints.byArchetype[id]?.mean, id).toBe(
+        fresh.total.destroyedPoints.byArchetype[id]?.mean
+      );
+    }
+  });
+
+  it('замер с другим числом прогонов не берётся из кэша', () => {
+    // Ключ обязан включать trials, иначе второй вызов отдал бы числа первого.
+    // Сравнивается УРОН, а не уничтоженные очки: рукопашный против брони убивает
+    // цель в каждом прогоне, и там величина насыщается — 20 и 60 прогонов дают
+    // одно и то же число независимо от того, отдан кэш или нет.
+    const warm = gunner(5);
+    const cold = gunner(5);
+    const ids = targetsForParadigm('infantry');
+    damagePerRound(warm, { trials: 20, targets: ids });
+    const cached = damagePerRound(warm, { trials: 60, targets: ids });
+    const fresh = damagePerRound(cold, { trials: 60, targets: ids });
+
+    expect(cached.total.overall.mean).toBe(fresh.total.overall.mean);
+    expect(cached.total.overall.mean).not.toBe(
+      damagePerRound(cold, { trials: 20, targets: ids }).total.overall.mean
+    );
+  });
+
+  it('масштабированные эталоны не путаются с обычными', () => {
+    // У sensitivity свой набор целей: те же id, но другие статы. Если бы состав
+    // пула не входил в ключ, чувствительность молча считалась бы на обычных.
+    const warm = fighter(5);
+    const cold = fighter(5);
+    const ids = targetsForParadigm('all');
+    const scaled = scaleArchetypeModels(ARCHETYPES, 1.5);
+
+    damagePerRound(warm, { trials: 25, targets: ids, archetypes: scaled });
+    const cached = damagePerRound(warm, { trials: 25, targets: ids, archetypes: scaled });
+    const fresh = damagePerRound(cold, { trials: 25, targets: ids, archetypes: scaled });
+
+    expect(cached.total.destroyedPoints.overall.mean).toBe(fresh.total.destroyedPoints.overall.mean);
+    expect(cached.total.destroyedPoints.overall.mean).not.toBe(
+      damagePerRound(cold, { trials: 25, targets: ids }).total.destroyedPoints.overall.mean
+    );
+  });
+});

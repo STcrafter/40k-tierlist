@@ -123,18 +123,21 @@ function weightedMean(values: DamageStat[], weights: number[]): DamageStat {
   return { mean, stdev: Math.sqrt(variance) };
 }
 
-/** Один замер урона отряда против одного типа цели, по трём фазам. */
+/** Замер отряда против одного типа цели, по трём фазам. */
+export interface ArchetypeMeasure {
+  ranged: DamageStat;
+  melee: DamageStat;
+  total: DamageStat;
+  destroyed: { ranged: DamageStat; melee: DamageStat; total: DamageStat };
+}
+
+/** Тот же замер, посчитанный для одного архетипа. */
 function measureAgainst(
   attacker: CombatUnit,
   archetype: UnitArchetype,
   options: PerRoundOptions,
   seed: number
-): {
-  ranged: DamageStat;
-  melee: DamageStat;
-  total: DamageStat;
-  destroyed: { ranged: DamageStat; melee: DamageStat; total: DamageStat };
-} {
+): ArchetypeMeasure {
   const trials = options.trials ?? 200;
   countSimulations('archetypeRuns');
   const target = targetUnitOf(archetype);
@@ -199,12 +202,83 @@ function seedOfArchetype(archetype: UnitArchetype, seed: number): number {
   return (seed + hash) >>> 0;
 }
 
-/** Замер по одному набору целей: собирает разбивку по архетипам и среднее. */
-function measure(
-  attacker: CombatUnit,
-  archetypes: UnitArchetype[],
+/**
+ * Кэш замеров: отряд → таблица «тип цели → замер».
+ *
+ * Замер по паре (отряд, тип цели) НЕ зависит от того, в каком наборе целей он
+ * считается — это и проверяет тест «замер не зависит от парадигмы». Значит, все
+ * парадигмы могут пользоваться одним замером на юнита, вместо того чтобы
+ * считать одно и то же четыре раза: замер «все» уже содержит и пехоту, и
+ * технику, и «элиту» как подмножества.
+ *
+ * Ключ — идентичность отряда (WeakMap) плюс параметры расчёта. Отряд с теми же
+ * характеристиками, но собранный заново, измеряется снова: это верно, потому что
+ * у копии могут быть другие кейворды, а кэш о глубине структуры не знает.
+ */
+const measureCache = new WeakMap<CombatUnit, Map<string, Map<string, ArchetypeMeasure>>>();
+
+/**
+ * Ключ параметров расчёта; null — кэш использовать нельзя.
+ *
+ * Свой `rng` и свои `rules` кэш выключают: чужой поток бросков нельзя
+ * переиспользовать между вызовами, а правила не сериализуются. Остальное —
+ * плоские величины, собранные в строку. Пул целей входит по составу: у
+ * sensitivity это масштабированные типы, и их замер нельзя выдать за замер
+ * обычного (у них другая цена и другие статы).
+ */
+function cacheKeyOf(
   options: PerRoundOptions,
-  seed: number
+  seed: number,
+  pool: readonly UnitArchetype[]
+): string | null {
+  if (options.rng !== undefined || options.rules !== undefined) return null;
+  return [
+    seed,
+    options.trials ?? 200,
+    options.phase ?? 'ranged',
+    options.distance ?? 'null',
+    options.charged ?? true,
+    options.stationary ?? true,
+    options.indirect ?? false,
+    options.cover ?? false,
+    options.engaged ?? false,
+    (options.rerollHitOn ?? []).join('.'),
+    (options.rerollWoundOn ?? []).join('.'),
+    (options.rerollSaveOn ?? []).join('.'),
+    options.melee ?? 'primary',
+    options.closeQuarters ?? 'auto',
+    options.allocation ?? 'first',
+    pool
+      .map(
+        (archetype) =>
+          `${archetype.id}/${archetype.toughness}/${archetype.wounds}/${archetype.models}/${archetype.points}`
+      )
+      .join('|'),
+  ].join(',');
+}
+
+/** Таблица замеров отряда по ключу параметров; создаётся при первом обращении. */
+function tableFor(attacker: CombatUnit, key: string): Map<string, ArchetypeMeasure> {
+  let byKey = measureCache.get(attacker);
+  if (byKey === undefined) {
+    byKey = new Map<string, Map<string, ArchetypeMeasure>>();
+    measureCache.set(attacker, byKey);
+  }
+  const table = byKey.get(key) ?? new Map<string, ArchetypeMeasure>();
+  if (!byKey.has(key)) byKey.set(key, table);
+  return table;
+}
+
+/**
+ * Средние по подмножеству замеров.
+ *
+ * Отдельно от самого замера, потому что от набора целей зависит только это: по
+ * архетипу цифры одинаковы в любой парадигме, а среднее и веса у каждой свои.
+ */
+function aggregate(
+  table: Map<string, ArchetypeMeasure>,
+  archetypes: UnitArchetype[],
+  options: PerRoundOptions
 ): { ranged: DamageBreakdown; melee: DamageBreakdown; total: DamageBreakdown } {
   const byArchetypeRanged: Record<string, DamageStat> = {};
   const byArchetypeMelee: Record<string, DamageStat> = {};
@@ -220,8 +294,13 @@ function measure(
   const destroyedMeleeValues: DamageStat[] = [];
   const destroyedTotalValues: DamageStat[] = [];
 
-  archetypes.forEach((archetype) => {
-    const measured = measureAgainst(attacker, archetype, options, seedOfArchetype(archetype, seed));
+  for (const archetype of archetypes) {
+    const measured = table.get(archetype.id);
+    if (measured === undefined) {
+      // Случиться не может: measure() домеривает всё недостающее. Но молчать
+      // нельзя — молча выкинутый тип цели тихо меняет среднее.
+      throw new Error(`замер для «${archetype.id}» не посчитан`);
+    }
     byArchetypeRanged[archetype.id] = measured.ranged;
     byArchetypeMelee[archetype.id] = measured.melee;
     byArchetypeTotal[archetype.id] = measured.total;
@@ -235,13 +314,39 @@ function measure(
     destroyedMeleeValues.push(measured.destroyed.melee);
     destroyedTotalValues.push(measured.destroyed.total);
     weights.push(options.weights?.[archetype.id] ?? 1);
-  });
+  }
 
   return {
     ranged: { byArchetype: byArchetypeRanged, overall: weightedMean(rangedValues, weights), destroyedPoints: { byArchetype: destroyedRanged, overall: weightedMean(destroyedRangedValues, weights) } },
     melee: { byArchetype: byArchetypeMelee, overall: weightedMean(meleeValues, weights), destroyedPoints: { byArchetype: destroyedMelee, overall: weightedMean(destroyedMeleeValues, weights) } },
     total: { byArchetype: byArchetypeTotal, overall: weightedMean(totalValues, weights), destroyedPoints: { byArchetype: destroyedTotal, overall: weightedMean(destroyedTotalValues, weights) } },
   };
+}
+
+/**
+ * Замер по одному набору целей: достаёт из кэша что уже посчитано, меряет
+ * недостающее и собирает средние по своему набору.
+ *
+ * Замеров по архетипу получается столько, сколько РАЗНЫХ типов целей просили за
+ * всё время жизни отряда в процессе, а не сколько раз звали damagePerRound:
+ * первую парадигму меряет, остальные берут из таблицы.
+ */
+function measure(
+  attacker: CombatUnit,
+  archetypes: UnitArchetype[],
+  options: PerRoundOptions,
+  seed: number
+): { ranged: DamageBreakdown; melee: DamageBreakdown; total: DamageBreakdown } {
+  const key = cacheKeyOf(options, seed, options.archetypes ?? ARCHETYPES);
+  const table = key === null ? new Map<string, ArchetypeMeasure>() : tableFor(attacker, key);
+  for (const archetype of archetypes) {
+    if (table.has(archetype.id)) continue;
+    table.set(
+      archetype.id,
+      measureAgainst(attacker, archetype, options, seedOfArchetype(archetype, seed))
+    );
+  }
+  return aggregate(table, archetypes, options);
 }
 
 /** Типы целей из опций: по умолчанию — все архетипы. */

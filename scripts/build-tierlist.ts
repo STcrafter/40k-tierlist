@@ -34,7 +34,13 @@ import {
 import { INDEX_CELL_KEYS } from '../src/tier/columns.ts';
 import { withOnceEffects } from '../src/manual/abilities.ts';
 import { emptyParadigmGrid, prepareUnits, type AttachedPayload, type TrimmedRow } from './prepare-units.ts';
-import type { ComboResult, SensitivityResult, TierJob, WorkerMessage } from './tier-worker.ts';
+import type {
+  ComboJob,
+  ComboResult,
+  SensitivityResult,
+  TierJob,
+  WorkerMessage,
+} from './tier-worker.ts';
 import type { BsDatasheet } from '../src/bsdata/types.ts';
 import type { CombatUnit } from '../src/combat/types.ts';
 
@@ -171,13 +177,52 @@ let rankedAttached = 0;
  * типа цели (см. seedOfArchetype в perRound.ts), а не от того, какой воркер и в
  * каком порядке считал. Поэтому распараллеливание не меняет ни одной цифры.
  */
+/**
+ * Раскладывает задачи по воркерам ПО РЕЖИМАМ.
+ *
+ * Замер считается на пару (юнит, режим) и кэшируется в процессе воркера, так
+ * что переиспользовать его могут только задачи ОДНОГО режима, попавшие в ОДИН
+ * процесс. Раздача по кругу этого не давала: воркер получал разные режимы, кэш
+ * почти не работал, и сетка считала одно и то же четыре раза.
+ *
+ * Поэтому сначала группируем по режиму, и уже группы делим между воркерами:
+ * каждый получает несколько парадигм СВОЕГО режима — первую считает, остальные
+ * берёт из таблицы замеров.
+ *
+ * Sensitivity не в счёт: у него свой набор целей (масштабированный), к общей
+ * таблице он не обращается, и ему достаточно любого свободного места.
+ */
+function shardByMode(tasks: TierJob[], shards: TierJob[][]): void {
+  const combos = tasks.filter((task): task is ComboJob => task.kind === 'combo');
+  const modes = [...new Set(combos.map((task) => task.mode))];
+  // Воркеров на режим: при 6 воркерах и 3 режимах выходит по два, и на режим
+  // приходится ровно один СЧЁТНЫЙ проход вместо четырёх.
+  const perMode = Math.max(1, Math.floor(shards.length / Math.max(1, modes.length)));
+  let next = 0;
+  for (const mode of modes) {
+    const group = combos.filter((task) => task.mode === mode);
+    for (let slice = 0; slice < perMode; slice += 1) {
+      const mine = group.filter((_, index) => index % perMode === slice);
+      if (mine.length === 0) continue;
+      shards[next % shards.length].push(...mine);
+      next += 1;
+    }
+  }
+  for (const task of tasks.filter((task) => task.kind === 'sensitivity')) {
+    shards[next % shards.length].push(task);
+    next += 1;
+  }
+  // Свободные шарды воркерам не достаются: процесс без задач только жрёт память
+  // на разбор BSData.
+  const busy = shards.filter((shard) => shard.length > 0).length;
+  shards.length = Math.max(busy, 1);
+}
+
 function runPool(tasks: TierJob[]): Promise<void> {
   if (tasks.length === 0) return Promise.resolve();
   const workerScript = fileURLToPath(new URL('./tier-worker.ts', import.meta.url));
   const shards: TierJob[][] = Array.from({ length: Math.min(jobs, tasks.length) }, () => []);
-  tasks.forEach((task, index) => {
-    shards[index % shards.length].push(task);
-  });
+  shardByMode(tasks, shards);
 
   return new Promise<void>((resolveAll, rejectAll) => {
     let pending = shards.length;
@@ -488,10 +533,16 @@ for (const kind of Object.keys(SIMULATION_COUNTER_LABELS) as SimulationKind[]) {
 const pairCount = rankedUnits + rankedAttached;
 const passes = paradigms.length * modes.length + (skipSensitivity ? 0 : 1);
 if (pairCount > 0 && modes.length > 0) {
-  const perPairMode = totalCounters.damageRuns / (pairCount * modes.length);
+  // Считается не число ВЫЗОВОВ (оно всегда равно числу проходов: столько задач
+  // в сетке), а число ЗАМЕРОВ по архетипу — то есть реальная работа. Пока замер
+  // не кэшировался, на каждую пару и режим приходилось столько замеров, сколько
+  // было проходов, а набиралось больше, чем типов целей: подмножества
+  // парадигм считались заново. С кэшем должно выйти около числа ТИПОВ ЦЕЛЕЙ —
+  // тогда каждый юнит измерен один раз на режим.
+  const perPairMode = totalCounters.archetypeRuns / (pairCount * modes.length);
   console.log(
-    `  замеров урона на пару (юнит/лидер × режим): ${perPairMode.toFixed(2)} ` +
-      `при ${passes} проходах и ${modes.length} режимах`
+    `  замеров по архетипу на пару (юнит/лидер × режим): ${perPairMode.toFixed(2)} ` +
+      `при ${passes} проходах, ${modes.length} режимах и ${ARCHETYPES.length} типах целей`
   );
 }
 // Строки «юнит + лидер» нужны только во второй вкладке, а весят больше всех

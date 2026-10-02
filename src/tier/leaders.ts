@@ -175,11 +175,30 @@ export function applyLeaderBonuses(unit: CombatUnit, leader: LeaderDefinition): 
   };
 }
 
+/**
+ * Кэш собранных пар «юнит + лидер».
+ *
+ * Пара собирается на КАЖДЫЙ вызов `rawScoreOf`, то есть на каждую пару
+ * «парадигма × режим» заново: 1095 пар × 12 проходов. А кэш замеров в perRound
+ * держится на ИДЕНТИЧНОСТИ отряда, поэтому свежий объект каждый раз давал
+ * промах и весь замер считался заново — вкладка «с лидерами» была самой
+ * дорогой частью сборки.
+ *
+ * Оба аргумента (отряд и определение лидера) — одни и те же объекты в пределах
+ * процесса, поэтому WeakMap по двум уровням достаточен. Собранный отряд никто не
+ * мутирует: симуляция принимает входные данные как константу (на этом же
+ * построен кэш стоек Ka'tah).
+ */
+const attachedCache = new WeakMap<CombatUnit, WeakMap<LeaderDefinition, CombatUnit>>();
+
 /** Объединяет отряд и присоединённого лидера в один боевой отряд. */
 export function attachLeaderToUnit(unit: CombatUnit, leader: LeaderDefinition): CombatUnit {
+  const cached = attachedCache.get(unit)?.get(leader);
+  if (cached !== undefined) return cached;
+
   const bodyguard = applyLeaderBonuses(unit, leader);
   const conditional = applyLeaderConditional(bodyguard, leader);
-  return {
+  const attached: CombatUnit = {
     ...conditional.bodyguard,
     id: `${unit.id}+${leader.id}`,
     name: `${unit.name} + ${leader.name}`,
@@ -189,6 +208,14 @@ export function attachLeaderToUnit(unit: CombatUnit, leader: LeaderDefinition): 
     // adaptUnit, и кейворд от способности иначе потерялся бы.
     models: [...withLeaderAura(conditional.bodyguard.models, leader), ...conditional.leader],
   };
+
+  let byLeader = attachedCache.get(unit);
+  if (byLeader === undefined) {
+    byLeader = new WeakMap<LeaderDefinition, CombatUnit>();
+    attachedCache.set(unit, byLeader);
+  }
+  byLeader.set(leader, attached);
+  return attached;
 }
 
 /**
