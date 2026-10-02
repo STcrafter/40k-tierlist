@@ -184,15 +184,17 @@ describe('Boyz', () => {
     expect(choppa?.profiles[0]?.strength).toBe('5');
   });
 
-  it('рассчитывает тир цены 90 → 180 при размере больше 10', () => {
-    expect(boyz.cost.base).toBe(90);
-    const tier = boyz.cost.modifiers.find((modifier) => modifier.value === 180);
+  it('рассчитывает тир цены 85 → 170 при размере больше 10', () => {
+    // Числа — из BSData на коммите cc1830f: базовая стоимость Boyz снижена
+    // с 90 до 85, верхний тир 18 моделей correspondingly 180 → 170.
+    expect(boyz.cost.base).toBe(85);
+    const tier = boyz.cost.modifiers.find((modifier) => modifier.value === 170);
     expect(tier).toBeDefined();
     expect(tier?.uncertain).toBe(false);
     expect(tier?.conditions[0]?.target).toBe('total-models');
 
-    expect(pointsFor(boyz, boyzCounts(boyz, 10)).points).toBe(90);
-    expect(pointsFor(boyz, boyzCounts(boyz, 20)).points).toBe(180);
+    expect(pointsFor(boyz, boyzCounts(boyz, 10)).points).toBe(85);
+    expect(pointsFor(boyz, boyzCounts(boyz, 20)).points).toBe(170);
   });
 
   it('знает границы размера отряда 10-20', () => {

@@ -29,16 +29,18 @@ describe('размер отряда по ограничениям', () => {
   it('минимальный состав берёт минимумы вариантов', () => {
     const boyz = adaptUnit(find('Boyz'), { size: 'min' });
     // 9-18 Boyz + 1-2 Nobz: 6 Boy + 1 Nob = 7 моделей.
+    // Числа — из BSData на коммите cc1830f: стоимость Boyz снижена 90 → 85,
+    // верхний тир (18 моделей) 180 → 170.
     expect(boyz.unit.models).toHaveLength(7);
     expect(boyz.counts.size).toBe(2);
-    expect(boyz.points).toBe(90);
+    expect(boyz.points).toBe(85);
   });
 
   it('максимальный состав не превышает максимум группы и лимиты снаряжения', () => {
     const boyz = adaptUnit(find('Boyz'), { size: 'max' });
     // Группы: 9-18 Boyz и 1-2 Nobz → 18 + 2 = 20 моделей.
     expect(boyz.unit.models).toHaveLength(20);
-    expect(boyz.points).toBe(180);
+    expect(boyz.points).toBe(170);
   });
 
   it('одиночный даташит даёт ровно одну модель', () => {
@@ -174,7 +176,8 @@ describe('пригодность к бою', () => {
     const cases = [
       { name: 'Blood Claws', toughness: 4 },
       { name: 'Death Company Intercessors', toughness: 4 },
-      { name: 'Grey Knights Terminator Squad', toughness: 5 },
+      // Прочность Terminator в BSData поднята с 5 до 6 (коммит cc1830f).
+      { name: 'Grey Knights Terminator Squad', toughness: 6 },
     ];
     for (const { name, toughness } of cases) {
       const adapted = adaptUnit(find(name), { size: 'min' });
