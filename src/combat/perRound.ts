@@ -175,6 +175,30 @@ function measureAgainst(
   };
 }
 
+/**
+ * Сид замера по архетипу: привязан к САМОМУ архетипу, а не к его позиции.
+ *
+ * Раньше здесь стояло `(seed + index * 7919)`, где index — место в списке целей.
+ * Это было ошибкой: наборы целей у парадигм отсортированы по-разному, поэтому
+ * один и тот же тип цели в разных вкладках тирлиста измерялся РАЗНЫМ шумом. На
+ * данных это выглядело так, будто методики различаются: cluster-1 давал 49.5
+ * уничтоженных очков в «все» и 47.7 в «элита» — при одинаковых правилах.
+ *
+ * Теперь шум привязан к id, и два свойства выполняются сразу: цифры типа цели
+ * совпадают во всех вкладках, а замер можно переиспользовать вместо
+ * пересчёта под каждую парадигму.
+ *
+ * Хэш — FNV-1a по id: без зависимостей и без ограничения на длину строки.
+ */
+function seedOfArchetype(archetype: UnitArchetype, seed: number): number {
+  let hash = 2166136261;
+  for (let i = 0; i < archetype.id.length; i += 1) {
+    hash ^= archetype.id.charCodeAt(i);
+    hash = Math.imul(hash, 16777619) >>> 0;
+  }
+  return (seed + hash) >>> 0;
+}
+
 /** Замер по одному набору целей: собирает разбивку по архетипам и среднее. */
 function measure(
   attacker: CombatUnit,
@@ -196,8 +220,8 @@ function measure(
   const destroyedMeleeValues: DamageStat[] = [];
   const destroyedTotalValues: DamageStat[] = [];
 
-  archetypes.forEach((archetype, index) => {
-    const measured = measureAgainst(attacker, archetype, options, (seed + index * 7919) >>> 0);
+  archetypes.forEach((archetype) => {
+    const measured = measureAgainst(attacker, archetype, options, seedOfArchetype(archetype, seed));
     byArchetypeRanged[archetype.id] = measured.ranged;
     byArchetypeMelee[archetype.id] = measured.melee;
     byArchetypeTotal[archetype.id] = measured.total;

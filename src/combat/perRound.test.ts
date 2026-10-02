@@ -21,6 +21,7 @@ import {
 } from './archetypes.ts';
 import { kMeans, naturalBreaks, silhouetteScore, standardize, unitFeatureVector } from './clustering.ts';
 import { damagePerRound, damagePerRoundByType } from './perRound.ts';
+import { targetsForParadigm } from '../tier/scoring.ts';
 import type { CombatModel, CombatUnit, CombatWeapon } from './types.ts';
 
 function weapon(overrides: Partial<CombatWeapon> = {}): CombatWeapon {
@@ -541,3 +542,54 @@ describe('масштабирование эталонов', () => {
   });
 });
 
+/**
+ * Замер по архетипу не должен зависеть от того, в каком наборе целей он посчитан.
+ *
+ * Это не про «красиво», а про два практических свойства:
+ *
+ *  1. Один и тот же тип цели публикуется в разных вкладках тирлиста с разными
+ *     цифрами, потому что сид замера брался от ПОЗИЦИИ архетипа в списке целей,
+ *     а наборы парадигм ('all', 'infantry', 'elite', 'armor') отсортированы
+ *     по-разному. Разница была чистым шумом Монте-Карло.
+ *  2. Пока это так, сетку нельзя переиспользовать: чтобы посчитать юнита один
+ *     раз и собрать парадигмы как агрегаты, нужно ровно это свойство.
+ *
+ * Списки целей берутся из слоя тирлиста — он и владеет понятием парадигмы, —
+ * а проверяется здесь, потому что правило сида живёт в perRound.
+ */
+describe('замер не зависит от парадигмы', () => {
+  it('один и тот же архетип даёт одинаковые цифры в разных наборах целей', () => {
+    const all = targetsForParadigm('all');
+    const elite = targetsForParadigm('elite');
+    // 'elite' — верхняя треть по T×W, поэтому часть архетипов у неё общая с 'all'.
+    const shared = elite.filter((id) => all.includes(id));
+    expect(shared.length, 'нужен общий архетип у elite и all').toBeGreaterThan(0);
+
+    const squad = gunner(5);
+    const trials = 40;
+    const byAll = damagePerRound(squad, { trials, targets: all });
+    const byElite = damagePerRound(squad, { trials, targets: elite });
+    for (const id of shared) {
+      const reference = byAll.total.destroyedPoints.byArchetype[id]?.mean;
+      expect(reference, `${id}: нет замера в наборе all`).toBeDefined();
+      expect(
+        byElite.total.destroyedPoints.byArchetype[id]?.mean,
+        `${id}: замер в elite отличается от замера в all — сид зависит от позиции`
+      ).toBeCloseTo(reference as number, 10);
+    }
+  });
+
+  it('порядок целей в списке тоже не влияет на замер', () => {
+    // Второе лицо того же свойства: сдвиг набора целей не должен двигать шум.
+    const ids = targetsForParadigm('infantry');
+    const squad = fighter(5);
+    const forward = damagePerRound(squad, { trials: 30, targets: ids });
+    const reversed = damagePerRound(squad, { trials: 30, targets: [...ids].reverse() });
+    for (const id of ids) {
+      expect(
+        reversed.total.destroyedPoints.byArchetype[id]?.mean,
+        `${id}: разворот списка изменил замер`
+      ).toBeCloseTo(forward.total.destroyedPoints.byArchetype[id]?.mean as number, 10);
+    }
+  });
+});
