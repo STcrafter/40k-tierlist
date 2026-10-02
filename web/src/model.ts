@@ -204,6 +204,11 @@ export interface AttachedRow {
   points: number;
   tier: Tier;
   totalScore: number;
+  /**
+   * Перцентиль в объединённой сетке: голые отряды и пары считаются вместе,
+   * поэтому пара сравнима с обычным юнитом из основной вкладки.
+   */
+  percentile: number;
   rawMaxDamage: number;
   bestTarget: string;
   bestTargetName: string;

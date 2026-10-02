@@ -195,6 +195,13 @@ export interface AttachedPayload {
   points: number;
   tier: TierRow['tier'];
   totalScore: number;
+  /**
+   * Перцентиль в ОБЪЕДИНЁННОЙ сетке (голые отряды + пары).
+   *
+   * Именно поэтому он попал в payload: дельта пары — это разность перцентилей
+   * одной шкалы, и без перцентиля пары её не из чего посчитать.
+   */
+  percentile: number;
   rawMaxDamage: number;
   bestTarget: string;
   bestTargetName: string;
@@ -242,6 +249,7 @@ export function trimAttached(
     points: row.points,
     tier: row.tier,
     totalScore: row.totalScore,
+    percentile: row.percentile,
     rawMaxDamage: row.rawMaxDamage,
     bestTarget: row.bestTarget,
     bestTargetName: row.bestTargetName,

@@ -103,16 +103,30 @@ const preparedMs = Date.now() - preparedStarted;
 const attachedEntries = attachedEntriesOf(prepared, leaders);
 
 /**
- * Пониженные прогоны для вкладки с лидерами.
+ * Опции одного прохода сетки.
  *
- * Так было и до распараллеливания: пар «юнит + лидер» в разы больше, чем
- * обычных юнитов, а вкладка эта справочная, поэтому точность ей не нужна.
+ * Основная вкладка и объединённая сетка ОБЯЗАНЫ считаться одинаковыми опциями.
+ * От этого зависит кэш замеров: замер голого отряда внутри объединённой сетки
+ * должен попасть в ту же таблицу, что и замер основной вкладки, и тогда он
+ * бесплатный — платят только пары.
+ *
+ * Поэтому вызовы связаны в одну функцию. Стоит развести их по разным файлам или
+ * поправить один и забыть про второй — попадание в кэш умрёт тихо, и объединённая
+ * сетка начнёт заново считать все 1093 голых отряда на каждом проходе.
  */
-const attachedOptions = {
-  combat: { trials: Math.min(trials, 4), distance },
-  survival: { trials: Math.min(trials, 3), maxRounds: 8, distance },
-  archetypes: ARCHETYPES,
-};
+function comboOptions(mode: CombatMode, paradigm: TargetParadigm) {
+  return {
+    mode,
+    targetParadigm: paradigm,
+    combat: { trials, distance },
+    // Пары меряются с той же точностью, что и основной тирлист. Раньше здесь
+    // стояло min(trials, 4) и maxRounds 8 «потому что вкладка справочная» — но
+    // аргумент был верен, пока каждая пара считалась ещё в трёх парадигмах.
+    // Теперь повторов нет, и 4 прогона — это в основном шум в порядке строк.
+    survival: { trials, maxRounds: 15, distance },
+    archetypes: ARCHETYPES,
+  };
+}
 
 for (const job of jobs) {
   if (job.kind === 'sensitivity') {
@@ -153,14 +167,26 @@ for (const job of jobs) {
   }
 
   const started = Date.now();
-  const rows = tierList(prepared, {
-    mode: job.mode,
-    targetParadigm: job.paradigm,
-    combat: { trials, distance },
-    survival: { trials, maxRounds: 15, distance },
-    archetypes: ARCHETYPES,
-  });
-  const attachedRows = tierList(attachedEntries, { mode: job.mode, targetParadigm: job.paradigm, ...attachedOptions });
+  const options = comboOptions(job.mode, job.paradigm);
+  const rows = tierList(prepared, options);
+
+  /**
+   * Объединённая сетка: голые отряды и пары в одном наборе.
+   *
+   * Раньше пары нормализовались ОТДЕЛЬНО, и `totalScore` пары нельзя было
+   * сравнить с `totalScore` юнита: разные распределения, разные перцентили.
+   * Теперь они стоят в одной шкале, и «насколько лидер поднял отряд» становится
+   * разностью перцентилей одной сетки, а не сравнением двух разных миров.
+   *
+   * Цена — нулевая для голых отрядов: только что посчитанные замеры лежат в
+   * кэше (см. comboOptions), платят только пары, которых в кэше ещё не было.
+   *
+   * Основная вкладка при этом НЕ трогается: она считается своим проходом выше,
+   * иначе 1095 пар сдвинули бы перцентили всех 1093 юнитов.
+   */
+  const pairIds = new Set(attachedEntries.map((entry) => entry.rowId));
+  const merged = tierList([...prepared, ...attachedEntries], options);
+  const attachedRows = merged.filter((row) => pairIds.has(row.id));
   const result: ComboResult = {
     kind: 'combo',
     paradigm: job.paradigm,

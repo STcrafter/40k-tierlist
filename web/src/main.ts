@@ -577,6 +577,10 @@ function renderAttachedTable(app: HTMLElement): void {
     ['effectiveSurvivability', 'Живучесть', true],
     ['utilityScore', 'Полезность', true],
     ['totalScore', 'TOTAL', true],
+    // Перцентиль показывает, ЧТО ИМЕННО сравнивается: пары стоят в одной шкале
+    // с обычными юнитами основной вкладки, а не среди себе. Без этой колонки
+    // смену шкалы нельзя заметить со стороны.
+    ['percentile', 'Перц.', true],
     ['tier', 'Тир', false],
   ];
   const head = columns
@@ -598,11 +602,12 @@ function renderAttachedTable(app: HTMLElement): void {
         <td class="num">${num(row.effectiveSurvivability, 1)}</td>
         <td class="num">${row.utilityScore}</td>
         <td class="num">${num(row.totalScore, 1)}</td>
+        <td class="num">${num(row.percentile, 1)}</td>
       </tr>`;
     })
     .join('');
   host.innerHTML = `<table>
-    <caption class="sr-only">Сочетания «отряд + лидер» для выбранной парадигмы цели и режима боя</caption>
+    <caption class="sr-only">Сочетания «отряд + лидер» для выбранной парадигмы цели и режима боя. Пары и обычные юниты ранжированы в одной шкале</caption>
     <thead><tr>${head}</tr></thead>
     <tbody>${body}</tbody>
   </table>`;
