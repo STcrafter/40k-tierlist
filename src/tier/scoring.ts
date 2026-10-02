@@ -48,7 +48,7 @@ import { countSimulations } from '../combat/counters.ts';
 import type { CombatUnit } from '../combat/types.ts';
 import { isEligibleForCalculations } from '../combat/budget.ts';
 import type { BsDatasheet } from '../bsdata/types.ts';
-import { detectUtilityFlags, utilityScoreOf, type UtilityFlag } from './utility.ts';
+import { detectUtilityFlags, detectLeaderAuraFlags, utilityScoreOf, type UtilityFlag } from './utility.ts';
 import { attachLeaderToUnit, leaderCombatOptionsOf, type LeaderDefinition } from './leaders.ts';
 import { rerollOptionsOf } from '../manual/abilities.ts';
 
@@ -351,7 +351,13 @@ export function rawScoreOf(
     ])
   );
 
-  const utilityFlags = detectUtilityFlags(datasheet);
+  // Полезность пары = полезность отряда + аура лидера. Аура приписывается ПАРЕ:
+  // у голого отряда её нет, поэтому дельта полезности однозначно уходит лидеру.
+  // Собственные способности лидера сюда не попадают — они уже учтены его моделями.
+  const utilityFlags = [
+    ...detectUtilityFlags(datasheet),
+    ...(options.leader ? detectLeaderAuraFlags(options.leader) : []),
+  ];
   const utilityScore = utilityScoreOf(utilityFlags);
 
   return {

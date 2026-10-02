@@ -23,6 +23,7 @@ import {
   tierOf,
 } from './scoring.ts';
 import {
+  detectLeaderAuraFlags,
   detectUtilityFlags,
   isScoredFlag,
   utilityScoreOf,
@@ -30,7 +31,14 @@ import {
   UTILITY_POINTS,
   type UtilityFlag,
 } from './utility.ts';
-import { attachLeaderToUnit, leaderDefinitionsOf } from './leaders.ts';
+
+/** Нулевые бонусы для синтетического лидера в тестах. */
+const noBonuses = (): LeaderBonuses => ({
+  toughness: 0, wounds: 0, save: 0, invuln: 0, leadership: 0, objectiveControl: 0,
+  weaponAttacks: 0, weaponSkill: 0, weaponStrength: 0, weaponDamage: 0,
+  weaponKeywords: [], rerollHitOn: [], rerollWoundOn: [], rerollSaveOn: [],
+});
+import { attachLeaderToUnit, leaderDefinitionsOf, type LeaderBonuses } from './leaders.ts';
 import type { BsDatasheet } from '../bsdata/types.ts';
 
 const { datasheets } = parseBsDatabase(loadBsData(bsFilesFromDir('public/BSData/wh40k-11e')));
@@ -101,6 +109,65 @@ describe('utility-флаги', () => {
     const lost = detectUtilityFlags(find('Front-line Commander [Crucible]'));
     expect(lost.some((flag) => flag.id === 'Scouts')).toBe(false);
   });
+describe('аура лидера в полезности пары', () => {
+  // Счётчики по базе, а не «нашёлся хоть один»: молчаливый сбой разбора здесь
+  // выглядел бы как «полезность чуть сдвинулась» и заметен был бы сильно позже.
+  const withAura = leaderDefinitionsOf(datasheets).filter((l) => detectLeaderAuraFlags(l).length > 0);
+  const pairs = withAura.reduce((s, l) => s + l.allowedUnitIds.length, 0);
+
+  it('аура достаётся ограниченному числу лидеров', () => {
+    // 26 лидеров выдают отряду FNP/ward-ауру, из них 25 засчитаны: у
+    // Hospitaller FNP-аура смоделирована руками и повторно не оплачивается.
+    // Число намеренно зафиксировано: падение ниже нуля — разбор сломался, резкий
+    // рост — файл начал цепляться к чужим способностям.
+    expect(withAura).toHaveLength(25);
+    expect(pairs).toBeGreaterThan(100);
+  });
+
+  it('аура не достаётся лидеру, чей текст говорит только о нём самом', () => {
+    const plain = {
+      id: 'test-leader',
+      name: 'Test',
+      abilities: [{ name: 'Leader', description: 'This model can be attached to the following units: BOYZ' }],
+    };
+    expect(detectLeaderAuraFlags(plain)).toEqual([]);
+  });
+
+  it('лидер без ауры не меняет полезность пары', () => {
+    // Ключевое свойство шага: дельта полезности однозначно уходит лидеру.
+    const sheet = find('Intercessor Squad');
+    const adapted = adaptUnit(sheet, { size: 'min' });
+    const bare = rawScoreOf(sheet, adapted.unit, adapted.points, { ...fast, mode: 'combined' });
+    const plain = rawScoreOf(sheet, adapted.unit, adapted.points, {
+      ...fast,
+      mode: 'combined',
+      leader: { id: 'test-leader', name: 'Test', faction: 'X', factions: ['X'], points: 0, keywords: ['Leader'], allowedUnitIds: [sheet.id], bonuses: noBonuses(), abilities: [], unit: adapted.unit },
+    });
+    expect(plain.utilityFlags.map((f) => f.id)).toEqual(bare.utilityFlags.map((f) => f.id));
+    expect(plain.utilityScore).toBe(bare.utilityScore);
+  });
+
+  it('аура с защитой даёт флаг и его ненулевой вклад', () => {
+    const flags = detectLeaderAuraFlags(withAura[0]);
+    expect(flags).toHaveLength(1);
+    expect(flags[0].id).toBe('Aura_Ward');
+    expect(flags[0].category).toBe('strategic');
+    expect(isScoredFlag(flags[0].id)).toBe(true);
+    expect(utilityScoreOf(flags)).toBeGreaterThan(0);
+  });
+
+  it('перебросы не оплачиваются повторно', () => {
+    // Перебросы уже учитываются в бою через leaderBonusesOf, поэтому в utility
+    // они не идут: иначе платили бы дважды за один эффект.
+    const rerollLeader = leaderDefinitionsOf(datasheets).find((l) =>
+      l.abilities.some(
+        (ab) => /re-?roll/i.test(ab.description) && /models in that unit|leading a unit/i.test(ab.description)
+      )
+    );
+    expect(rerollLeader, 'нужен лидер с перебросом').toBeDefined();
+    expect(detectLeaderAuraFlags(rerollLeader!).map((f) => f.id)).not.toContain('Aura_Re_roll_1s');
+  });
+});
 
   it('способности читаются по ИМЕНИ правила, а не по тексту описания', () => {
     // Регрессия: в BSData «Deep Strike», «Scouts», «Stealth», «Feel No Pain 5+» —

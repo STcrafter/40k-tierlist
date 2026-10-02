@@ -353,6 +353,79 @@ export function detectUtilityFlags(datasheet: BsDatasheet): UtilityFlag[] {
   return flags;
 }
 
+/**
+ * Лидер как источник ауры: минимум данных, который нужен разбору.
+ *
+ * Объявлено структурно, а не импортом LeaderDefinition: модуль не должен
+ * зависеть от слоя лидеров, иначе разбор полезности потянет за собой разбор
+ * бонусов, а это две разные ответственности.
+ */
+export interface LeaderAuraSource {
+  id: string;
+  name: string;
+  abilities: Array<{ name: string; description: string }>;
+}
+
+/**
+ * Те же условия, по которым leaders.ts решает, что способность относится к
+ * ПРИСОЕДИНЁННОМУ отряду. Дублировать регулярку нельзя: разойдутся, и флаг
+ * начнёт цепляться к способностям самого лидера.
+ */
+const AFFECTS_ATTACHED_UNIT =
+  /leading a unit|weapons equipped by models in that unit|models in that unit/i;
+
+/**
+ * Полезность, которую лидер ОТДАЁТ присоединённому отряду.
+ *
+ * Считается отдельной функцией, а не дописывается в `detectUtilityFlags`,
+ * потому что это другая рамка: у лидера своя полезность (его собственные
+ * Deep Strike, FLY, OC) и полезность его ауры. Первая и так учтена — модели
+ * лидера входят в пару и живут в боевом расчёте. Кредитовать её отряду значило
+ * бы заплатить дважды за то же самое.
+ *
+ * Берётся только `Aura_Ward`, и вот почему выбор такой узкий.
+ *
+ * Лидерская FNP/ward-аура — единственная из подтверждённых, у которой НЕТ
+ * боевого пути: `applyLeaderBonuses` её не касается, `rerollOptionsOf` тоже.
+ * Значит, пара реально получает пользу, которой в модели не было.
+ *
+ * Перебросы намеренно НЕ берутся. Они уже учитываются в бою через
+ * `leaderBonusesOf` → `leaderCombatOptionsOf` у тех лидеров, чей текст разбирается
+ * (6 из 35 по текущей базе). У остальных 23 переброс в модели просто не
+ * работает — это дыра в разборе способностей, а не внебоевая ценность, и
+ * оплачивать её в utility значило бы платить за эффект, которого нет.
+ *
+ * Ручной слой тоже исключён: у Hospitaller FNP-аура уже смоделирована полем
+ * `aura.fnp`, и повторный флаг удвоил бы её вклад.
+ */
+export function detectLeaderAuraFlags(leader: LeaderAuraSource): UtilityFlag[] {
+  const flags: UtilityFlag[] = [];
+  const manual = manualAbilityOf(leader.id)?.aura;
+  // Уже смоделировано руками — повторно платить нельзя.
+  if (manual?.fnp !== undefined || manual?.invulnAtLeast !== undefined) return flags;
+
+  for (const ability of leader.abilities) {
+    if (!AFFECTS_ATTACHED_UNIT.test(ability.description)) continue;
+    // Ищется по ИМЕНИ и описанию вместе — ровно так же, как datasheetsTexts.
+    // Порог FNP нередко стоит в имени правила («Feel No Pain 5+»), и по одному
+    // описанию такие ауры молча терялись: 25 лидеров вместо 33.
+    const text = `${ability.name} ${ability.description}`.toLowerCase();
+    // Границы слова обязательны: без них «forwards», «warden» и «wardings»
+    // давали 8 ложных лидеров из 34 (проверено по базе). Множественное число
+    // «wards» тоже считается — аура может быть сформулирована и так.
+    const ward = /feel no pain|\bwards?\b/.test(text);
+    if (!ward) continue;
+    flags.push({
+      id: 'Aura_Ward',
+      points: UTILITY_POINTS.Aura_Ward,
+      category: UTILITY_CATEGORY.Aura_Ward,
+      reason: `аура «${leader.name}»: защита присоединённого отряда`,
+    });
+    break;
+  }
+  return flags;
+}
+
 /** Все тексты способностей и правил даташита одной строкой. */
 function datasheetsTexts(datasheet: BsDatasheet): string[] {
   return [...datasheet.abilities, ...datasheet.rules].map(
