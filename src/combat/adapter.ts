@@ -50,6 +50,19 @@ export interface AdaptOptions {
   /** Заменить одну запись choice-группы на указанный индекс. */
   choices?: Record<string, number>;
   /**
+   * Выбрать профиль оружия внутри записи снаряжения.
+   *
+   * Запись может нести несколько профилей ОДНОГО оружия: у Flash Gitz это
+   * Snazzgun с тремя профилями — Cutta (S9 AP-3), Dakka (S6 AP-1) и Kill Shot
+   * (S8 AP-2). Раньше из них молча брался только один «лучший», и два других
+   * не появлялись нигде — ни в расчёте, ни в панели.
+   *
+   * Ключ — id записи снаряжения. Индекс действует отдельно для стрелковых и
+   * рукопашных профилей записи. Если индекс не задан, работает прежнее правило:
+   * из профилей одного вида берётся лучший, а «обычный» — при равенстве.
+   */
+  profileChoices?: Record<string, number>;
+  /**
    * Зафиксировать вариант модели в группе: ключ — `modelGroup:<индекс группы>`,
    * значение — индекс варианта в `group.variants`.
    *
@@ -161,26 +174,17 @@ function profileValue(profile: BsWeaponProfile): number {
  * ценностью, а сами виды не схлопываются. При равенстве остаётся обычный
  * режим (Standard/uncharged), чтобы поведение не менялось без нужды.
  */
-function selectWeaponProfiles(item: BsWargear): BsWeaponProfile[] {
+function selectWeaponProfiles(item: BsWargear, profileIndex?: number): BsWeaponProfile[] {
   if (item.profiles.length === 0) return [];
   const selected: BsWeaponProfile[] = [];
   for (const kind of ['ranged', 'melee'] as const) {
     const ofKind = item.profiles.filter((profile) => profile.kind === kind);
     if (ofKind.length === 0) continue;
-    const ordinary = ofKind.find((profile) =>
-      /standard|uncharged|normal|кредит/i.test(`${profile.name} ${profile.keywords.join(' ')}`)
-    );
-    const base = ordinary ?? ofKind[0];
-    let best = base;
-    let bestValue = profileValue(base);
-    for (const profile of ofKind) {
-      const value = profileValue(profile);
-      if (value > bestValue) {
-        best = profile;
-        bestValue = value;
-      }
-    }
-    selected.push(best);
+    const at =
+      profileIndex !== undefined && ofKind.length > 1
+        ? Math.min(profileIndex, ofKind.length - 1)
+        : defaultProfileIndex(ofKind);
+    selected.push(ofKind[at]);
   }
   return selected;
 }
@@ -203,15 +207,22 @@ function selectWeaponProfiles(item: BsWargear): BsWeaponProfile[] {
  *      ростер, и в 356 группах базы это НЕ первая запись;
  *   3. иначе — эвристика «первые min записей» (BattleScribe добирает сам).
  */
-function weaponsOf(item: BsWargear, ownerId: string, choices: Record<string, number> = {}): CombatWeapon[] {
+function weaponsOf(
+  item: BsWargear,
+  ownerId: string,
+  choices: Record<string, number> = {},
+  profileChoices: Record<string, number> = {}
+): CombatWeapon[] {
   if (item.kind === 'roster') return [];
   // Запись может нести профили ОБОИХ видов (ствол + клинок), поэтому берём
   // по одному лучшему на вид, а не один профиль на всю запись.
-  const weapons = selectWeaponProfiles(item).map((profile) => toCombatWeapon(profile, ownerId));
+  const weapons = selectWeaponProfiles(item, profileChoices[item.id]).map((profile) =>
+    toCombatWeapon(profile, ownerId)
+  );
 
   if (item.kind !== 'choice') {
     for (const child of item.nested) {
-      weapons.push(...weaponsOf(child, ownerId, choices));
+      weapons.push(...weaponsOf(child, ownerId, choices, profileChoices));
     }
     return weapons;
   }
@@ -222,7 +233,7 @@ function weaponsOf(item: BsWargear, ownerId: string, choices: Record<string, num
     ? defaultChoices(item, armed)
     : [armed[selectedIndex] ?? armed[0]].filter((value): value is BsWargear => value !== undefined);
   for (const choice of chosen) {
-    weapons.push(...weaponsOf(choice, ownerId, choices));
+    weapons.push(...weaponsOf(choice, ownerId, choices, profileChoices));
   }
   return weapons;
 }
@@ -237,21 +248,22 @@ function weaponsOf(item: BsWargear, ownerId: string, choices: Record<string, num
 function weaponsOfVariant(
   variant: BsModelVariant,
   includeOptional: boolean,
-  choices: Record<string, number> = {}
+  choices: Record<string, number> = {},
+  profileChoices: Record<string, number> = {}
 ): CombatWeapon[] {
   const weapons: CombatWeapon[] = [];
   for (const item of variant.defaultWargear) {
-    weapons.push(...weaponsOf(item, variant.id, choices));
+    weapons.push(...weaponsOf(item, variant.id, choices, profileChoices));
   }
   if (includeOptional) {
     for (const group of variant.choiceGroups) {
       if (group.min > 0) continue;
       for (const choice of group.choices.slice(0, 1)) {
-        weapons.push(...weaponsOf(choice, variant.id, choices));
+        weapons.push(...weaponsOf(choice, variant.id, choices, profileChoices));
       }
     }
     for (const item of variant.optionalWargear) {
-      weapons.push(...weaponsOf(item, variant.id, choices));
+      weapons.push(...weaponsOf(item, variant.id, choices, profileChoices));
     }
   }
   return weapons;
@@ -446,7 +458,8 @@ function expandVariant(
   unitKeywords: string[],
   includeOptional: boolean,
   fnp: { threshold: number; scope: FnpScope } | null,
-  choices: Record<string, number> = {}
+  choices: Record<string, number> = {},
+  profileChoices: Record<string, number> = {}
 ): CombatModel[] {
   const profile = variant.profile;
   // Без профиля модели (или без T/W) в бою участвовать нечем — пропускаем.
@@ -455,7 +468,7 @@ function expandVariant(
   const wounds = parseCharacteristic(profile.wounds);
   if (toughness === null || wounds === null) return [];
 
-  const weapons = weaponsOfVariant(variant, includeOptional, choices);
+  const weapons = weaponsOfVariant(variant, includeOptional, choices, profileChoices);
   const models: CombatModel[] = [];
   for (let i = 0; i < count; i += 1) {
     models.push({
@@ -485,6 +498,7 @@ export function adaptUnit(datasheet: BsDatasheet, options: AdaptOptions = {}): A
   const size = options.size ?? 'min';
   const includeOptional = options.includeOptional ?? false;
   const choices = options.choices ?? {};
+  const profileChoices = options.profileChoices ?? {};
   const variantChoices = options.variantChoices ?? {};
   const unitKeywords = datasheet.keywords.map((keyword) => keyword.toUpperCase());
   // Stealth в BSData — способность, а не кейворд, но бой считает её через
@@ -509,7 +523,7 @@ export function adaptUnit(datasheet: BsDatasheet, options: AdaptOptions = {}): A
       );
       if (count <= 0) continue;
       counts.set(variant.id, (counts.get(variant.id) ?? 0) + count);
-      models.push(...expandVariant(variant, count, unitKeywords, includeOptional, fnp, choices));
+      models.push(...expandVariant(variant, count, unitKeywords, includeOptional, fnp, choices, profileChoices));
       continue;
     }
     const allocation = allocateVariants(group.variants, group, size);
@@ -517,7 +531,7 @@ export function adaptUnit(datasheet: BsDatasheet, options: AdaptOptions = {}): A
       const count = allocation.get(variant.id) ?? 0;
       if (count <= 0) continue;
       counts.set(variant.id, (counts.get(variant.id) ?? 0) + count);
-      models.push(...expandVariant(variant, count, unitKeywords, includeOptional, fnp, choices));
+      models.push(...expandVariant(variant, count, unitKeywords, includeOptional, fnp, choices, profileChoices));
     }
   }
   return {
@@ -755,15 +769,87 @@ export function combatFingerprintOf(unit: CombatUnit): string {
 }
 
 /**
+ * Индекс профиля, который берётся по умолчанию, в списке профилей одного вида.
+ *
+ * Единый источник правды для `selectWeaponProfiles` и для подписей loadout'ов:
+ * раньше подпись считалась по нулевому индексу, а оружие выбиралось по
+ * «лучшему», и у Flash Gitz сборка с Cutta подписывалась именем Cutta, а
+ * стреляла из Dakka.
+ */
+function defaultProfileIndex(ofKind: BsWeaponProfile[]): number {
+  if (ofKind.length === 0) return 0;
+  const ordinary = ofKind.findIndex((profile) =>
+    /standard|uncharged|normal|кредит/i.test(`${profile.name} ${profile.keywords.join(' ')}`)
+  );
+  let best = ordinary >= 0 ? ordinary : 0;
+  let bestValue = profileValue(ofKind[best]);
+  for (let index = 0; index < ofKind.length; index += 1) {
+    const value = profileValue(ofKind[index]);
+    if (value > bestValue) {
+      best = index;
+      bestValue = value;
+    }
+  }
+  return best;
+}
+
+/** Сколько вариантов профиля перебирается у записи: больше всех профилей одного вида. */
+function profileAlternativeCount(item: BsWargear): number {
+  let count = 0;
+  for (const kind of ['ranged', 'melee'] as const) {
+    count = Math.max(count, item.profiles.filter((profile) => profile.kind === kind).length);
+  }
+  return count;
+}
+
+/**
+ * Индекс профиля по умолчанию для записи — тот, что встанет в базовую сборку.
+ *
+ * Берётся первый вид, у которого больше одного профиля, чтобы совпадать с
+ * `profileLabelOf`. -1 означает «перебирать нечего».
+ */
+function defaultProfileIndexOfItem(item: BsWargear): number {
+  for (const kind of ['ranged', 'melee'] as const) {
+    const ofKind = item.profiles.filter((profile) => profile.kind === kind);
+    if (ofKind.length >= 2) return defaultProfileIndex(ofKind);
+  }
+  return -1;
+}
+
+/**
+ * Подпись выбранного профиля оружия внутри записи снаряжения.
+ *
+ * Индекс выбирается по той же схеме, что и в `selectWeaponProfiles`: отдельно
+ * для стрелковых и рукопашных профилей. Берётся тот вид, где альтернатив
+ * больше одного. Если индекс не задан, подписывается профиль по умолчанию —
+ * иначе имя разошлось бы с реально выбранным оружием.
+ */
+function profileLabelOf(item: BsWargear, index?: number): string | null {
+  for (const kind of ['ranged', 'melee'] as const) {
+    const ofKind = item.profiles.filter((profile) => profile.kind === kind);
+    if (ofKind.length < 2) continue;
+    const at = index === undefined ? defaultProfileIndex(ofKind) : Math.min(index, ofKind.length - 1);
+    return ofKind[at].name;
+  }
+  return null;
+}
+
+/**
  * Ограниченный перебор loadout-вариантов datasheet.
  *
- * Перебираются ДВА вида альтернатив:
+ * Перебираются ТРИ вида альтернатив:
  *   1. choice-группы в снаряжении («Blast / Cleave»);
- *   2. варианты МОДЕЛИ, если группа имитирует одну модель с разным снаряжением.
+ *   2. варианты МОДЕЛИ, если группа имитирует одну модель с разным снаряжением;
+ *   3. профили ОДНОГО оружия внутри записи снаряжения.
  *
- * Второй пункт добавлен после разбора Sekhetar Robots: там альтернативное
- * оружие лежит не в choice-группе, а в отдельных вариантах модели, поэтому
- * перебор видел только первый вариант и всегда выдавал «Базовый».
+ * Пункт 2 добавлен после разбора Sekhetar Robots: там альтернативное оружие
+ * лежит не в choice-группе, а в отдельных вариантах модели, поэтому перебор
+ * видел только первый вариант и всегда выдавал «Базовый».
+ *
+ * Пункт 3 добавлен после разбора Flash Gitz: у них Snazzgun — одна запись
+ * снаряжения с тремя профилями (Cutta / Dakka / Kill Shot). Такая запись не
+ * choice-группа, поэтому перебор её не видел и в панели оставался только
+ * профиль по умолчанию — выглядело так, будто стрелять можно только «катером».
  *
  * Комбинации объединяются в общий набор выборов, но их число ограничено: у
  * больших отрядов иначе возникает комбинаторный взрыв. Первый вариант всегда
@@ -788,15 +874,55 @@ export function loadoutVariantsOf(
   interface Combo {
     choices: Record<string, number>;
     variants: Record<string, number>;
+    profiles: Record<string, number>;
   }
-  const combinations: Combo[] = [{ choices: {}, variants: {} }];
+  /**
+   * Записи с несколькими профилями ОДНОГО вида оружия — третье измерение.
+   *
+   * Берём только записи, у которых профилей одного вида больше одного: у
+   * Flash Gitz это Snazzgun (3 стрелковых профиля), тогда как записи вида
+   * «ствол + клинок» имеют по одному профилю каждого вида и перебору не
+   * подлежат — там и раньше правильно брался лучший профиль на вид.
+   */
+  const profileItems = datasheet.modelGroups
+    .flatMap((group) => group.variants)
+    .flatMap((variant) => variant.defaultWargear)
+    .filter((item) => {
+      if (item.profiles.length < 2) return false;
+      const ranged = item.profiles.filter((profile) => profile.kind === 'ranged').length;
+      const melee = item.profiles.filter((profile) => profile.kind === 'melee').length;
+      return ranged > 1 || melee > 1;
+    });
+  /**
+   * Записи с ОДИНАКОВЫМ набором профилей — одно измерение перебора.
+   *
+   * У Flash Gitz Snazzgun есть и у модели, и у Kaptin'а: это две записи с
+   * одинаковыми альтернативами, и перебирать их надо ВМЕСТЕ. Раздельный перебор
+   * даёт 3×3 = 9 комбинаций вместо трёх, причём четыре из них — мусорные
+   * копии (у модели Cutta, у Kaptin'а Dakka), которые выглядели бы как
+   * несуществующие сборки. Индекс применяется ко всем записям группы сразу.
+   */
+  const profileGroups: BsWargear[][] = [];
+  for (const item of profileItems) {
+    const key = item.profiles.map((profile) => profile.name).join('|');
+    const existing = profileGroups.find(
+      (group) => group[0].profiles.map((profile) => profile.name).join('|') === key
+    );
+    if (existing) existing.push(item);
+    else profileGroups.push([item]);
+  }
+  const combinations: Combo[] = [{ choices: {}, variants: {}, profiles: {} }];
   for (const group of groups) {
     const alternatives = group.item.nested.filter((item) => containsWeapon(item));
     if (alternatives.length === 0) continue;
     const next: Combo[] = [];
     for (const current of combinations) {
       alternatives.forEach((_, index) => {
-        next.push({ choices: { ...current.choices, [group.item.id]: index }, variants: current.variants });
+        next.push({
+          choices: { ...current.choices, [group.item.id]: index },
+          variants: current.variants,
+          profiles: current.profiles,
+        });
       });
     }
     combinations.splice(0, combinations.length, ...next);
@@ -816,6 +942,38 @@ export function loadoutVariantsOf(
         combinations.push({
           choices: { ...current.choices },
           variants: { ...current.variants, [`modelGroup:${groupIndex}`]: variantIndex },
+          profiles: { ...current.profiles },
+        });
+      }
+    }
+    if (combinations.length > limit) {
+      combinations.length = limit;
+      break;
+    }
+  }
+  // Третье измерение: профили одного оружия внутри записи.
+  //
+  // Пропускается индекс, который и так стоит в базовой сборке. Это не обязательно
+  // нулевой: у Snazzgun профили идут [Cutta, Dakka, Kill Shot], а по умолчанию
+  // берётся Dakka. Если пропускать нулевой, Cutta не перебирался бы никогда —
+  // ровно тот случай, который заметил пользователь.
+  for (const groupItems of profileGroups) {
+    const representative = groupItems[0];
+    const count = profileAlternativeCount(representative);
+    if (count < 2) continue;
+    const skip = defaultProfileIndexOfItem(representative);
+    const base = combinations.slice();
+    for (let index = 0; index < count; index += 1) {
+      if (index === skip) continue;
+      for (const current of base) {
+        const profileChoices: Record<string, number> = {};
+        // Индекс ставится ВСЕМ записям группы: иначе у Kaptin'а остался бы
+        // профиль по умолчанию, и появились бы сборки, которых в игре нет.
+        for (const item of groupItems) profileChoices[item.id] = index;
+        combinations.push({
+          choices: { ...current.choices },
+          variants: { ...current.variants },
+          profiles: { ...current.profiles, ...profileChoices },
         });
       }
     }
@@ -826,8 +984,14 @@ export function loadoutVariantsOf(
   }
   const candidates: LoadoutCandidate[] = [];
   for (const [index, combo] of combinations.entries()) {
-    const { choices, variants } = combo;
-    const adapted = adaptUnit(datasheet, { size, includeOptional, choices, variantChoices: variants });
+    const { choices, variants, profiles } = combo;
+    const adapted = adaptUnit(datasheet, {
+      size,
+      includeOptional,
+      choices,
+      variantChoices: variants,
+      profileChoices: profiles,
+    });
     if (adapted.unit.models.length === 0) continue;
     const extra = groups.reduce((sum, group) => {
     const selected = group.item.nested.filter((item) => containsWeapon(item))[choices[group.item.id] ?? 0];
@@ -847,7 +1011,13 @@ export function loadoutVariantsOf(
     const chosen = group.item.nested.filter((item) => containsWeapon(item))[choices[group.item.id] ?? 0];
     parts.push(chosen?.name ?? 'Базовый вариант');
   }
-  const name = parts.length === 0 ? 'Базовый' : parts.join(' / ');
+  // Имя выбранного профиля оружия: иначе у Flash Gitz все три сборки с
+  // Cutta / Dakka / Kill Shot подписались бы одинаково.
+  for (const groupItems of profileGroups) {
+    const label = profileLabelOf(groupItems[0], profiles[groupItems[0].id]);
+    if (label) parts.push(label);
+  }
+  const name = parts.length === 0 ? 'Базовый' : [...new Set(parts)].join(' / ');
     candidates.push({
       id: `${datasheet.id}:loadout:${index}`,
       name,

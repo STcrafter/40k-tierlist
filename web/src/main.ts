@@ -1124,23 +1124,39 @@ function renderLoadoutDetails(detail: UnitDetail): string {
   if (loadouts.length === 0) {
     return `<section><h3>Снаряжение</h3>${modeTable}${specialisedHint}</section>`;
   }
-  const body = loadouts
-    .map((loadout) => {
-      const weapons = loadout.unit?.models?.[0]?.weapons ?? [];
-      const list = weapons.length === 0 ? '—' : weapons.map((weapon) => esc(weapon.name)).join(', ');
-      const chosen = loadout.id === chosenId ? ' chosen' : '';
-      const badge = chosen
-        ? '<span class="badge">выбрано в этом режиме</span>'
-        : '';
-      return `<div class="weapon-card${chosen}">
+  const weaponsLine = (list: Array<{ name: string }>): string =>
+    list.length === 0 ? '—' : list.map((weapon) => esc(weapon.name)).join(', ');
+  const card = (name: string, points: number, weapons: Array<{ name: string }>, chosen: boolean): string => {
+    const cls = chosen ? ' chosen' : '';
+    const badge = chosen ? '<span class="badge">выбрано в этом режиме</span>' : '';
+    return `<div class="weapon-card${cls}">
         <div class="whead">
-          <span class="name">${esc(loadout.name)}</span>
-          <span class="profile">${loadout.points} очков ${badge}</span>
+          <span class="name">${esc(name)}</span>
+          <span class="profile">${points} очков ${badge}</span>
         </div>
-        <div class="profile">${list}</div>
+        <div class="profile">${weaponsLine(weapons)}</div>
       </div>`;
-    })
-    .join('');
+  };
+  const body = [
+    // Базовая сборка показывается тоже. Иначе юнит, у которого снаряжение
+    // выбирается между вариантами ВНУТРИ варианта модели (Sekhetar Robots:
+    // meltagun или warpflame projector and claw), выглядит так, будто вариантов
+    // нет: список состоит из одной альтернативы, а базовой сборки в нём нет.
+    card(
+      'Базовый отряд',
+      detail.points,
+      (detail.unit?.models ?? []).flatMap((model) => model.weapons ?? []),
+      chosenId === 'base'
+    ),
+    ...loadouts.map((loadout) =>
+      card(
+        loadout.name,
+        loadout.points,
+        (loadout.unit?.models?.[0]?.weapons ?? []) as Array<{ name: string }>,
+        loadout.id === chosenId
+      )
+    ),
+  ].join('');
   return `<section>
     <h3>Снаряжение</h3>
     ${modeTable}

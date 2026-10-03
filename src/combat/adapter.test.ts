@@ -12,7 +12,7 @@ import { loadBsData } from '../bsdata/load.ts';
 import { parseBsDatabase } from '../bsdata/units.ts';
 import type { BsDatasheet } from '../bsdata/types.ts';
 import { sizeRangeOf } from '../bsdata/points.ts';
-import { adaptUnit } from './adapter.ts';
+import { adaptUnit, loadoutVariantsOf } from './adapter.ts';
 import { monteCarlo } from './simulate.ts';
 import { withOnceEffects, rerollOptionsOf } from '../manual/abilities.ts';
 import { detectUtilityFlags } from '../tier/utility.ts';
@@ -62,6 +62,36 @@ describe('размер отряда по ограничениям', () => {
     // Группы: 9-18 Boyz и 1-2 Nobz → 18 + 2 = 20 моделей.
     expect(boyz.unit.models).toHaveLength(20);
     expect(boyz.points).toBe(170);
+  });
+
+  it('перебирает все профили одного оружия, а не только профиль по умолчанию', () => {
+    // Регрессия: у Flash Gitz Snazzgun — одна запись снаряжения с тремя
+    // профилями (Cutta S9 AP-3, Dakka S6 AP-1, Kill Shot S8 AP-2). Такая запись
+    // не choice-группа, и перебор её не видел: в панели оставался только Dakka,
+    // хотя в игре стрелять можно и остальными двумя.
+    const flash = loadoutVariantsOf(find('Flash Gitz'), { size: 'min', limit: 128 });
+    const ranged = new Set(
+      flash.flatMap((loadout) =>
+        (loadout.unit.models[0]?.weapons ?? [])
+          .filter((weapon) => weapon.kind === 'ranged')
+          .map((weapon) => weapon.name)
+      )
+    );
+    expect([...ranged].sort()).toEqual([
+      '➤ Snazzgun - Cutta',
+      '➤ Snazzgun - Dakka',
+      '➤ Snazzgun - Kill Shot',
+    ]);
+  });
+
+  it('подпись сборки совпадает с оружием, а не с нулевым профилем', () => {
+    // Подпись считалась по индексу 0, а оружие выбиралось по «лучшему»: у
+    // Snazzgun это Dakka (индекс 1), и сборка подписывалась именем Cutta.
+    const flash = loadoutVariantsOf(find('Flash Gitz'), { size: 'min', limit: 128 });
+    for (const loadout of flash) {
+      const weapon = loadout.unit.models[0]?.weapons.find((item) => item.kind === 'ranged');
+      expect(loadout.name, loadout.name).toContain(weapon?.name ?? 'нет оружия');
+    }
   });
 
   it('одиночный даташит даёт ровно одну модель', () => {
