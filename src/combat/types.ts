@@ -128,8 +128,41 @@ export interface CombatModel {
    * `onceDamageCap` в ручном слое.
    */
   damageCapPerRound?: number | null;
+  /**
+   * На сколько уменьшается урон, получаемый моделью (Telemon: «−1 Damage»).
+   *
+   * Уменьшается входящий урон ДО невелирования FNP: правило говорит о самом
+   * уроне, а не о том, сколько ран он снимет. Ноль и выше не тратят действие —
+   * правило уменьшает урон, а не убивает способность (0 урона → 0 урона).
+   */
+  damageTakenPenalty?: number | null;
+  /**
+   * Лечение при гибели отряда (Venerable Contemptor: «при смерти брось d6,
+   * на 2+ восстанови d6 ран»).
+   *
+   * null — такого правила нет. `chance` — порог броска на d6, `sides` — бросок
+   * кубиков на восстановленные раны. Один раз за бой: срабатывает в момент,
+   * когда погибла ПОСЛЕДНЯЯ модель отряда.
+   */
+  healOnDeath?: { chance: number; sides: number } | null;
   keywords: string[];
   weapons: CombatWeapon[];
+}
+
+/**
+ * Мортиды от бросков кубиков (Ares Gunship, Contemptor-Achillus).
+ *
+ * Отдельное поле отряда, а не оружия: способность не привязана к конкретному
+ * клинку и бьёт по ЦЕЛИ как таковой — «за каждую модель в целевом юните» —
+ * поэтому число бросков зависит от защитника и в статике про оружие неизвестно.
+ */
+export interface MortalDiceEffect {
+  /** 'all' — в любом режиме боя (Ares). */
+  phase: 'ranged' | 'melee' | 'all';
+  /** По одному кубику на каждую модель защитника (Ares), иначе один кубик (Achillus). */
+  perDefenderModel: boolean;
+  /** Результат броска d6 → сколько мортид он даёт: `min` гарантированных, `sides` кубиков сверх. */
+  table: Record<number, { sides: number; min: number }>;
 }
 
 export interface CombatUnit {
@@ -138,6 +171,8 @@ export interface CombatUnit {
   /** Кейворды отряда в верхнем регистре ('INFANTRY', 'VEHICLE'…). */
   keywords: string[];
   models: CombatModel[];
+  /** null — мортид от кубиков нет (обычное состояние). */
+  mortalDice?: MortalDiceEffect | null;
 }
 
 /** Генератор случайных чисел: возвращает число в [0, 1). */
@@ -187,6 +222,7 @@ export interface CombatContext {
  *  - lethalCritHits:        крит. попадание автопоражает (Lethal Hits);
  *  - woundTarget:           порог ранения (по S/T); null = ранить нельзя;
  *  - criticalWoundTarget:   порог критического ранения (Anti-X Y+);
+ *  - woundRollPenalty:      на сколько ухудшается САМ бросок ранения;
  *  - rerollWounds:          переброс неудачных ранений (Twin-linked);
  *  - devastatingCritWounds: крит. ранение → мортиды (Devastating Wounds);
  *  - armourTarget:          порог БРОНЕВОГО сейва (AP и укрытие учтены, инвульня ещё нет);
@@ -200,6 +236,19 @@ export interface CombatRules {
   lethalCritHits: Array<(ctx: CombatContext) => boolean>;
   woundTarget: Array<(ctx: CombatContext, base: number | null) => number | null>;
   criticalWoundTarget: Array<(ctx: CombatContext, base: number) => number>;
+  /**
+   * Штраф к САМОМУ броску ранения, в отличие от `woundTarget`.
+   *
+   * Разделение существенно. Порог зажимается сверху единицей (`clampTarget` не
+   * даёт уйти выше 6+), поэтому правило «+1 к порогу» для модели с T9 против
+   * обычной атаки S6 — то есть ранящей на 6+ — не изменило бы РОВНО НИЧЕГО.
+   * А настоящее «−1 к броску ранения» ухудшает выпавшее число: натуральная
+   * 6 становится 5 и уже не ранит.
+   *
+   * Отдельная цепочка, потому что оба правила правят разные вещи и не должны
+   * путаться при модификации.
+   */
+  woundRollPenalty: Array<(ctx: CombatContext) => number>;
   rerollWounds: Array<(ctx: CombatContext) => boolean>;
   devastatingCritWounds: Array<(ctx: CombatContext) => boolean>;
   armourTarget: Array<(ctx: CombatContext, armour: number | null) => number | null>;

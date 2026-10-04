@@ -157,6 +157,24 @@ export function standardRules(): CombatRules {
       },
     ],
 
+    woundRollPenalty: [
+      // MELEE_WOUND_PENALTY: «Each time a melee attack targets this model
+      // subtract 1 from the Wound roll» (Galatus Shield у Contemptor-Galatus).
+      //
+      // Только рукопашные атаки — так в правилах и в BSData. Фаза проверяется
+      // явно: без проверки кейворд улучшал бы модель и против пушек.
+      //
+      // Штраф идёт к САМОМУ броску, а не к порогу: порог зажимается единицей
+      // (clampTarget), и на T9 «+1 к порогу» не дало бы ровно ничего.
+      (ctx) => {
+        if (ctx.phase !== 'melee') return 0;
+        const penalised =
+          ctx.target.keywords.includes('MELEE_WOUND_PENALTY') ||
+          ctx.defender.keywords.includes('MELEE_WOUND_PENALTY');
+        return penalised ? 1 : 0;
+      },
+    ],
+
     rerollWounds: [
       // [TWIN-LINKED] (11-я редакция): переброс ранений, не попаданий.
       (ctx) => ctx.weapon.keywords.some((k) => k.name === 'twin-linked'),
@@ -243,6 +261,7 @@ export function extendRules(
     lethalCritHits: [...base.lethalCritHits],
     woundTarget: [...base.woundTarget],
     criticalWoundTarget: [...base.criticalWoundTarget],
+    woundRollPenalty: [...base.woundRollPenalty],
     rerollWounds: [...base.rerollWounds],
     devastatingCritWounds: [...base.devastatingCritWounds],
     armourTarget: [...base.armourTarget],

@@ -115,6 +115,27 @@ function baseUnitOf(datasheet: (typeof datasheets)[number]): CombatUnit {
 }
 
 
+/**
+ * Юниты, у которых рукопашный урон задаётся НЕ боевым расчётом стойки.
+ *
+ * Требование к выбору стойки — сравнить, как ведут себя два кейворда на
+ * рукопашном оружии. У части кустодесов (Ares Gunship, Land Raider, Orion) в
+ * BSData катах висит на всей фракции, а единственный рукопашный ствол —
+ * «Armoured hull» или «Armoured tracks». Если у такого юнита урон ещё и задан
+ * мортидами от кубиков (Infernus Firebombs, `mortalDice`), вклад рукопашной
+ * атаки в общий урон исчезает: шум от кубиков в разы больше разницы между
+ * стойками, и «порядок» становится случайным. Это не дефект измерения и не
+ * повод трогать порог — просто у такого юнита нет рукопашной стойки, которую
+ * есть смысл выбирать.
+ *
+ * Поэтому они исключены ИЗ ВЫБОРКИ устойчивости. Отдельной проверки, что
+ * выбор стойки у них вообще детерминирован, здесь не делается намеренно: при
+ * равноценных стойках production выбирает по фиксированным сидам, и такой выбор
+ * корректен, хоть и неустойчив к смене пула.
+ */
+const comparable = (datasheet: (typeof datasheets)[number]): boolean =>
+  baseUnitOf(datasheet).mortalDice == null;
+
 describe("Martial Ka'tah", () => {
   it('находит юнитов с правилом по данным BSData, а не по списку id', () => {
     // Список берётся из datasheet.rules, поэтому переживёт обновление базы.
@@ -139,7 +160,7 @@ describe("Martial Ka'tah", () => {
     const POOL_A = [0x1111, 0x2222, 0x3333] as const;
     const POOL_B = [0xaaa1, 0xbbb2, 0xccc3] as const;
     const sample = katahUnits
-      .filter((d) => meleeWeapons(baseUnitOf(d)).length > 0)
+      .filter((d) => meleeWeapons(baseUnitOf(d)).length > 0 && comparable(d))
       .slice(0, 6);
     const flipped: string[] = [];
     const unexplained: string[] = [];

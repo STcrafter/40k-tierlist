@@ -405,11 +405,55 @@ export function nextTargetIndex(state: DefenderState): number | null {
   return null;
 }
 
+/**
+ * Снятие урона правилом «−N Damage» (Telemon).
+ *
+ * Уменьшается сам урон ДО Feel No Pain: правило говорит о величине урона,
+ * а FNP бросает кубик на каждый урон — иначе уменьшение на 1 сработало бы как
+ * «невелировать ещё один кубик», то есть дало бы другой эффект.
+ */
+function reduceByModel(model: CombatModel, amount: number): number {
+  const penalty = model.damageTakenPenalty;
+  if (penalty === undefined || penalty === null || penalty <= 0) return amount;
+  return Math.max(0, amount - penalty);
+}
+
+/**
+ * Лечение при гибели отряда (Venerable Contemptor: «при смерти брось d6,
+ * на 2+ восстанови d6 ран»).
+ *
+ * Срабатывает в момент, когда погибла ПОСЛЕДНЯЯ модель: только тогда это
+ * «при смерти». Восстановленные раны и модели возвращаются в бой, поэтому
+ * счётчик убитых уменьшается на столько же — иначе юнит числился бы убитым
+ * и одновременно живым.
+ */
+function healOnDeathIfAny(state: DefenderState, rng: Rng): void {
+  const candidates = state.unit.models.filter((model) => model.healOnDeath != null);
+  if (candidates.length === 0) return;
+  for (const model of candidates) {
+    const rule = model.healOnDeath!;
+    if (rollDie(6, rng) < rule.chance) continue;
+    let healed = 0;
+    for (let i = 0; i < rule.sides; i += 1) if (rollDie(6, rng) === 6) healed += 1;
+    if (healed <= 0) continue;
+    for (let index = 0; index < state.woundsLeft.length; index += 1) {
+      if (healed <= 0) break;
+      if (state.woundsLeft[index] > 0) continue;
+      const restored = Math.min(healed, state.unit.models[index].wounds);
+      state.woundsLeft[index] = restored;
+      state.aliveCount += 1;
+      state.kills -= 1;
+      healed -= restored;
+    }
+  }
+}
+
 /** Снимает одну модель (раны обнуляются, счётчик убитых растёт). */
-function killModel(state: DefenderState, index: number): void {
+function killModel(state: DefenderState, index: number, rng?: Rng): void {
   state.woundsLeft[index] = 0;
   state.aliveCount -= 1;
   state.kills += 1;
+  if (state.aliveCount === 0 && rng !== undefined) healOnDeathIfAny(state, rng);
 }
 
 /**
@@ -476,14 +520,16 @@ export function damageNextModel(
   const model = state.unit.models[index];
   const capped = cappedByRound(state, model, amount);
   if (capped <= 0) return 0;
+  const reduced = reduceByModel(model, capped);
+  if (reduced <= 0) return 0;
   const incoming =
-    rng === undefined ? capped : feelNoPain(model, capped, rng, 'damage', psychic);
+    rng === undefined ? reduced : feelNoPain(model, reduced, rng, 'damage', psychic);
   if (incoming <= 0) return 0;
   state.damageInstancesThisRound += incoming;
   const dealt = Math.min(incoming, state.woundsLeft[index]);
   state.woundsLeft[index] -= dealt;
   state.damage += dealt;
-  if (state.woundsLeft[index] <= 0) killModel(state, index);
+  if (state.woundsLeft[index] <= 0) killModel(state, index, rng);
   return dealt;
 }
 
@@ -503,16 +549,18 @@ export function damageSpill(state: DefenderState, amount: number, rng?: Rng, psy
     // инстансы, а мортиды — инстансы тоже.
     const capped = cappedByRound(state, model, left);
     if (capped <= 0) break;
+    const reduced = reduceByModel(model, capped);
+    if (reduced <= 0) break;
     // Невелирование считается от уронА, пришедшего в эту модель.
     const incoming =
-      rng === undefined ? capped : feelNoPain(model, capped, rng, 'mortals', psychic);
+      rng === undefined ? reduced : feelNoPain(model, reduced, rng, 'mortals', psychic);
     if (incoming <= 0) break;
     state.damageInstancesThisRound += incoming;
     const step = Math.min(incoming, state.woundsLeft[index]);
     state.woundsLeft[index] -= step;
     left -= step;
     dealt += step;
-    if (state.woundsLeft[index] <= 0) killModel(state, index);
+    if (state.woundsLeft[index] <= 0) killModel(state, index, rng);
   }
   state.damage += dealt;
   return dealt;
@@ -577,6 +625,43 @@ function damageSpecOf(ctx: CombatContext, rules: CombatRules): DiceSpec {
   return spec;
 }
 
+/**
+ * Мортиды от бросков кубиков (Ares Gunship, Contemptor-Achillus).
+ *
+ * Это ОТДЕЛЬНЫЙ канал урона: мортиды не требуют ни попадания, ни ранения, ни
+ * спасброска, поэтому в общую дорожку «попадание → ранение → сейв → урон» они
+ * не ложатся и идут мимо неё целиком. Именно так они работают в правилах:
+ * бросок кубика не зависит от результата атаки.
+ *
+ * Броски делаются один раз на применение оружия, а не на каждое попадание.
+ * Число бросков у Ares зависит от РАЗМЕРА ЦЕЛИ, поэтому берётся оно здесь, из
+ * состояния защитника, а не из статики отряда.
+ */
+function rollMortalDice(
+  ctx: CombatContext,
+  state: DefenderState,
+  usage: WeaponUsageResult
+): void {
+  const effect = ctx.attacker.mortalDice;
+  if (effect === undefined || effect === null) return;
+  if (effect.phase !== 'all' && effect.phase !== ctx.phase) return;
+  const rolls = effect.perDefenderModel ? state.unit.models.length : 1;
+  let mortals = 0;
+  for (let i = 0; i < rolls; i += 1) {
+    const entry = effect.table[rollDie(6, ctx.rng)];
+    if (entry === undefined) continue;
+    mortals += entry.min;
+    // «D3 мортид» — это бросок D3, где каждая шестёрка даёт одну мортиду.
+    for (let s = 0; s < entry.sides; s += 1) if (rollDie(6, ctx.rng) === 6) mortals += 1;
+  }
+  if (mortals <= 0) return;
+  const killsBefore = state.kills;
+  const dealt = damageSpill(state, mortals, ctx.rng, false);
+  usage.mortals += dealt;
+  usage.damage += dealt;
+  usage.kills += state.kills - killsBefore;
+}
+
 /** Разрешает одно применение оружия: атаки → попадания → ранения → сейвы → урон. */
 export function resolveWeapon(
   ctx: CombatContext,
@@ -627,6 +712,10 @@ export function resolveWeapon(
   // Псионическая атака идёт мимо Feel No Pain.
   const isPsychic = hasKeyword(weapon, 'psychic');
 
+  // Мортиды от кубиков не зависят от попаданий: бросаются ДО разбора попаданий
+  // и не тратятся, если атака не выбила ни одного хита.
+  rollMortalDice(ctx, state, usage);
+
   let remainingHits = hits;
   let remainingCrits = critHits;
   while (remainingHits > 0) {
@@ -650,6 +739,16 @@ export function resolveWeapon(
       const targetClamped = clampTarget(woundTarget);
       woundRoll = rollDie(6, rng);
       if (woundRoll < targetClamped && (rerollWounds || rerollWoundOn.includes(woundRoll))) woundRoll = rollDie(6, rng);
+      // «−1 к броску ранения» применяется к ВЫПАВШЕМУ числу, а не к порогу.
+      // Порог зажимается единицей (clampTarget), поэтому на T9 подъём порога
+      // не дал бы эффекта, а здесь натуральная 6 становится 5 и не ранит.
+      //
+      // Порядок важен: сначала перебросы, потом штраф. Иначе «−1» применялся бы
+      // к результату переброса и отменял бы его смысл.
+      for (const hook of rules.woundRollPenalty) {
+        const penalty = hook(hitCtx);
+        if (penalty > 0) woundRoll = Math.max(0, woundRoll - penalty);
+      }
       if (woundRoll < targetClamped) continue;
     }
     usage.wounds += 1;

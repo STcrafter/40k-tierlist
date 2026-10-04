@@ -329,6 +329,67 @@ describe('ухудшение чужой атаки (Golden Laurels, Resolute Wil
     ]);
     expect(simulateTrial(gunner(sword), resolute, { rng: die(4), phase: 'melee' }).damage).toBe(1);
   });
+
+  /*
+   * Galatus Shield: «subtract 1 from the Wound roll» — минус к САМОМУ броску.
+   *
+   * Почему не «+1 к порогу»: порог зажимается единицей (`clampTarget` не даёт
+   * уйти выше 6+), и для атаки, ранящей только на 6+, такой подъём был бы
+   * проглочен впустую. Правило меняет ВЫПАВШЕЕ число, поэтому работает при
+   * любом пороге.
+   *
+   *
+   * способность не изменила бы куда меньше, а тест это не поймал бы —
+   * в отличие от поведения с реальным минусом к броску.
+   *
+   *
+   * Порядок бросков в resolveWeapon: атаки → попадание → ранение → сейв → урон.
+   * Грань сейва намеренно НЕ 6: в движке натуральная 6 спасброска всегда
+   * проходит (`passedRoll === 6`), и постоянный die(6) гасил бы урон независимо
+   * от проверяемого правила.
+   *
+   * Числа подобраны под порог 5+ (S6 против T9: условие 2S <= T ложно, значит
+   * порог 5+, а не 6+). Поэтому штраф убирает ПЯТЁРКИ, а натуральная 6 ранит
+   * по-прежнему: 6 − 1 = 5, и 5 проходит порог 5+. Это верно по правилам.
+   */
+  it('MELEE_WOUND_PENALTY превращает ранящую пятёрку в промах', () => {
+    const sword = weapon({ kind: 'melee', range: null, skill: 2, strength: 6 });
+    const plain = unit([model({ toughness: 9, wounds: 9, save: 6, keywords: ['VEHICLE'] })]);
+    const shielded = unit([
+      model({ toughness: 9, wounds: 9, save: 6, keywords: ['VEHICLE', 'MELEE_WOUND_PENALTY'] }),
+    ]);
+    expect(
+      simulateTrial(gunner(sword), plain, { rng: sequence([1, 6, 5, 3, 1]), phase: 'melee' }).damage,
+    ).toBe(1);
+    expect(
+      simulateTrial(gunner(sword), shielded, { rng: sequence([1, 6, 5, 3, 1]), phase: 'melee' }).damage,
+    ).toBe(0);
+  });
+
+  it('MELEE_WOUND_PENALTY не мешает натуральной 6 ранить', () => {
+    const sword = weapon({ kind: 'melee', range: null, skill: 2, strength: 6 });
+    const shielded = unit([
+      model({ toughness: 9, wounds: 9, save: 6, keywords: ['VEHICLE', 'MELEE_WOUND_PENALTY'] }),
+    ]);
+    // Шестёрка по-прежнему ранит: 6 − 1 = 5, а порог 5+. Это потолок эффекта и
+    // одновременно проверка на ТОЧНОСТЬ прочтения: при «+1 к порогу» шестёрка
+    // ранила бы в обоих случаях и тест ничего бы не отличал.
+    expect(
+      simulateTrial(gunner(sword), shielded, { rng: sequence([1, 6, 6, 3, 1]), phase: 'melee' }).damage,
+    ).toBe(1);
+  });
+
+  it('MELEE_WOUND_PENALTY молчит в стрельбе', () => {
+    // Правило говорит «a melee attack». Если бы фаза не проверялась, способность
+    // улучшала бы модель и против пушек — а это другой эффект.
+    const gun = weapon({ kind: 'ranged', range: 24, skill: 2, strength: 6 });
+    const shielded = unit([
+      model({ toughness: 9, wounds: 9, save: 6, keywords: ['VEHICLE', 'MELEE_WOUND_PENALTY'] }),
+    ]);
+    expect(
+      simulateTrial(gunner(gun), shielded, { rng: sequence([1, 6, 5, 3, 1]), phase: 'ranged' }).damage,
+    ).toBe(1);
+  });
 });
 
 describe('кейворды 11-й редакции', () => {

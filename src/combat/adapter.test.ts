@@ -755,3 +755,154 @@ describe('способности, зависящие от присоединён
   });
 });
 
+/*
+ * Кустодезы, добавленные в ручной слой.
+ *
+ * Проверяется не «записано ли поле в MANUAL_ABILITIES», а что поле ДОШЛО до
+ * боевой модели: запись в слое, которая потерялась при переносе в адаптер,
+ * выглядит снаружи как полностью настроенная способность.
+ */
+describe('способности кустодесов доходят до боевой модели', () => {
+  const of = (name: string) => adaptUnit(find(name), { size: 'min' }).unit;
+
+  it('Vigilators: MELEE_EVASION на модели и FNP 3+ против мортид', () => {
+    for (const model of of('Vigilators').models) {
+      // Защитный кейворд лежит на модели, а не на оружии: удар получает юнит.
+      expect(model.keywords).toContain('MELEE_EVASION');
+      expect(model.fnp).toBe(3);
+      // 'mortals' — это ОГРАНИЧЕНИЕ области: обычный урон он не невелирует.
+      expect(model.fnpScope).toBe('mortals');
+    }
+  });
+
+  it('Prosecutors и Witchseekers получают то же FNP 3+ против мортид', () => {
+    for (const name of ['Prosecutors', 'Witchseekers']) {
+      const model = of(name).models[0];
+      expect(model.fnp, name).toBe(3);
+      expect(model.fnpScope, name).toBe('mortals');
+    }
+  });
+
+  it('Vigilators не получают MELEE_EVASION на оружии', () => {
+    // Регрессия: если бы кейворд попал на клинок, он бы улучшал СОБСТВЕННУЮ
+    // атаку отряда вместо того, чтобы ухудшать чужую.
+    for (const model of of('Vigilators').models) {
+      for (const weapon of model.weapons) {
+        expect(weapon.keywords.map((k) => k.name)).not.toContain('melee-evasion');
+      }
+    }
+  });
+
+  it('Telemon теряет единицу урона, остальные ничем не отличаются', () => {
+    expect(of('Telemon Heavy Dreadnought').models[0].damageTakenPenalty).toBe(1);
+    // Сосед по кодуксту — контроль: у него такого поля быть не должно вовсе.
+    expect(of('Contemptor-Achillus Dreadnought').models[0].damageTakenPenalty ?? 0).toBe(0);
+  });
+
+  it('Caladius: Lethal Hits на двух стволах, но не на третьем', () => {
+    const datasheet = find('Caladius Grav-tank');
+    const base = of('Caladius Grav-tank');
+    // Оба ствола под правилом есть не в одной сборке: база несёт Iliastus,
+    // а Arachnus приходит альтернативной сборкой. Поэтому проверяются ВСЕ
+    // варианты — иначе правило молча проверилось бы только на половине.
+    const variants = [base, ...loadoutVariantsOf(datasheet, { size: 'min', limit: 32 }).map((l) => l.unit)];
+    const namesOf = (unit: typeof base): string[] =>
+      unit.models.flatMap((m) => m.weapons.map((w) => w.name.toLowerCase()));
+    const all = variants.flatMap(namesOf);
+    expect(all.some((n) => n.includes('iliastus')), 'нет Twin iliastus').toBe(true);
+    expect(all.some((n) => n.includes('arachnus')), 'нет Twin arachnus').toBe(true);
+
+    for (const unit of variants) {
+      for (const model of unit.models) {
+        for (const weapon of model.weapons) {
+          const name = weapon.name.toLowerCase();
+          const keywords = weapon.keywords.map((k) => k.name);
+          const covered = name.includes('iliastus') || name.includes('arachnus');
+          // Регрессия на широту правила: Twin Lastrum bolt cannon и корпус
+          // «Armoured hull» под него не подпадают.
+          if (covered) expect(keywords, weapon.name).toContain('lethal');
+          else expect(keywords, weapon.name).not.toContain('lethal');
+        }
+      }
+    }
+  });
+
+  it('Ares: мортид по кубику на каждую модель цели, в любом режиме', () => {
+    const dice = of('Ares Gunship').mortalDice;
+    expect(dice?.phase).toBe('all');
+    expect(dice?.perDefenderModel, 'число бросков зависит от размера цели').toBe(true);
+    expect(dice?.table[6]).toEqual({ sides: 0, min: 1 });
+  });
+
+  it('Achillus: те же мортид, но только в ближнем бою', () => {
+    const dice = of('Contemptor-Achillus Dreadnought').mortalDice;
+    expect(dice?.phase).toBe('melee');
+    expect(dice?.perDefenderModel, 'бросок один, а не на модель цели').toBe(false);
+    // Оба исхода хранятся раздельно: на 6 правило даёт 3 мортиды ГАРАНТИРОВАННО.
+    expect(dice?.table[6]).toEqual({ sides: 0, min: 3 });
+    expect(dice?.table[4]).toEqual({ sides: 3, min: 0 });
+  });
+
+  it('Venerable Contemptor лечится при гибели отряда', () => {
+    expect(of('Venerable Contemptor Dreadnought').models[0].healOnDeath).toEqual({
+      chance: 2,
+      sides: 6,
+    });
+  });
+
+  it('Anathema Psykana Rhino регенерирует рану', () => {
+    expect(of('Anathema Psykana Rhino').models[0].regeneration).toBe(1);
+  });
+
+  it('Contemptor-Galatus: MELEE_WOUND_PENALTY на модели, не на оружии', () => {
+    const model = of('Contemptor-Galatus Dreadnought').models[0];
+    expect(model.keywords).toContain('MELEE_WOUND_PENALTY');
+    // Кейворд защитный и живёт на модели: удар получает юнит, а не клинок.
+    for (const weapon of model.weapons) {
+      expect(weapon.keywords.map((k) => k.name), weapon.name).not.toContain('melee-wound-penalty');
+    }
+  });
+
+  it('Sagittarum: Devastating Wounds только в одноразовой копии отряда', () => {
+    const base = of('Sagittarum Custodians');
+    const once = withOnceEffects(base);
+    const devastating = (unit: typeof base): boolean =>
+      unit.models.some((model) =>
+        model.weapons.some((w) => w.keywords.map((k) => k.name).includes('devastating'))
+      );
+    // Разовый эффект не должен попасть в постоянный бой: иначе юнит получил бы
+    // постоянный бафф за однократную способность.
+    expect(devastating(base), 'в базовом отряде не должно быть').toBe(false);
+    expect(devastating(once), 'в одноразовой копии должно появиться').toBe(true);
+  });
+
+  it('у соседей по кустодесам новых полей нет', () => {
+    // Контроль на расползание: способность не должна «протекать» на юниты,
+    // для которых она не описана.
+    for (const name of ['Custodian Guard', 'Sagittarum Custodians']) {
+      const model = of(name).models[0];
+      expect(model.damageTakenPenalty ?? 0, name).toBe(0);
+      expect(model.healOnDeath ?? null, name).toBeNull();
+      expect(of(name).mortalDice ?? null, name).toBeNull();
+    }
+  });
+});
+
+describe('транспортный флаг разбирается из кейворда', () => {
+  it('ставится транспорту и не ставится остальным', () => {
+    const has = (name: string): boolean =>
+      detectUtilityFlags(find(name)).some((flag) => flag.id === 'Transport');
+    // Транспорт разбирается из ДАННЫХ, а не задан списком: иначе новый транспорт
+    // в обновлении BSData просто не получил бы флаг.
+    expect(has('Venerable Land Raider')).toBe(true);
+    expect(has('Orion Assault Dropship')).toBe(true);
+    expect(has('Coronus Grav-carrier')).toBe(true);
+    expect(has('Anathema Psykana Rhino')).toBe(true);
+    // Ares Gunship — летающая пушка, а не транспорт: в BSData у него нет
+    // кейворда TRANSPORT, и выдумывать его в тесте означало бы проверять не код.
+    expect(has('Ares Gunship'), ' gunship не транспорт').toBe(false);
+    expect(has('Custodian Guard'), 'пехота не транспорт').toBe(false);
+    expect(has('Custodian Guard with Adrasite and Pyrithite spears')).toBe(false);
+  });
+});
+

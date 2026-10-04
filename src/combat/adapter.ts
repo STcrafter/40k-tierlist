@@ -577,12 +577,17 @@ function applyManualAbilities(unit: CombatUnit, datasheet: BsDatasheet): CombatU
     const bonus = ability.mortalDamageBonus;
     // FNP/атаки/сейв/кейворды в рукопашной — все причины пересобрать оружие
     // и профиль. Полный список обязателен: проверка по неполному молча
-    // теряла эффекты (см. регрессию с meleeMortalPerWound у Palatine).
+    // теряла эффекты. Это случилось дважды: с meleeMortalPerWound у Palatine и
+    // с weaponKeywordsOn у Caladius — во втором случае поле было объявлено,
+    // обрабатывалось ниже по коду, но сюда не попало, и весь блок не выполнялся.
+    //
+    // НОВОЕ ПОЛЕ, меняющее оружие, обязано быть добавлено и сюда, и в map ниже.
     const needsWeapons =
       bonus !== undefined ||
       ability.meleeMortalPerWound !== undefined ||
       ability.extraAttacks !== undefined ||
       (ability.meleeWeaponKeywords ?? []).length > 0 ||
+      (ability.weaponKeywordsOn ?? []).length > 0 ||
       ability.antiBonus !== undefined;
     const weapons = !needsWeapons
       ? model.weapons
@@ -614,6 +619,17 @@ function applyManualAbilities(unit: CombatUnit, datasheet: BsDatasheet): CombatU
               );
               if (extra.length > 0) next.keywords = [...next.keywords, ...extra];
             }
+            for (const rule of ability.weaponKeywordsOn ?? []) {
+              // Таргетинг по имени: у Caladius три ствола, а Lethal Hits получают
+              // только два. Сравнение без учёта регистра — в BSData имена стволов
+              // пишутся с заглавной, а в правиле — со строчной.
+              const target = weapon.name.toLowerCase().includes(rule.weapon.toLowerCase());
+              if (!target) continue;
+              const extra = parseKeywords(rule.keywords).filter(
+                (keyword) => !weapon.keywords.some((existing) => existing.name === keyword.name)
+              );
+              if (extra.length > 0) next.keywords = [...next.keywords, ...extra];
+            }
             return next;
           });
     const next: CombatModel = { ...model, weapons };
@@ -628,6 +644,23 @@ function applyManualAbilities(unit: CombatUnit, datasheet: BsDatasheet): CombatU
     if (ability.saveAtLeast !== undefined) {
       // Mortifiers: save 4+ из BSData ухудшается до 3+ (меньше = лучше).
       next.save = model.save === null ? ability.saveAtLeast : Math.min(model.save, ability.saveAtLeast);
+    }
+    if (ability.damageTakenPenalty !== undefined) {
+      // Telemon: −1 к получаемому урону.
+      next.damageTakenPenalty = ability.damageTakenPenalty;
+    }
+    if (ability.healOnDeath !== undefined) {
+      // Venerable Contemptor: при гибели отряда бросок на восстановление ран.
+      next.healOnDeath = ability.healOnDeath;
+    }
+    if ((ability.modelKeywords ?? []).length > 0) {
+      // Vigilators: MELEE_EVASION. Кейворд защитный и живёт на МОДЕЛИ, а не на
+      // оружии: удар получает юнит, а не его клинок. Уже имеющиеся кейворды не
+      // трогаем — способность добавляет кейворд, а не заменяет набор.
+      const extra = (ability.modelKeywords ?? []).filter(
+        (keyword) => !next.keywords.includes(keyword)
+      );
+      if (extra.length > 0) next.keywords = [...next.keywords, ...extra];
     }
     // Регенерация задаётся отряду целиком. Воскрешение — только модели, у которой
     // оно описано: у Celestine это СВЯТАЯ, а не её спутницы. Иначе погибшая
@@ -644,7 +677,11 @@ function applyManualAbilities(unit: CombatUnit, datasheet: BsDatasheet): CombatU
     }
     return next;
   });
-  return withKaTah({ ...unit, models, keywords: auraApplied.keywords });
+  // Мортиды от кубиков живут на ОТРЯДЕ, а не на модели или оружии: число бросков
+  // у Ares зависит от числа моделей ЗАЩИТНИКА, которое в статике неизвестно.
+  const withDice =
+    ability.mortalDice === undefined ? unit : { ...unit, mortalDice: ability.mortalDice };
+  return withKaTah({ ...withDice, models, keywords: auraApplied.keywords });
 }
 
 /**

@@ -38,6 +38,10 @@ export type UtilityFlagId =
   | 'Aura_Re_roll_1s'
   | 'Aura_Ward'
   | 'Screening'
+  // Транспорт — общий для всех фракций, поэтому разбирается из кейворда, а не
+  // заносится в ручной слой: перечислять 84 транспорта руками означало бы
+  // разъехаться при первом же обновлении BSData.
+  | 'Transport'
   // Ручной слой (src/manual/abilities.ts) — см. ManualUtilityFlagId.
   | ManualUtilityFlagId;
 
@@ -67,6 +71,7 @@ export const UTILITY_CATEGORY: Record<UtilityFlagId, UtilityCategory> = {
   Infiltrator: 'strategic',
   Scouts: 'strategic',
   Screening: 'strategic',
+  Transport: 'strategic',
   Reserves: 'strategic',
   Smoke: 'strategic',
   Aura_Re_roll_1s: 'strategic',
@@ -104,6 +109,13 @@ export const UTILITY_CATEGORY: Record<UtilityFlagId, UtilityCategory> = {
   Custodes_Shield_Captain_Dawneagle: 'strategic',
   Custodes_Allarus: 'strategic',
   Custodes_Aquilon: 'strategic',
+  Custodes_Prosecutors: 'strategic',
+  Custodes_Vigilators: 'strategic',
+  Custodes_Witchseekers: 'strategic',
+  Custodes_Sagittarum: 'strategic',
+  Custodes_Venatari: 'strategic',
+  Custodes_Agamatus: 'strategic',
+  Custodes_Vertus_Praetors: 'strategic',
 };
 
 /** Флаги, которые реально входят в итоговый скор. */
@@ -147,6 +159,7 @@ export const UTILITY_POINTS: Record<UtilityFlagId, number> = {
   Aura_Re_roll_1s: 2,
   Aura_Ward: 2,
   Screening: 3,
+  Transport: 2,
   Sororitas_Devastating_Aura: 2,
   Sororitas_Anti_Warp: 2,
   Saint_Celestine_Blessing: 3,
@@ -177,6 +190,13 @@ export const UTILITY_POINTS: Record<UtilityFlagId, number> = {
   Custodes_Shield_Captain_Dawneagle: 2,
   Custodes_Allarus: 1,
   Custodes_Aquilon: 1,
+  Custodes_Prosecutors: 2,
+  Custodes_Vigilators: 2,
+  Custodes_Witchseekers: 1,
+  Custodes_Sagittarum: 2,
+  Custodes_Venatari: 3,
+  Custodes_Agamatus: 2,
+  Custodes_Vertus_Praetors: 2,
 };
 
 /** Потолок utility_score. */
@@ -340,6 +360,14 @@ export function detectUtilityFlags(datasheet: BsDatasheet): UtilityFlag[] {
   // флаг означает только настоящее «нельзя вступить в бой».
   if (texts.some((t) => t.includes('cannot be engaged') || t.includes('cannot engage'))) {
     add('Screening', 'не даёт врагу вступить в ближний бой рядом');
+  }
+
+  // --- Транспорт. Перевозка отрядов: внебоевая ценность, влияющая на бой сильнее
+  // OC и скорости, поэтому стратегическая, а не маркер архетипа. Кейворд структурный
+  // и одинаков для всех фракций — в отличие Deep Strike и Scouts, которые лежат в
+  // правилах, и потому требуют разбора текста.
+  if (keywords.includes('transport')) {
+    add('Transport', 'кейворд TRANSPORT: перевозка и высадка отрядов');
   }
 
   // --- Ручной слой (src/manual/abilities.ts). ---

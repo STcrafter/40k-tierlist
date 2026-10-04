@@ -17,7 +17,7 @@
  */
 
 import { parseKeywords } from '../combat/keywords.ts';
-import type { CombatModel, CombatUnit, CombatWeapon } from '../combat/types.ts';
+import type { CombatModel, CombatUnit, CombatWeapon, MortalDiceEffect } from '../combat/types.ts';
 
 /** Идентификаторы utility-флагов, которые добавляются только вручную. */
 export const MANUAL_UTILITY_FLAG_IDS = [
@@ -51,6 +51,13 @@ export const MANUAL_UTILITY_FLAG_IDS = [
   'Custodes_Shield_Captain_Dawneagle',
   'Custodes_Allarus',
   'Custodes_Aquilon',
+  'Custodes_Prosecutors',
+  'Custodes_Vigilators',
+  'Custodes_Witchseekers',
+  'Custodes_Sagittarum',
+  'Custodes_Venatari',
+  'Custodes_Agamatus',
+  'Custodes_Vertus_Praetors',
 ] as const;
 
 export type ManualUtilityFlagId = (typeof MANUAL_UTILITY_FLAG_IDS)[number];
@@ -250,6 +257,40 @@ export interface ManualAbility {
    * живучести отряда, а способность работает один раз и до конца фазы.
    */
   onceFnp?: number;
+  /**
+   * Защитные кейворды на МОДЕЛИ отряда (Vigilators: −1 к попаданию рукопашной).
+   *
+   * Именно на модели, а не на оружии: удар получает юнит, а не его клинок.
+   * Механика `MELEE_EVASION` уже читается движком (rules.ts).
+   */
+  modelKeywords?: string[];
+  /**
+   * Кейворды КОНКРЕТНЫМ оружию, по имени (Caladius: двум пушкам).
+   *
+   * Почему не «всему дальнобойному»: у Caladius три ствола, и способность
+   * накрывает только два из них (Iliastus по не-технике, Arachnus по технике),
+   * а Twin Lastrum bolt cannon остаётся без Lethal Hits. Правило «на всё
+   * дальнобойное оружие» завысило бы юнита.
+   *
+   * `weapon` — часть имени оружия без учёта регистра. Это хрупко: переименование
+   * в BSData оборвёт правило молча, поэтому ниже стоит тест, проверяющий, что
+   * оружие с нужным именем вообще есть.
+   */
+  weaponKeywordsOn?: Array<{ weapon: string; keywords: string[] }>;
+  /**
+   * Одноразовые Devastating Wounds всему оружию (Sagittarum).
+   *
+   * В бой не идёт: живёт в дельте одноразовых эффектов, как и остальные
+   * `once*`. Devastating отвечает за разовый поток мортид, а не за урон, и
+   * постоянным он стоил бы отряду заметно больше, чем даёт разовый бой.
+   */
+  onceDevastating?: boolean;
+  /** Уменьшение получаемого урона моделью (Telemon: −1 Damage). */
+  damageTakenPenalty?: number;
+  /** Лечение при гибели отряда (Venerable Contemptor). */
+  healOnDeath?: { chance: number; sides: number };
+  /** Мортиды от бросков кубиков (Ares Gunship, Contemptor-Achillus). */
+  mortalDice?: MortalDiceEffect;
 }
 
 /** Что юнит получает или теряет при присоединении лидера. */
@@ -839,6 +880,186 @@ export const MANUAL_ABILITIES: Record<string, ManualAbility> = {
    */
   '8103-2e01-5d6a-b761': { aura: { meleeApWorsening: 1 } },
 
+  /*
+   * ── Остальные кустодезы ───────────────────────────────────────────────────
+   *
+   * Часть списка уже была настроена выше (Allarus, Aquilon, Custodian Guard,
+   * копья, Wardens) — здесь только то, чего в слое не было.
+   *
+   * Про «не имеют ката»: Martial Ka'tah выводится из `datasheet.rules`
+   * функцией hasMartialKatah, поэтому отсутствие правила в данных уже означает
+   * «стойки нет». Ручная запись для этого не нужна и была бы дублированием.
+   */
+
+  /*
+   * Prosecutors: Devastating Wounds по персонажам (условие на цель в движке
+   * для мортид не выражено — цена флагом) и FNP 3+ против псионики и мортид.
+   *
+   * Псионические атаки не моделируются, поэтому FNP получает область
+   * 'mortals' — это ОГРАНИЧЕНИЕ области, а не усиление: обычный урон он не
+   * невелирует. Недостающая половина правила оплачена флагом, по той же
+   * причине, по которой Aleya получила флаг при FNP 3+ от способности.
+   */
+  '3ec3-a4df-fdbf-5507': {
+    fnp: { value: 3, scope: 'mortals' },
+    utilityFlags: [
+      {
+        id: 'Custodes_Prosecutors',
+        points: 2,
+        reason: 'Purity of Execution (Devastating по персонажам) и Daughters of the Abyss: FNP 3+ против псионики и мортид',
+      },
+    ],
+  },
+
+  /*
+   * Vigilators: −1 к попаданию РУКОПАШНОЙ атакой по отряду. Кейворд MELEE_EVASION
+   * уже умеет движок (rules.ts), и он защитный — бьёт по чужому броску.
+   * Такой же, как у Junith Eruita, только здесь без ауры.
+   */
+  'dd2d-568a-9c56-1b6e': {
+    modelKeywords: ['MELEE_EVASION'],
+    fnp: { value: 3, scope: 'mortals' },
+    utilityFlags: [
+      {
+        id: 'Custodes_Vigilators',
+        points: 2,
+        reason: 'Deft Parry: −1 к попаданию рукопашной по себе, и Daughters of the Abyss: FNP 3+ против псионики и мортид',
+      },
+    ],
+  },
+
+  // Witchseekers: то же FNP 3+ против псионики и мортид, что у двух выше.
+  '503b-f7be-eeeb-9e31': {
+    fnp: { value: 3, scope: 'mortals' },
+    utilityFlags: [
+      {
+        id: 'Custodes_Witchseekers',
+        points: 1,
+        reason: 'Daughters of the Abyss: FNP 3+ против псионики и мортид, плюс Sanctified Flames',
+      },
+    ],
+  },
+
+  /*
+   * Sagittarum: одноразовые Devastating Wounds. Уходит в дельту одноразовых
+   * эффектов (`onceDevastating`), а не в постоянные кейворды: разовый поток
+   * мортид не должен постоянно улучшать юнита во всех режимах.
+   */
+  '6f9f-e6aa-ba13-aab1': {
+    onceDevastating: true,
+    utilityFlags: [
+      {
+        id: 'Custodes_Sagittarum',
+        points: 2,
+        reason: 'одноразовые Devastating Wounds (Saturation Volleys) в ближнем бою',
+      },
+    ],
+  },
+
+  '201e-e502-a8d1-3974': {
+    utilityFlags: [
+      {
+        id: 'Custodes_Venatari',
+        points: 3,
+        reason: 'Strike from the Skies и Swooping Dive: вход в бой с воздуха и пикирование с усиленным уроном',
+      },
+    ],
+  },
+
+  '00ab-41c4-cf52-4ad2': {
+    utilityFlags: [
+      {
+        id: 'Custodes_Agamatus',
+        points: 2,
+        reason: 'Implacable Vanguard (Deep Strike) и Turbo Boost: ввод в бой с воздуха и усиленный рывок',
+      },
+    ],
+  },
+
+  '918b-c9ed-7af7-74df': {
+    utilityFlags: [
+      {
+        id: 'Custodes_Vertus_Praetors',
+        points: 2,
+        reason: 'аэроциклы с Turbo Boost и Quicksilver Execution',
+      },
+    ],
+  },
+
+  /*
+   * Caladius: каждая атака Twin Iliastus (по не-технике) и Twin Arachnus
+   * (по технике и монстрам) получает [LETHAL HITS]. Обе ветки дают одно и то же,
+   * поэтому в замере это просто Lethal Hits на обеих пушках — условие на тип
+   * цели различать нечего. В BSData кейворда на оружии нет, «Armoured hull»
+   * (не оружие, а корпус) его тоже не получает.
+   */
+  '3ee2-62a9-af84-1a90': {
+    weaponKeywordsOn: [
+      { weapon: 'iliastus', keywords: ['Lethal Hits'] },
+      { weapon: 'arachnus', keywords: ['Lethal Hits'] },
+    ],
+  },
+
+  /*
+   * Contemptor-Galatus — Galatus Shield: «Each time a melee attack targets this
+   * model subtract 1 from the Wound roll».
+   *
+   * Раньше записи не было, и это была ошибка чтения: «−1 на ту вунд» — это
+   * минус к броску РАНЕНИЯ, а не улучшение сейва. Сейв и бросок ранения — разные
+   * вещи: +1 к сейву не мешает врагу ранить, −1 к ранению мешает.
+   *
+   * Штраф идёт к самому броску (rules.woundRollPenalty), а не к порогу:
+   * порог зажимается единицей, и «+1 к порогу» на T9 не изменил бы ничего —
+   * почти любая атака и так ранит только на 6+.
+   *
+   * Только рукопашные атаки: так в правилах и в тексте BSData.
+   */
+  '4988-d93e-5034-2b3c': { modelKeywords: ['MELEE_WOUND_PENALTY'] },
+
+  // Telemon: −1 к получаемому урону.
+  'e7d8-1c73-7d03-8b62': { damageTakenPenalty: 1 },
+
+  /*
+   * Venerable Contemptor: при гибели брось d6, на 2+ восстанови d6 ран.
+   * Порог 2+ даёт 5 из 6, то есть правило срабатывает почти всегда — это
+   * второй шанс отряду на 8-10 ранах, а не полноценное воскрешение.
+   */
+  '188b-e48b-29f-1456': { healOnDeath: { chance: 2, sides: 6 } },
+
+  /*
+   * Ares Gunship: в любом режиме боя брось d6 за каждую модель целевого
+   * юнита, по 1 мортиде за каждую 6.
+   *
+   * Число бросков зависит от ЗАЩИТНИКА, поэтому эффект живёт на отряде, а не на
+   * оружии: в статике про оружие размер цели неизвестен. Моделируется как
+   * дополнительный канал урона в resolveWeapon.
+   */
+  '9335-74d9-ad68-3ff7': {
+    mortalDice: { phase: 'all', perDefenderModel: true, table: { 6: { sides: 0, min: 1 } } },
+  },
+
+  /*
+   * Contemptor-Achillus: в ближнем бою брось d6+2 — на 4-5 наноси d3 мортид,
+   * на 6 — ещё 3.
+   *
+   * Таблица хранит оба исхода отдельно, а не «на 4+ брось d3»: на натуральной
+   * 6 правило даёт 3 мортиды ГАРАНТИРОВАННО, тогда как d3 на той же шестёрке
+   * дал бы 3 лишь с вероятностью 1/6. Схлопывание в «d3 на 4+» занизило бы
+   * способность примерно на треть.
+   */
+  'db3b-02cd-87a2-3b52': {
+    mortalDice: {
+      phase: 'melee',
+      perDefenderModel: false,
+      table: { 4: { sides: 3, min: 0 }, 5: { sides: 3, min: 0 }, 6: { sides: 0, min: 3 } },
+    },
+  },
+
+  // Anathema Psykana Rhino: +1 рана в начале каждого раунда.
+  'd7cb-7d30-715b-50d2': { regeneration: 1 },
+
+  // Pallas Grav-attack: способностей, которые мы моделируем, нет.
+
 };
 
 /** Ручные способности юнита; пустой объект, если юнита в слое нет. */
@@ -985,6 +1206,7 @@ export function withOnceEffects(unit: CombatUnit): CombatUnit {
     (ability?.onceRangedKeywords ?? []).length > 0 ||
     ability?.onceFnp !== undefined ||
     ability?.onceDamageCapPerRound !== undefined ||
+    ability?.onceDevastating === true ||
     ability?.onceExtraRangedVolley === true;
   if (!hasOnce) return unit;
   // Разовые кейворды дальнобойному оружию: список одинаков для всех моделей,
@@ -1015,6 +1237,17 @@ export function withOnceEffects(unit: CombatUnit): CombatUnit {
       }
       if (ability?.onceDamageCapPerRound !== undefined) {
         next.damageCapPerRound = ability.onceDamageCapPerRound;
+      }
+      if (ability?.onceDevastating === true) {
+        // Sagittarum: разовые Devastating Wounds всему оружию. Кейворд ставится
+        // и на рукопашное, и на дальнобойное — правило говорит об оружии отряда,
+        // а не о каком-то одном клинке.
+        next.weapons = next.weapons.map((w) => {
+          const extra = parseKeywords(['Devastating Wounds']).filter(
+            (keyword) => !w.keywords.some((existing) => existing.name === keyword.name)
+          );
+          return extra.length === 0 ? w : { ...w, keywords: [...w.keywords, ...extra] };
+        });
       }
       if (ability?.onceExtraRangedVolley === true) {
         // «Стреляет повторно всем, что есть»: один дополнительный залп
