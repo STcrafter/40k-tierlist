@@ -906,3 +906,51 @@ describe('транспортный флаг разбирается из кейв
   });
 });
 
+describe('[ONE SHOT] → флаг onceOnly', () => {
+  it('адаптер ставит флаг по кейворду one-shot', () => {
+    // Seeker missile у Manta — классический [ONE SHOT]: выстрелил один раз
+    // и весь бой стреляет только «вечным» оружием.
+    const manta = adaptUnit(find('Manta')).unit;
+    const seekers = manta.models.flatMap((model) => model.weapons).filter((w) => w.onceOnly === true);
+    expect(seekers.length, 'нужен одинноразовый ствол').toBeGreaterThan(0);
+    // Флаг стоит только у одноразовых: обычное оружие не помечено.
+    const steady = manta.models.flatMap((model) => model.weapons).filter((w) => w.onceOnly !== true);
+    expect(steady.length, 'должно остаться постоянное оружие').toBeGreaterThan(0);
+  });
+
+  it('юниты с one-shot не теряют всё оружие в постоянном расчёте', () => {
+    // Инвариант, выведенный исследованием: у всех юнитов с one-shot профилями
+    // остаётся хотя бы одна модель с постоянным оружием — иначе отряд в базовом
+    // прогоне молчал бы целиком и занижал свой тир без всякой компенсации.
+    const offenders: string[] = [];
+    for (const datasheet of datasheets) {
+      let unit;
+      try {
+        unit = adaptUnit(datasheet).unit;
+      } catch {
+        continue; // даташиты, которые адаптер не собирает — не наши
+      }
+      const hasOnce = unit.models.some((model) =>
+        model.weapons.some((weapon) => weapon.onceOnly === true)
+      );
+      if (!hasOnce) continue;
+      const hasSteady = unit.models.some((model) =>
+        model.weapons.some((weapon) => weapon.onceOnly !== true)
+      );
+      if (!hasSteady) offenders.push(datasheet.name);
+    }
+    expect(offenders, 'юниты, остающиеся без постоянного оружия').toEqual([]);
+  });
+
+  it('withOnceEffects снимает флаг у копии, возвращая залп в расчёт', () => {
+    const base = adaptUnit(find('Repulsor')).unit;
+    const boosted = withOnceEffects(base);
+    expect(boosted, 'копия должна строиться — залп иначе не попадёт в дельту').not.toBe(base);
+    const onceInBase = base.models.flatMap((m) => m.weapons).filter((w) => w.onceOnly === true);
+    expect(onceInBase.length).toBeGreaterThan(0);
+    for (const weapon of boosted.models.flatMap((m) => m.weapons)) {
+      expect(weapon.onceOnly !== true, `«${weapon.name}» должен стать постоянным в копии`).toBe(true);
+    }
+  });
+});
+

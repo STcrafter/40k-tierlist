@@ -10,6 +10,11 @@
 declare module 'node:fs' {
   export function readFileSync(path: string, encoding: 'utf8'): string;
   export function readdirSync(path: string): string[];
+  /**
+   * Признак каталога нужен обходу дерева в тесте покрытия кейвордов: отличить
+   * папку от файла по расширению нельзя (каталог может называться как угодно).
+   */
+  export function statSync(path: string): { isDirectory(): boolean };
   export function writeFileSync(path: string, data: string, encoding?: 'utf8'): void;
   export function mkdirSync(path: string, options?: { recursive?: boolean }): void;
   /**
@@ -27,6 +32,9 @@ declare module 'node:path' {
   export function join(...parts: string[]): string;
   export function resolve(...parts: string[]): string;
   export function dirname(path: string): string;
+  /** Относительный путь и разделитель: тест приводит пути к виду `src/combat/…`. */
+  export function relative(from: string, to: string): string;
+  export const sep: string;
 }
 
 declare module 'node:url' {

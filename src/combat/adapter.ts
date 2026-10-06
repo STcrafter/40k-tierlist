@@ -365,6 +365,7 @@ function allocateVariants(
 }
 
 export function toCombatWeapon(profile: BsWeaponProfile, ownerId: string): CombatWeapon {
+  const keywords = parseKeywords(profile.keywords);
   return {
     id: `${ownerId}:${profile.kind}:${profile.name}`,
     name: profile.name,
@@ -375,7 +376,10 @@ export function toCombatWeapon(profile: BsWeaponProfile, ownerId: string): Comba
     strength: parseCharacteristic(profile.strength),
     ap: parseAp(profile.ap),
     damage: parseDice(profile.damage),
-    keywords: parseKeywords(profile.keywords),
+    keywords,
+    // [ONE SHOT] → флаг постоянного расчёта: ствол стреляет один раз за бой.
+    // Поле пишется только при true, чтобы не засорять JSON единицами false.
+    ...(keywords.some((keyword) => keyword.name === 'one-shot') ? { onceOnly: true } : {}),
   };
 }
 

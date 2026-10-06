@@ -1199,6 +1199,8 @@ export function withOnceEffects(unit: CombatUnit): CombatUnit {
   // Одноразовые эффекты живут на двух уровнях: в ауре (Trajann, Shield-Captain —
   // они идут от способности персонажа) и прямо в способности (Allarus-щит,
   // Custodian Guard). Уровень выбран по тому, откуда правило приходит в бой.
+  // Третий источник — сами стволы [ONE SHOT]: их флаг снимается здесь, и залп
+  // попадает в one-shot дельту (см. CombatWeapon.onceOnly).
   const hasOnce =
     (aura?.onceMeleeAttacks ?? 0) > 0 ||
     (aura?.onceMeleeStrength ?? 0) > 0 ||
@@ -1207,7 +1209,8 @@ export function withOnceEffects(unit: CombatUnit): CombatUnit {
     ability?.onceFnp !== undefined ||
     ability?.onceDamageCapPerRound !== undefined ||
     ability?.onceDevastating === true ||
-    ability?.onceExtraRangedVolley === true;
+    ability?.onceExtraRangedVolley === true ||
+    unit.models.some((model) => model.weapons.some((weapon) => weapon.onceOnly === true));
   if (!hasOnce) return unit;
   // Разовые кейворды дальнобойному оружию: список одинаков для всех моделей,
   // поэтому разбирается один раз на весь запуск, а не внутри map по моделям.
@@ -1219,13 +1222,16 @@ export function withOnceEffects(unit: CombatUnit): CombatUnit {
         ...model,
         weapons: model.weapons.map((w) => {
           const withMelee = applyOnceEffects(w, aura);
+          // [ONE SHOT]: в копии ствол перестаёт быть одноразовым — simulateRound
+          // снова включает его в бой, и разница прогонов и есть цена залпа.
+          const steady = withMelee.onceOnly === true ? { ...withMelee, onceOnly: false } : withMelee;
           // Только стрельба: правило говорит о ranged-оружии, и рукопашному
           // копью этот кейворд достаться не должен.
-          if (rangedOnce.length === 0 || w.kind !== 'ranged') return withMelee;
+          if (rangedOnce.length === 0 || w.kind !== 'ranged') return steady;
           const extra = rangedOnce.filter(
-            (keyword) => !withMelee.keywords.some((existing) => existing.name === keyword.name)
+            (keyword) => !steady.keywords.some((existing) => existing.name === keyword.name)
           );
-          return extra.length === 0 ? withMelee : { ...withMelee, keywords: [...withMelee.keywords, ...extra] };
+          return extra.length === 0 ? steady : { ...steady, keywords: [...steady.keywords, ...extra] };
         }),
       };
       if (ability?.onceFnp !== undefined) {

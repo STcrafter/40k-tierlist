@@ -22,6 +22,7 @@
 import { ARCHETYPES } from '../../src/combat/archetypes.ts';
 import { withinCalculationBudget } from '../../src/combat/budget.ts';
 import { COLUMNS } from '../../src/tier/columns.ts';
+import { detachmentsOf, marksOf } from './faction-rules.ts';
 import {
   isTargetParadigm,
   LEADER_COLUMN_KEYS,
@@ -95,6 +96,19 @@ const state = {
    */
   showLeaders: false,
   view: 'units' as View,
+  /**
+   * Riled Up — вожак орков в бою. ЧИСТО ВИЗУАЛЬНЫЙ ПЕРЕКЛЮЧАТЕЛЬ: он ставит
+   * плашку на строках орков и ничего не меняет в числах.
+   *
+   * Числовой эффект (5+ на Инвульн, [ASSAULT] дальнобойным) требует второго
+   * датасета, собираемого на сборке: тот же отряд, посчитанный «в раздрай».
+   * На клиенте он не пересчитывается — модель данных намеренно не считает
+   * (см. web/src/model.ts), иначе две строки одного юнита разошлись бы с той
+   * же таблицей, на которой стоят все остальные.
+   */
+  riledUp: false,
+  /** Выбранные дэттачменты: мультиселект id из FACTION_DETACHMENTS. */
+  detachments: [] as string[],
   leaders: null as LeaderScoreData | null,
   /** Открытая панель деталей: id юнита, сама запись и статус загрузки. */
   open: null as { id: string; detail: UnitDetail | null; error: string | null } | null,
@@ -517,6 +531,17 @@ function mountControls(app: HTMLElement): void {
       <label class="control-label" for="subfaction">Подфракция</label>
       <select id="subfaction"></select>
     </div>
+    <div class="control" id="riled-control" hidden>
+      <span class="control-label" id="label-riled">Вожак в бою</span>
+      <button type="button" data-riled aria-pressed="false"
+        title="Riled Up: вожак орков получает 5+ на Инвульн, а отряд — [ASSAULT] на дальнобойном оружии. На тирлист не влияет: числа считает сборка по базовому датасету, второй вариант пока не собирается. Маркер показывает, какие отряды берут вожаком.">
+        Riled Up
+      </button>
+    </div>
+    <div class="control" id="detachment-control" hidden>
+      <span class="control-label" id="label-detachment">Дэттачмент</span>
+      <div class="detachment-list" id="detachment-list" role="group" aria-labelledby="label-detachment"></div>
+    </div>
     <div class="control" data-unit-view>
       <span class="control-label" id="label-mode">Режим боя</span>
       <div class="segmented" role="group" aria-labelledby="label-mode">${modes}</div>
@@ -567,9 +592,18 @@ function syncControls(app: HTMLElement): void {
   mark('[data-paradigm]', (el) => el.dataset.paradigm === state.targetParadigm);
   mark('[data-tier-only]', (el) => state.tierFilter.has(el.dataset.tierOnly as Tier));
   mark('[data-show-leaders]', () => state.showLeaders);
+  mark('[data-riled]', () => state.riledUp);
   const select = app.querySelector<HTMLSelectElement>('#faction');
   if (select !== null) select.value = state.faction;
   syncSubFactionControl(app);
+  /*
+   * Riled Up — правило орков, поэтому переключатель показывается только у
+   * них. Прятать, а не оставлять видимым и бесполезным: у другой фракции он
+   * выглядел бы как кнопка без эффекта.
+   */
+  const riledHost = app.querySelector<HTMLElement>('#riled-control');
+  if (riledHost !== null) riledHost.hidden = state.faction !== RILED_FACTION;
+  syncDetachmentControl(app);
   /*
    * Режим боя, парадигма цели и тиры к сводке по лидерам отношения не имеют:
    * она считается по одной объединённой сетке. Эти контролы скрываются, а не
@@ -624,6 +658,56 @@ function syncSubFactionControl(app: HTMLElement): void {
   select.value = state.subFaction;
 }
 
+/**
+ * Фракция, у которой есть правило Riled Up.
+ *
+ * Имя из индекса, а не внутренний id: фильтр по фракции работает по именам,
+ * и второй список соответствий разошёлся бы при первом же переименовании.
+ */
+const RILED_FACTION = 'Orks';
+
+/**
+ * Блок дэттачментов: чекбоксы собираются из FACTION_DETACHMENTS.
+ *
+ * У фракции без записей показывается подсказка вместо пустоты — иначе блок
+ * просто исчезает, и непонятно, забыли его сделать или у фракции действительно
+ * нет дэттачментов. Состав пересобирается только когда он реально изменился:
+ * иначе перерисовка на каждый клик ломала бы фокус и состояние чекбоксов.
+ */
+function syncDetachmentControl(app: HTMLElement): void {
+  const host = app.querySelector<HTMLElement>('#detachment-control');
+  const list = app.querySelector<HTMLElement>('#detachment-list');
+  if (host === null || list === null) return;
+
+  const stubs = detachmentsOf(state.faction);
+  host.hidden = state.faction === '';
+  if (stubs.length === 0) {
+    list.innerHTML = '<span class="hint inline">для этой фракции дэттачменты пока не заведены</span>';
+    state.detachments = [];
+    return;
+  }
+  // Ключи от другой фракции сбрасываются: иначе после перехода «Orks → T'au»
+  // остался бы выбранный Orks-1, который к T'au отношения не имеет.
+  const ids = stubs.map((stub) => stub.id);
+  state.detachments = state.detachments.filter((id) => ids.includes(id));
+
+  const wanted = ids.join(' ');
+  if (list.dataset.stubs !== wanted) {
+    list.dataset.stubs = wanted;
+    list.innerHTML = ids
+      .map(
+        (id) => `<label class="detachment-item">
+          <input type="checkbox" data-detachment="${esc(id)}" />
+          <span>${esc(stubs.find((stub) => stub.id === id)?.name ?? id)}</span>
+        </label>`
+      )
+      .join('');
+  }
+  for (const input of list.querySelectorAll<HTMLInputElement>('[data-detachment]')) {
+    input.checked = state.detachments.includes(input.dataset.detachment ?? '');
+  }
+}
+
 /** Сводка по тирам для строки состояния. */
 function renderStatus(app: HTMLElement): void {
   const status = app.querySelector<HTMLElement>('#status');
@@ -646,7 +730,16 @@ function renderStatus(app: HTMLElement): void {
   }
   const parts = TIERS.map((tier) => `${tier}:${counts[tier] ?? 0}`).join('  ·  ');
   const section = attached ? 'Отряды с лидерами' : 'Юниты';
-  status.textContent = `${section} · ${MODE_LABELS[state.mode]} · ${PARADIGM_LABELS[state.targetParadigm]} · ${parts} · всего ${rows.length}`;
+  /*
+   * Пометки о выбранных правилах фракции. Они ничего не меняют в числах, и
+   * без пометки в строке состояния переключатель выглядел бы как забытый
+   * фильтр: нажал — и ничего не произошло.
+   */
+  const notes: string[] = [];
+  if (state.riledUp) notes.push('Riled Up +ASSAULT (только маркер, числа не пересчитаны)');
+  if (state.detachments.length > 0) notes.push(`дэттачменты: ${state.detachments.join(', ')}`);
+  const suffix = notes.length === 0 ? '' : ` · ${notes.join(' · ')}`;
+  status.textContent = `${section} · ${MODE_LABELS[state.mode]} · ${PARADIGM_LABELS[state.targetParadigm]} · ${parts} · всего ${rows.length}${suffix}`;
 }
 
 /** Параметры сборки в шапке: их видно, чтобы число не выглядело выдуманным. */
@@ -716,6 +809,7 @@ function renderTable(app: HTMLElement): void {
       <th scope="row" class="unit-cell">
         <button type="button" class="tier-badge" data-tier="${tier}" data-open="${unit.id}" title="Открыть разбор юнита">${tier}</button>
         <button type="button" class="unit-name" data-open="${unit.id}">${esc(unit.name)}</button>
+        ${ruleTagsOf(unit)}
         ${sensitivityTag(unit)}
       </th>
       ${cells}
@@ -727,6 +821,49 @@ function renderTable(app: HTMLElement): void {
     <thead><tr>${head}</tr></thead>
     <tbody>${body}</tbody>
   </table>`;
+}
+
+/**
+ * Плашки правил фракции в строке таблицы: Riled Up и дэттачменты.
+ *
+ * И то и другое — ЧИСТО МАРКЕРЫ. Они не трогают ни одной цифры строки: тир,
+ * Total и нормы пришли из сборки по базовому датасету, а числовой эффект
+ * Riled Up и бонус дэттачмента требуют второго датасета, которого пока нет
+ * (см. комментарий к `state.riledUp` и web/src/faction-rules.ts).
+ *
+ * Общий набор меток пересчитывается один раз на перерисовку таблицы, а не на
+ * строку: иначе у тысячи строк дэттачменты перебирались бы тысячу раз.
+ */
+let ruleMarksCache: { faction: string; detachments: string; marks: Set<string> } | null = null;
+
+function ruleMarks(): { riled: boolean; marks: Set<string> } {
+  const detachments = state.detachments.join(' ');
+  const cached = ruleMarksCache;
+  const marks =
+    cached !== null && cached.faction === state.faction && cached.detachments === detachments
+      ? cached.marks
+      : marksOf(state.detachments, state.faction);
+  ruleMarksCache = { faction: state.faction, detachments, marks };
+  // Riled Up ставится только оркам, и только в своей фракции: в смешанном
+  // фильтре («Все фракции») переключатель скрыт, а значит и плашки быть не может.
+  return { riled: state.riledUp && state.faction === RILED_FACTION, marks };
+}
+
+/** Плашки правил фракции для одной строки; пустая строка, если маркеров нет. */
+function ruleTagsOf(unit: UnitIndexEntry): string {
+  const { riled, marks } = ruleMarks();
+  const out: string[] = [];
+  if (riled && unit.factions.includes(RILED_FACTION)) {
+    out.push(
+      `<span class="tag rule-mark" title="Riled Up: вожак орков в бою — 5+ на Инвульн и [ASSAULT] на дальнобойном оружии. Тир и числа посчитаны по базовому датасету, эффект в них не входит.">Riled Up +ASSAULT</span>`
+    );
+  }
+  if (marks.size > 0 && marks.has(unit.name)) {
+    out.push(
+      `<span class="tag rule-mark" title="Дэттачмент даёт этому юниту особое правило. На тирлист не влияет: числа считает сборка по базовому датасету.">ДЭТТАЧМЕНТ</span>`
+    );
+  }
+  return out.join('');
 }
 
 /** Пометка неустойчивого тира: она меняет доверие к строке, а не значение. */
@@ -1484,20 +1621,45 @@ function bindEvents(app: HTMLElement): void {
     if (leadersButton !== null && state.view === 'units') {
       state.showLeaders = !state.showLeaders;
       render(app);
+      return;
+    }
+
+    // Riled Up — маркер, а не фильтр: строки не отсеиваются, меняются только
+    // плашки. Поэтому здесь нет проверки на фракцию: кнопка скрыта у всех
+    // остальных и нажатием извне не воспользуешься.
+    const riledButton = target.closest<HTMLElement>('[data-riled]');
+    if (riledButton !== null) {
+      state.riledUp = !state.riledUp;
+      render(app);
     }
   });
 
   app.addEventListener('change', (event) => {
-    const target = event.target as HTMLSelectElement;
+    const target = event.target as HTMLSelectElement | HTMLInputElement;
     if (target.id === 'faction') {
-      state.faction = target.value;
+      state.faction = (target as HTMLSelectElement).value;
       // Подфракция чужой гиперфракции сбрасывается в syncSubFactionControl:
       // «Adeptus Astartes → Blood Angels» иначе оставил бы ключ от астартесов.
+      // Riled Up и дэттачменты — правила конкретной фракции, и оставить их от
+      // предыдущей значило бы пометить плашкой отряд, который к ним отношения
+      // не имеет. Сброс делается здесь, а не в sync*: вызывающий код может
+      // читать state до перерисовки, и ключ должен быть уже чистым.
+      state.riledUp = false;
+      state.detachments = [];
       render(app);
       return;
     }
     if (target.id === 'subfaction') {
-      state.subFaction = target.value;
+      state.subFaction = (target as HTMLSelectElement).value;
+      render(app);
+      return;
+    }
+    const detachment = target.dataset.detachment;
+    if (detachment !== undefined) {
+      const id = detachment;
+      state.detachments = (target as HTMLInputElement).checked
+        ? [...state.detachments, id]
+        : state.detachments.filter((existing) => existing !== id);
       render(app);
     }
   });

@@ -227,6 +227,58 @@ describe('аура лидера в полезности пары', () => {
     expect(flags.some((flag) => flag.id === 'Smoke')).toBe(true);
   });
 
+  it('Ignores_Cover и Assault читаются из кейвордов оружия (вариант А)', () => {
+    // Оба — strategic по 2 балла: внебоевая ценность, не смоделированная в расчёте.
+    // Счётчики замерены по базе: Ignores_Cover 427, Assault 882.
+    const has = (name: string, id: string): boolean =>
+      detectUtilityFlags(find(name)).some((flag) => flag.id === id);
+    // Custodian Guard: [ASSAULT] на ранговом профиле Guardian Spear — самый
+    // наглядный случай, потому что кейворд лежит в кузне, а не на странице.
+    // Cadian Shock Troops, наоборот, ASSAULT не имеет ни на одном стволе:
+    // Lasgun/фламер дают Rapid Fire и Ignores Cover, но не его.
+    expect(has('Custodian Guard', 'Assault')).toBe(true);
+    expect(has('Cadian Shock Troops', 'Ignores_Cover'), 'фламер игнорирует укрытие').toBe(true);
+    expect(has('Cadian Shock Troops', 'Assault'), 'у кадиан нет ASSAULT-оружия').toBe(false);
+    expect(has('Baneblade', 'Ignores_Cover'), 'Twin heavy flamer игнорирует укрытие').toBe(true);
+    expect(has('Custodian Guard', 'Ignores_Cover'), 'у кустодеов нет IGNORES COVER').toBe(false);
+
+    const count = (id: string): number =>
+      datasheets.filter((d) => detectUtilityFlags(d).some((f) => f.id === id)).length;
+    expect(count('Ignores_Cover')).toBe(427);
+    expect(count('Assault')).toBe(882);
+
+    // Категория и цена закреплены: смена на modeled/archetype сломала бы ось скоринга.
+    const flag = detectUtilityFlags(find('Baneblade')).find((f) => f.id === 'Ignores_Cover');
+    expect(flag?.category).toBe('strategic');
+    expect(flag?.points).toBe(2);
+    expect(isScoredFlag('Ignores_Cover')).toBe(true);
+    expect(isScoredFlag('Assault')).toBe(true);
+  });
+
+  it('Da_Boss: ровно 8 юнитов, детект по имени правила', () => {
+    // Имена зафиксированы исследованием: детект идёт по datasheet.rules
+    // (стиль hasMartialKatah), а не по зашитому списку id — переживёт обновление базы.
+    const expected = [
+      'Beastboss',
+      'Beastboss on Squigosaur',
+      'Deffkilla Wartrike',
+      'Ghazghkull Thraka',
+      'Nazdreg',
+      'Warboss',
+      'Warboss in Mega Armour',
+      'Warboss on Warbike [Legends]',
+    ];
+    const flagged = datasheets
+      .filter((d) => detectUtilityFlags(d).some((f) => f.id === 'Da_Boss'))
+      .map((d) => d.name)
+      .sort();
+    expect(flagged).toEqual([...expected].sort());
+    // Стратегический флаг на 2 балла — как в решении владельца.
+    const flag = detectUtilityFlags(find('Warboss')).find((f) => f.id === 'Da_Boss');
+    expect(flag?.category).toBe('strategic');
+    expect(flag?.points).toBe(2);
+  });
+
   it('дым даётся и способностью, выдающей кейворд', () => {
     // Не у всех носителей SMOKE это кейворд даташита: у Achilles Ridgerunners
     // его даёт способность «Flare launcher» («has the SMOKE keyword»).

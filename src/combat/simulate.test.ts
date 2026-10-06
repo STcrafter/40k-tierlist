@@ -27,7 +27,8 @@ import {
   simulateTrial,
   upkeepBetweenRounds,
 } from './simulate.ts';
-import type { CombatModel, CombatUnit, CombatWeapon, Rng } from './types.ts';
+import { withOnceEffects } from '../manual/abilities.ts';
+import type { CombatModel, CombatUnit, CombatWeapon, Rng, WeaponUsageResult } from './types.ts';
 
 /** Генератор, всегда выдающий грань n (1…6). */
 const die = (n: number): Rng => () => (n - 0.5) / 6;
@@ -854,5 +855,68 @@ describe('регенерация и воскрешение (ручной сло�
     damageNextModel(state, 1);
     expect(upkeepBetweenRounds(state)).toBe(false);
     expect(state.aliveCount).toBe(0);
+  });
+});
+
+describe('[ONE SHOT] в постоянном расчёте', () => {
+  it('одноразовый ствол не бьёт в обычном раунде', () => {
+    // Один ствол со снятым флагом (обычное оружие) и один onceOnly: в базовом
+    // прогоне usage создаётся только для вечного — одноразовый отобран до
+    // выбора оружия (см. simulateRound).
+    const steady = weapon({ id: 'steady', name: 'Steady gun' });
+    const volley = weapon({ id: 'volley', name: 'Seeker missile', onceOnly: true });
+    const attacker = unit([model({ weapons: [steady, volley] })]);
+    const defender = unit([model({ toughness: 4, wounds: 5, save: 6 })]);
+    const usages = new Map<string, WeaponUsageResult>();
+    // Атака, попадание 6, ранение 6, сейв 2 (не проходит по 6+), урон 6.
+    const damage = simulateRound(
+      attacker,
+      createDefenderState(defender),
+      resolveCombatOptions({ rng: sequence([6, 6, 6, 2, 6]) }),
+      usages
+    );
+
+    expect([...usages.keys()]).toEqual(['steady']);
+    expect(damage).toBeGreaterThan(0);
+  });
+
+  it('модель только с onceOnly-оружием молчит в постоянном расчёте', () => {
+    const volley = weapon({ id: 'volley', onceOnly: true });
+    const attacker = unit([model({ weapons: [volley] })]);
+    const defender = unit([model({ toughness: 4, wounds: 5, save: 6 })]);
+    const usages = new Map<string, WeaponUsageResult>();
+    const damage = simulateRound(attacker, createDefenderState(defender), resolveCombatOptions({ rng: die(6) }), usages);
+
+    expect(usages.size).toBe(0);
+    expect(damage).toBe(0);
+  });
+
+  it('снимает флаг у копии через withOnceEffects, оригинал не меняется', () => {
+    const volley = weapon({ id: 'volley', onceOnly: true });
+    const attacker = unit([model({ weapons: [volley] })]);
+    const copy = withOnceEffects(attacker);
+
+    expect(copy).not.toBe(attacker);
+    expect(copy.models[0].weapons[0].onceOnly).toBe(false);
+    // Оригинал не мутирован: он остаётся «постоянной» версией для базового прогона.
+    expect(attacker.models[0].weapons[0].onceOnly).toBe(true);
+  });
+
+  it('в копии одноразовый ствол снова стреляет — отсюда one-shot дельта', () => {
+    const steady = weapon({ id: 'steady' });
+    const volley = weapon({ id: 'volley', onceOnly: true });
+    const attacker = unit([model({ weapons: [steady, volley] })]);
+    const defender = unit([model({ toughness: 4, wounds: 20, save: 6 })]);
+    // Сейв 6+ не проходит по броску 2 — иначе natural 6 всегда спасает и урон
+    // был бы нулевым в обоих прогонах. По 5 бросков на ствол (steady, затем
+    // volley в копии): атака, попадание, ранение, сейв, урон.
+    const roll = (): Rng => sequence([6, 6, 6, 2, 6, 6, 6, 6, 2, 6]);
+
+    const plain = simulateTrial(attacker, defender, { rng: roll() });
+    const boosted = simulateTrial(withOnceEffects(attacker), defender, { rng: roll() });
+
+    expect(plain.weapons.map((usage) => usage.weaponId)).toEqual(['steady']);
+    expect(boosted.weapons.map((usage) => usage.weaponId)).toEqual(['steady', 'volley']);
+    expect(boosted.damage).toBeGreaterThan(plain.damage);
   });
 });

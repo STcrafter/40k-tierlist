@@ -867,10 +867,19 @@ export function simulateRound(
       // В фазе 'all' пистолеты и [CLOSE-QUARTERS] уже включены в melee:
       // их повторный вызов в ranged дал бы двойной урон. Для отдельной
       // стрельбы они, наоборот, доступны как обычное дальнобойное оружие.
+      //
+      // [ONE SHOT] отбирается ДО выбора оружия, а не после: иначе «лучший»
+      // ствол мог бы быть одноразовым, получить отказ, и модель осталась бы
+      // без выстрела, хотя вечное оружие у неё есть. Модель с only one-shot
+      // профилями в постоянном расчёте не бьёт — её залп живёт в one-shot
+      // дельте (withOnceEffects снимает флаг у копии).
+      const steadyModel = model.weapons.some((weapon) => weapon.onceOnly === true)
+        ? { ...model, weapons: model.weapons.filter((weapon) => weapon.onceOnly !== true) }
+        : model;
       const weapons =
         phase === 'melee'
-          ? meleePhaseWeaponsOf(model, opts.melee)
-          : rangedWeaponsOf(model, opts.closeQuarters, opts.engaged, opts.phase !== 'all');
+          ? meleePhaseWeaponsOf(steadyModel, opts.melee)
+          : rangedWeaponsOf(steadyModel, opts.closeQuarters, opts.engaged, opts.phase !== 'all');
 
       for (const weapon of weapons) {
         if (state.aliveCount === 0) break;

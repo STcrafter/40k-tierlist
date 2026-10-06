@@ -18,7 +18,8 @@
  * четверть итогового скора.
  */
 
-import type { BsDatasheet, BsModelVariant } from '../bsdata/types.ts';
+import type { BsDatasheet, BsModelVariant, BsWargear } from '../bsdata/types.ts';
+import { parseKeywords } from '../combat/keywords.ts';
 import { manualAbilityOf, type ManualUtilityFlagId } from '../manual/abilities.ts';
 
 /** Идентификатор флага полезности. */
@@ -42,6 +43,18 @@ export type UtilityFlagId =
   // заносится в ручной слой: перечислять 84 транспорта руками означало бы
   // разъехаться при первом же обновлении BSData.
   | 'Transport'
+  // Оружейные кейворды даташита (шаг «вариант А»).
+  //
+  // Ignores_Cover — ВРЕМЕННЫЙ флаг. Укрытие в симуляции ещё не моделируется
+  // (opts.cover всегда false вне тестов), поэтому способность честно стоит в
+  // strategic. Как только укрытие будет считаться в расчёте, флаг станет
+  // дублем смоделированного свойства и обязан быть удалён (см. UTILITY_CATEGORY).
+  | 'Ignores_Cover'
+  // Assault — [ASSAULT]: стрельба после бегства без штрафа, явная
+  // внебоевая ценность, не смоделированная в бою.
+  | 'Assault'
+  // Правило «Da Boss» — вожак орков (детект по имени правила, см. detectUtilityFlags).
+  | 'Da_Boss'
   // Ручной слой (src/manual/abilities.ts) — см. ManualUtilityFlagId.
   | ManualUtilityFlagId;
 
@@ -76,6 +89,12 @@ export const UTILITY_CATEGORY: Record<UtilityFlagId, UtilityCategory> = {
   Smoke: 'strategic',
   Aura_Re_roll_1s: 'strategic',
   Aura_Ward: 'strategic',
+  // Оружейные кейворды: стратегическая ценность (внебоевая, не смоделирована).
+  // СМ. ОГОВОРКУ в объявлении UtilityFlagId: Ignores_Cover подлежит удалению,
+  // как только укрытие будет моделироваться в расчёте.
+  Ignores_Cover: 'strategic',
+  Assault: 'strategic',
+  Da_Boss: 'strategic',
   // Ручные способности Sororitas — внебоевая ценность, но часть эффектов
   // (Devastating Wounds, регенерация) уже смоделирована в бою. Флаг отражает
   // СТРАТЕГИЧЕСКУЮ часть: способность менять игру, а не дублирует урон.
@@ -160,6 +179,12 @@ export const UTILITY_POINTS: Record<UtilityFlagId, number> = {
   Aura_Ward: 2,
   Screening: 3,
   Transport: 2,
+  // Вариант А: 2 балла каждому — исследование не дало сигнала выше
+  // (Ignores_Cover 58.7 против базы 57.9, Assault 62.5), но оба —
+  // честная внебоевая ценность, не смоделированная в расчёте.
+  Ignores_Cover: 2,
+  Assault: 2,
+  Da_Boss: 2,
   Sororitas_Devastating_Aura: 2,
   Sororitas_Anti_Warp: 2,
   Saint_Celestine_Blessing: 3,
@@ -370,6 +395,26 @@ export function detectUtilityFlags(datasheet: BsDatasheet): UtilityFlag[] {
     add('Transport', 'кейворд TRANSPORT: перевозка и высадка отрядов');
   }
 
+  // --- Оружейные кейворды даташита (вариант А). ---
+  // Берутся из СЫРЫХ keywords оружейных профилей (BsWeaponProfile), а не из
+  // адаптированного отряда: detectUtilityFlags живёт на уровне даташита и
+  // не зависит от того, какое снаряжение выиграет в расчёте.
+  const weaponKeywords = weaponKeywordNames(datasheet);
+  // Ignores_Cover — ВРЕМЕННЫЙ флаг: см. оговорку в объявлении UtilityFlagId.
+  if (weaponKeywords.includes('ignores-cover')) {
+    add('Ignores_Cover', 'кейворд оружия [IGNORES COVER] (стрельба мимо укрытия)');
+  }
+  if (weaponKeywords.includes('assault')) {
+    add('Assault', 'кейворд оружия [ASSAULT] (стрельба после бегства)');
+  }
+
+  // --- Da Boss: правило вожака орков. Детект по ИМЕНИ в datasheet.rules —
+  // тот же приём, что у hasMartialKatah: структурное имя правила переживёт
+  // обновление BSData, в отличие от зашитого списка id.
+  if (hasRuleNamed('da boss')) {
+    add('Da_Boss', 'правило «Da Boss» (вожак ведёт отряд)');
+  }
+
   // --- Ручной слой (src/manual/abilities.ts). ---
   // Эффекты, которые не выводятся из профилей и кейвордов: Devastating Wounds
   // от способности, регенерация и воскрешение, бонус к мортидам. Флаги
@@ -438,6 +483,36 @@ function datasheetsTexts(datasheet: BsDatasheet): string[] {
   return [...datasheet.abilities, ...datasheet.rules].map(
     (ability) => `${ability.name} ${ability.description}`
   );
+}
+
+/**
+ * Канонические имена кейвордов всех оружейных профилей даташита.
+ *
+ * Обход идёт по вариантам моделей: снаряжение по умолчанию, опциональное и
+ * выбор группы, плюс вложенные записи составных апгрейдов (nested) — именно
+ * там в BSData лежат профили с Keywords вида 'Assault', 'Ignores Cover'.
+ *
+ * Разбор идёт через `parseKeywords`, а не сравнением сырых строк: тогда
+ * флаг ссылается на тот же список канонических имён, что и боевая симуляция,
+ * и переименование кейворда в BSData ('IGNORES COVER' → 'IgnoresCover')
+ * ломает здесь ровно там же, где ломает у остальных, а не молча.
+ */
+function weaponKeywordNames(datasheet: BsDatasheet): string[] {
+  const out: string[] = [];
+  const walk = (items: BsWargear[]): void => {
+    for (const item of items) {
+      for (const profile of item.profiles) {
+        for (const keyword of parseKeywords(profile.keywords)) out.push(keyword.name);
+      }
+      walk(item.nested);
+    }
+  };
+  for (const variant of datasheet.variants) {
+    walk(variant.defaultWargear);
+    walk(variant.optionalWargear);
+    for (const group of variant.choiceGroups) walk(group.choices);
+  }
+  return out;
 }
 
 /**
