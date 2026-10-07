@@ -20,7 +20,8 @@ import { loadBsData } from '../bsdata/load.ts';
 import { parseBsDatabase } from '../bsdata/units.ts';
 import { CANONICAL_KEYWORD_NAMES, parseKeywords } from '../combat/keywords.ts';
 import { leaderDefinitionsOf } from '../tier/leaders.ts';
-import { MANUAL_ABILITIES, type ManualAbility } from './abilities.ts';
+import { UTILITY_CATEGORY, UTILITY_POINTS } from '../tier/utility.ts';
+import { MANUAL_ABILITIES, MANUAL_UTILITY_FLAG_IDS, type ManualAbility } from './abilities.ts';
 
 const { datasheets } = parseBsDatabase(loadBsData(bsFilesFromDir('public/BSData/wh40k-11e')));
 const entries: Array<[string, ManualAbility]> = Object.entries(MANUAL_ABILITIES);
@@ -127,16 +128,41 @@ describe('целостность ручного слоя', () => {
     expect(missing, `такого оружия в даташите нет: ${missing.join(', ')}`).toEqual([]);
   });
 
-  it('у каждого utility-флага есть причина и положительные баллы', () => {
+  it('у каждого utility-флага есть причина, а цена берётся из UTILITY_POINTS', () => {
     // Флаг попадает в отчёт и в интерфейс: без причины его нечем объяснить,
     // а нулевые баллы означают «стратегической ценности нет» — то есть флаг
     // врёт о самом себе.
+    //
+    // Проверяется НЕ поле `points` в записи (его больше нет), а единственный
+    // источник цены: убрать бы его — и флаг молча стоил бы 0 баллов при
+    // попадании в отчёт, то есть потерялся бы в тире без ошибки. Раньше цена
+    // дублировалась в записи слоя и в UTILITY_POINTS, и расхождение было
+    // невозможно заметить: обе величины просто выглядели правильно.
     for (const [id, ability] of entries) {
       for (const flag of ability.utilityFlags ?? []) {
         expect(flag.reason.trim().length, `${id} / ${flag.id}: пустая причина`).toBeGreaterThan(0);
-        expect(flag.points, `${id} / ${flag.id}: баллы`).toBeGreaterThan(0);
+        expect(
+          UTILITY_POINTS[flag.id],
+          `${id} / ${flag.id}: нет цены в UTILITY_POINTS — флаг будет стоить 0`
+        ).toBeGreaterThan(0);
+        expect(
+          UTILITY_CATEGORY[flag.id],
+          `${id} / ${flag.id}: нет категории — флаг не попадёт ни в одну ось`
+        ).toBe('strategic');
       }
     }
+  });
+
+  it('ни один ручной флаг не остался без записи в MANUAL_ABILITIES', () => {
+    // Обратная сторона: id в UTILITY_POINTS, который никто не выдаёт, — это
+    // цена, которая молча не участвует в расчёте. Список id и таблица цен
+    // обязаны описывать один и тот же набор флагов.
+    const issued = new Set(
+      entries.flatMap(([, ability]) => (ability.utilityFlags ?? []).map((flag) => flag.id))
+    );
+    const declared = MANUAL_UTILITY_FLAG_IDS.map((flagId) => flagId);
+    const orphans = declared.filter((flagId) => !issued.has(flagId));
+    expect(orphans, `объявлены, но никогда не выдаются: ${orphans.join(', ')}`).toEqual([]);
   });
 
   it('одноразовые эффекты не попадают в постоянный бой', () => {

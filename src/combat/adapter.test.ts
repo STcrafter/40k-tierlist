@@ -14,10 +14,11 @@ import type { BsDatasheet } from '../bsdata/types.ts';
 import { sizeRangeOf } from '../bsdata/points.ts';
 import { adaptUnit, loadoutVariantsOf } from './adapter.ts';
 import { monteCarlo } from './simulate.ts';
-import { withOnceEffects, rerollOptionsOf } from '../manual/abilities.ts';
+import { withOnceEffects, rerollOptionsOf, applyAuraToModels } from '../manual/abilities.ts';
 import { detectUtilityFlags } from '../tier/utility.ts';
 import { attachLeaderToUnit, leaderDefinitionsOf, type LeaderDefinition } from '../tier/leaders.ts';
 import { createDefenderState, damageNextModel, upkeepBetweenRounds } from './simulate.ts';
+import type { CombatUnit } from './types.ts';
 
 const { datasheets } = parseBsDatabase(loadBsData(bsFilesFromDir('public/BSData/wh40k-11e')));
 const find = (name: string): BsDatasheet => {
@@ -485,11 +486,13 @@ describe('ручные способности отрядов Sororitas', () => {
     );
     expect(rerollOptionsOf(retributor!.id, 'ranged').rerollHitOn).toEqual([1]);
     expect(rerollOptionsOf(retributor!.id, 'melee'), 'в melee reroll не действует').toEqual({});
-    // Repentia — наоборот: reroll только в рукопашной.
+    // Repentia перенесена на кейворды (полный переброс), поэтому списков у неё
+    // больше нет — фаза задана тем, что кейворды висят только на рукопашном
+    // оружии. Проверка самого эффекта — в тесте «Repentia: полный переброс…».
     const repentia = datasheets.find(
       (d) => d.name === 'Repentia Squad' && d.faction === 'Adepta Sororitas'
     );
-    expect(rerollOptionsOf(repentia!.id, 'melee').rerollWoundOn).toEqual([1]);
+    expect(rerollOptionsOf(repentia!.id, 'melee')).toEqual({});
     expect(rerollOptionsOf(repentia!.id, 'ranged')).toEqual({});
   });
 
@@ -659,6 +662,28 @@ describe('ручной слой Adeptus Custodes', () => {
     expect(rerollOptionsOf(spears.id, 'ranged').rerollWoundOn).toEqual([1]);
   });
 
+  it('Allarus: полный переброс ранения только по монстрам, технике и персонажам', () => {
+    // Slayers of Tyrants: «each time a model in this unit makes an attack that
+    // targets a Character, Monster or Vehicle unit, you can re-roll the Wound
+    // roll». Полный переброс И с условием по цели — в ручном слое стояло
+    // `rerollWoundOn: [1]` по любой цели, то есть одновременно слабее правила и
+    // шире его. Правило говорит «attack», без указания фазы, поэтому кейворд
+    // достаётся всему оружию, а не только рукопашному.
+    const weapons = of('Allarus Custodians').models.flatMap((model) => model.weapons);
+    expect(weapons.length, 'нужно оружие').toBeGreaterThan(0);
+    for (const weapon of weapons) {
+      const keyword = weapon.keywords.find((k) => k.name === 'wound-reroll');
+      expect(keyword, `«${weapon.name}»: переброс должен достаться всему оружию`).toBeDefined();
+      expect(keyword?.target, `«${weapon.name}»: условие по цели`).toEqual([
+        'CHARACTER',
+        'MONSTER',
+        'VEHICLE',
+      ]);
+    }
+    // Списка перебросов больше нет — он бы дублировал кейворд «единицами».
+    expect(rerollOptionsOf(find('Allarus Custodians').id, 'combined')).toEqual({});
+  });
+
   it('слой не задевает соседние юниты Custodes', () => {
     // Проверка на «лишний радиус»: способности соседей не должны протекать в
     // отряд, у которого их нет. У Trajann нет ни одного из новых кейвордов.
@@ -724,6 +749,29 @@ describe('способности, зависящие от присоединён
     ).toBe(false);
   });
 
+it('Repentia: полный переброс попадания и ранения в рукопашной', () => {
+    // Overseer of Redemption: «each time a Sisters Repentia model in that unit
+    // makes a melee attack, you can re-roll the Hit roll and you can re-roll the
+    // Wound roll». Это полный переброс, а в слое стоял переброс единиц.
+    const { unit } = adaptUnit(sororitas('Repentia Squad'), { size: 'min' });
+    const melee = unit.models.flatMap((model) => model.weapons).filter((w) => w.kind === 'melee');
+    const ranged = unit.models.flatMap((model) => model.weapons).filter((w) => w.kind === 'ranged');
+    expect(melee.length, 'нужно рукопашное оружие').toBeGreaterThan(0);
+    for (const weapon of melee) {
+      const names = weapon.keywords.map((k) => k.name);
+      expect(names, `«${weapon.name}»: полный переброс попадания`).toContain('hit-reroll');
+      expect(names, `«${weapon.name}»: полный переброс ранения`).toContain('wound-reroll');
+    }
+    // Bolt pistol у Superior — не рукопашная атака, переброс его не касается.
+    for (const weapon of ranged) {
+      const names = weapon.keywords.map((k) => k.name);
+      expect(names, `«${weapon.name}»: способность о рукопашной`).not.toContain('hit-reroll');
+      expect(names, `«${weapon.name}»: способность о рукопашной`).not.toContain('wound-reroll');
+    }
+    expect(rerollOptionsOf(unit.id, 'melee')).toEqual({});
+    expect(rerollOptionsOf(unit.id, 'ranged')).toEqual({});
+  });
+
   it('целитель возвращает reviveCount моделей за раунд', () => {
     // Фикстуры модели строятся здесь, а не берутся из simulate.test.ts: тот файл
     // про другое, и переносить его помощники сюда незачем.
@@ -752,6 +800,28 @@ describe('способности, зависящие от присоединён
     expect(state.aliveCount).toBe(1);
     expect(upkeepBetweenRounds(state)).toBe(true);
     expect(state.aliveCount, 'D3 = три модели вернулись').toBe(4);
+  });
+
+  it('аура лидера отдаёт кейворды оружию ПРИСОЕДИНЁННОГО юнита, а не лидеру', () => {
+    // Регрессия: `LeaderAura.rerollHitOn/rerollWoundOn` были объявлены и
+    // заполнялись (Morvenn), но не читались НИГДЕ — `applyAuraToModels` их
+    // игнорировал. Способность лидера, которая касается только присоединённого
+    // отряда, выражена отдельным полем: общий `weaponKeywords` достаётся и
+    // самому лидеру, потому что нужен ему лично (LANCE у Morvenn).
+    const { unit } = adaptUnit(sororitas('Sisters Novitiate Squad'), { size: 'min' });
+    const namesOf = (models: CombatUnit['models']): Set<string> =>
+      new Set(models.flatMap((model) => model.weapons.flatMap((w) => w.keywords.map((k) => k.name))));
+    const attached = applyAuraToModels(
+      unit.models,
+      { unitWeaponKeywords: ['Reroll hits'] },
+      unit.keywords,
+      true
+    );
+    expect(namesOf(attached.models).has('hit-reroll'), 'отряд должен получить переброс попаданий').toBe(true);
+    // Тот же вызов БЕЗ присоединённого юнита — это собственные модели лидера,
+    // и способность отряда к ним отношения не имеет.
+    const own = applyAuraToModels(unit.models, { unitWeaponKeywords: ['Reroll hits'] }, unit.keywords);
+    expect(namesOf(own.models).has('hit-reroll'), 'лидер не должен получать способность отряда').toBe(false);
   });
 });
 

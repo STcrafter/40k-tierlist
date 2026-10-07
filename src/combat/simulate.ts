@@ -683,6 +683,19 @@ export function resolveWeapon(
   usage.attacks += attacks;
   if (attacks <= 0) return;
 
+  /*
+   * Мортиды от кубиков бросаются ЗДЕСЬ, а не после разбора попаданий.
+   *
+   * Правило не требует попадания: Ares Gunship бросает d6 на каждую модель
+   * цели в любом режиме боя, Contemptor-Achillus — в ближнем бою, и ни то ни
+   * другое не зависит от того, чем закончилась атака. Раньше вызов стоял ниже
+   * `if (hits <= 0) return`, и залп без единого попадания отменял бросок
+   * целиком: Ares терял до 10 мортид за промах.
+   *
+   * Порог `attacks <= 0` выше остаётся: у оружия без атак нет и применения.
+   */
+  rollMortalDice(ctx, state, usage);
+
   // 2. Попадания: порог BS/WS, натуральная 6 — критическое попадание.
   let hitTarget = weapon.skill;
   for (const hook of rules.hitTarget) hitTarget = hook(ctx, hitTarget);
@@ -694,9 +707,15 @@ export function resolveWeapon(
     hits = attacks;
   } else if (hitTarget !== null) {
     const target = clampTarget(hitTarget);
+    // Полный переброс попадания по [REROLL HITS] — с проверкой условия на цель,
+    // ровно как у [REROLL WOUNDS] ниже. Списки rerollHitOn выражают только
+    // «переброс единиц», поэтому условия вида «по MONSTER/VEHICLE» живут в
+    // кейворде (Da Bigger Dey Iz у Mozrog, Slayers of Tyrants у Allarus).
+    const rerollHits = keywordOf(weapon.keywords, 'hit-reroll', targetKeywordsOf(ctx)) !== null;
     for (let i = 0; i < attacks; i += 1) {
       const roll = rollDie(6, rng);
-      const hitRoll = roll < target && rerollHitOn.includes(roll) ? rollDie(6, rng) : roll;
+      const hitRoll =
+        roll < target && (rerollHits || rerollHitOn.includes(roll)) ? rollDie(6, rng) : roll;
       if (hitRoll >= target) hits += 1;
       if (hitRoll === 6) critHits += 1;
     }
@@ -711,10 +730,6 @@ export function resolveWeapon(
   const devastating = rules.devastatingCritWounds.some((hook) => hook(ctx));
   // Псионическая атака идёт мимо Feel No Pain.
   const isPsychic = hasKeyword(weapon, 'psychic');
-
-  // Мортиды от кубиков не зависят от попаданий: бросаются ДО разбора попаданий
-  // и не тратятся, если атака не выбила ни одного хита.
-  rollMortalDice(ctx, state, usage);
 
   let remainingHits = hits;
   let remainingCrits = critHits;

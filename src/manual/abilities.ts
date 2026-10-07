@@ -67,10 +67,19 @@ export const MANUAL_UTILITY_FLAG_IDS = [
 
 export type ManualUtilityFlagId = (typeof MANUAL_UTILITY_FLAG_IDS)[number];
 
-/** Ручной флаг стратегической полезности. */
+/**
+ * Ручной флаг стратегической полезности.
+ *
+ * Баллов здесь НЕТ намеренно. Раньше у каждого флага было своё поле `points`,
+ * но в скор оно не попадало: `detectUtilityFlags` берёт цену из
+ * `UTILITY_POINTS` (src/tier/utility.ts). Два источника правды расходились бы
+ * молча — при полном совпадении чисел расхождение заметно только по сдвигу
+ * тиров через месяц. Теперь единственный источник — `UTILITY_POINTS`, а тест
+ * целостности слоя проверяет, что каждый ручной id там есть и что цена
+ * положительна.
+ */
 export interface ManualUtilityFlag {
   id: ManualUtilityFlagId;
-  points: number;
   /** Почему флаг выставлен — попадает в отчёт, чтобы список читался глазами. */
   reason: string;
 }
@@ -101,8 +110,21 @@ export const ONCE_DIVISOR = 3;
 export interface LeaderAura {
   /** Лидер и юнит получают STEALTH (Junith Eruita). */
   stealth?: boolean;
-  /** Лидер и юнит перебрасывают неудачные броски попадания (1 = «of a 1»). */
-  rerollHitOn?: number[];
+  /**
+   * Кейворды оружию ПРИСОЕДИНЁННОГО юнита (Morvenn: Abbess Sanctorum).
+   *
+   * Отдельное поле от `weaponKeywords`, потому что то достаётся и самому
+   * лидеру: LANCE нужен её собственному копью, а переброс попаданий и ранений
+   * в правилах достаётся «each time a model in that unit makes an attack» — то
+   * есть только отряду. Смешав их в одно поле, мы бы либо усилили героиню, либо
+   * сняли бонус с отряда.
+   *
+   * Перебросы выражены кейвордами ('Reroll hits', 'Reroll wounds'), а не
+   * списками `rerollHitOn`/`rerollWoundOn`: списки умеют только «перебросить
+   * единицы» и не умеют условие по типу цели. Раньше в ауре были именно такие
+   * поля, и они не читались НИГДЕ — способность молча ничего не давала.
+   */
+  unitWeaponKeywords?: string[];
   /**
    * Лидер даёт присоединённому отряду защиту (FNP / ward).
    *
@@ -113,8 +135,6 @@ export interface LeaderAura {
    * месяц. Здесь же лишний id падает в тесте сразу и с точным именем лидера.
    */
   wardAura?: boolean;
-  /** Лидер и юнит перебрасывают неудачные броски ранений. */
-  rerollWoundOn?: number[];
   /** Feel No Pain лидеру и юниту (Hospitaller). */
   fnp?: number;
   /** Сейв приводится к этому значению: 2 = save 2+ (Imagifier). */
@@ -297,6 +317,16 @@ export interface ManualAbility {
    */
   allProfilesOn?: string[];
   /**
+   * Кейворды ВСЕМУ оружию юнита, включая оба вида (Slayers of Tyrants).
+   *
+   * Отдельное поле от `meleeWeaponKeywords`, потому что способность говорит
+   * «each time a model makes an attack» — без ограничения фазой: у Allarus
+   * Custodians это копьё, метательный болт и баллиста. Правило «только
+   * рукопашное» здесь означало бы либо потерю половины атак, либо выдуманную
+   * способность.
+   */
+  weaponKeywordsAll?: string[];
+  /**
    * Одноразовые Devastating Wounds всему оружию (Sagittarum).
    *
    * В бой не идёт: живёт в дельте одноразовых эффектов, как и остальные
@@ -367,7 +397,6 @@ export const MANUAL_ABILITIES: Record<string, ManualAbility> = {
     utilityFlags: [
       {
         id: 'Sororitas_Devastating_Aura',
-        points: 2,
         reason:
           'Devastating Wounds своему оружию и оружию присоединённого юнита: превращает часть крит. ранений в мортиды',
       },
@@ -381,7 +410,6 @@ export const MANUAL_ABILITIES: Record<string, ManualAbility> = {
     utilityFlags: [
       {
         id: 'Sororitas_Anti_Warp',
-        points: 2,
         reason: 'огонь по демонам: +1 мортида от критических ранений в стрельбе',
       },
     ],
@@ -395,7 +423,6 @@ export const MANUAL_ABILITIES: Record<string, ManualAbility> = {
     utilityFlags: [
       {
         id: 'Saint_Celestine_Blessing',
-        points: 3,
         reason: 'регенерация ран и одноразовое воскрешение с полным запасом ран',
       },
     ],
@@ -409,7 +436,6 @@ export const MANUAL_ABILITIES: Record<string, ManualAbility> = {
     utilityFlags: [
       {
         id: 'Triumph_Relic_Blessing',
-        points: 4,
         reason:
           'реликвия Triumph: мощное усиление присоединённого юнита (18 ран и 18 атак режущих)',
       },
@@ -430,7 +456,6 @@ export const MANUAL_ABILITIES: Record<string, ManualAbility> = {
     utilityFlags: [
       {
         id: 'Sororitas_Stealth_Aura',
-        points: 2,
         reason: 'STEALTH и −1 к попаданию рукопашными себе и присоединённому юниту',
       },
     ],
@@ -442,17 +467,31 @@ export const MANUAL_ABILITIES: Record<string, ManualAbility> = {
     utilityFlags: [
       {
         id: 'Sororitas_Extra_Attacks',
-        points: 2,
         reason: '+1 атака всему оружию (Fists of Bzuulth) себе и присоединённому юниту',
       },
     ],
   },
 
-  // Morvenn Vahl: переброс попаданий и ранений себе и юниту, +3 атаки и LANCE
-  // на её собственном оружии. Флага нет: перебросы — это уже боевая ценность,
-  // платить за неё в utility значило бы удвоить смоделированное.
+  /*
+   * Morvenn Vahl: Abbess Sanctorum — переброс попаданий и ранений ВСЕМУ отряду,
+   * плюс +3 атаки и LANCE на её собственном оружии. Флага нет: перебросы — это
+   * боевая ценность, платить за неё в utility значило бы удвоить смоделированное.
+   *
+   * Перебросы уходят кейвордами, а не списками `rerollHitOn`/`rerollWoundOn`:
+   * правило даёт полный переброс («you can re-roll the Hit roll and you can
+   * re-roll the Wound roll»), который списком не выражается. Раньше в ауре
+   * стояли именно списки, и `applyAuraToModels` их не читал — то есть поля были
+   * объявлены, заполнены и молча ничего не делали.
+   *
+   * Кейворды достаются присоединённому отряду, а не ей самой: правило говорит
+   * «each time a model in that unit makes an attack».
+   */
   '7188-4d20-8216-c68a': {
-    aura: { rerollHitOn: [1], rerollWoundOn: [1], extraAttacks: 3, weaponKeywords: ['Lance'] },
+    aura: {
+      extraAttacks: 3,
+      weaponKeywords: ['Lance'],
+      unitWeaponKeywords: ['Reroll hits', 'Reroll wounds'],
+    },
   },
 
   // Canoness: инвульнити 2+ на один ход (себе) и +1 к попаданию себе и юниту.
@@ -461,7 +500,6 @@ export const MANUAL_ABILITIES: Record<string, ManualAbility> = {
     utilityFlags: [
       {
         id: 'Sororitas_Canoness_Aura',
-        points: 2,
         reason: '+1 к попаданию рукопашными себе и присоединённому юниту',
       },
     ],
@@ -474,7 +512,6 @@ export const MANUAL_ABILITIES: Record<string, ManualAbility> = {
     utilityFlags: [
       {
         id: 'Sororitas_Canoness_Jump_Aura',
-        points: 2,
         reason: 'одноразовые +3 атаки и Devastating Wounds на рукопашное оружие модели',
       },
     ],
@@ -485,7 +522,6 @@ export const MANUAL_ABILITIES: Record<string, ManualAbility> = {
     utilityFlags: [
       {
         id: 'Sororitas_Dialogus',
-        points: 2,
         reason: 'проповедь: раздаёт отрядные бонусы и держит цель на себе',
       },
     ],
@@ -496,7 +532,6 @@ export const MANUAL_ABILITIES: Record<string, ManualAbility> = {
     utilityFlags: [
       {
         id: 'Sororitas_Dogmata',
-        points: 2,
         reason: 'собор: аура на Command/shader и лечение в фазе командования',
       },
     ],
@@ -556,7 +591,6 @@ export const MANUAL_ABILITIES: Record<string, ManualAbility> = {
     utilityFlags: [
       {
         id: 'Sororitas_Imagifier',
-        points: 1,
         reason: 'save 2+ и invsv 4+ себе и присоединённому юниту',
       },
     ],
@@ -589,7 +623,6 @@ export const MANUAL_ABILITIES: Record<string, ManualAbility> = {
     utilityFlags: [
       {
         id: 'Sororitas_Battle_Sisters',
-        points: 3,
         reason: 'универсальный боец с Condemnor у офицера: стрельба, рукопашная, спецоружие',
       },
     ],
@@ -599,7 +632,6 @@ export const MANUAL_ABILITIES: Record<string, ManualAbility> = {
     utilityFlags: [
       {
         id: 'Sororitas_Immolator',
-        points: 2,
         reason: 'иммолатор: автопопадание и игнорирование укрытия по всем врагам',
       },
     ],
@@ -621,7 +653,6 @@ export const MANUAL_ABILITIES: Record<string, ManualAbility> = {
     utilityFlags: [
       {
         id: 'Sororitas_Celestian_Insidiants',
-        points: 1,
         reason: 'FNP 4+ против мортид и переброс попаданий на 1',
       },
     ],
@@ -637,13 +668,24 @@ export const MANUAL_ABILITIES: Record<string, ManualAbility> = {
     utilityFlags: [
       {
         id: 'Sororitas_Dominion',
-        points: 2,
         reason: 'гвардия части с усиленным офицером и заголовком',
       },
     ],
   },
 
-  '7d63-7b55-a632-6a10': { rerollHitOn: [1], rerollWoundOn: [1], rerollPhase: 'melee' },
+  /*
+   * Repentia: Overseer of Redemption — «you can re-roll the Hit roll and you can
+   * re-roll the Wound roll» при рукопашной атаке, пока в отряде есть Superior
+   * (в минимальной сборке он есть, у варианта `min: 1`).
+   *
+   * Переброс ПОЛНЫЙ, поэтому списками `rerollHitOn`/`rerollWoundOn` не
+   * выражается: список — это «перебросить N», а правило требует «перебросить
+   * всё». Кейворды попадают только на рукопашное оружие, поэтому Bolt pistol у
+   * Superior их не наследует.
+   */
+  '7d63-7b55-a632-6a10': {
+    meleeWeaponKeywords: ['Reroll hits', 'Reroll wounds'],
+  },
 
   // Reroll 1 на попадания и ранения ТОЛЬКО при стрельбе.
   'c49d-f150-4b3-c118': {
@@ -653,7 +695,6 @@ export const MANUAL_ABILITIES: Record<string, ManualAbility> = {
     utilityFlags: [
       {
         id: 'Sororitas_Retributors',
-        points: 1,
         reason: 'переброс 1 на попадания и ранения в стрельбе',
       },
     ],
@@ -671,7 +712,6 @@ export const MANUAL_ABILITIES: Record<string, ManualAbility> = {
     utilityFlags: [
       {
         id: 'Sororitas_Sanctifiers',
-        points: 2,
         reason: 'Miraculist: Sustained Hits 1 и возврат D3 моделей при святом Министоруме',
       },
     ],
@@ -681,7 +721,6 @@ export const MANUAL_ABILITIES: Record<string, ManualAbility> = {
     utilityFlags: [
       {
         id: 'Sororitas_Seraphim',
-        points: 1,
         reason: 'прыгающие и летающие с рукопашной в ближней и глухой стрельбой',
       },
     ],
@@ -692,7 +731,6 @@ export const MANUAL_ABILITIES: Record<string, ManualAbility> = {
     utilityFlags: [
       {
         id: 'Sororitas_Novitiates',
-        points: 2,
         reason: 'дешёвые новницы с перебросом попадания на 1 и заголовком',
       },
     ],
@@ -707,7 +745,6 @@ export const MANUAL_ABILITIES: Record<string, ManualAbility> = {
     utilityFlags: [
       {
         id: 'Sororitas_Castigator',
-        points: 1,
         reason: 'тяжёлая техника с парой скорострельных автопушек',
       },
     ],
@@ -717,7 +754,6 @@ export const MANUAL_ABILITIES: Record<string, ManualAbility> = {
     utilityFlags: [
       {
         id: 'Sororitas_Exorcist',
-        points: 1,
         reason: 'космический боец с непрямым огнём реактивных установок',
       },
     ],
@@ -738,7 +774,6 @@ export const MANUAL_ABILITIES: Record<string, ManualAbility> = {
     utilityFlags: [
       {
         id: 'Sororitas_Penitent_Engines',
-        points: 2,
         reason: 'автопопадание ближнего огня и FNP 5+ при низком Т',
       },
     ],
@@ -763,23 +798,30 @@ export const MANUAL_ABILITIES: Record<string, ManualAbility> = {
     utilityFlags: [
       {
         id: 'Custodes_Aleya',
-        points: 1,
         reason: 'Fights First отряду и FNP 3+ против психики и мортид',
       },
     ],
   },
 
-  // Allarus Custodians: переброс ранения на 1. Способность ограничена целями
-  // VEHICLE/MONSTER/CHARACTER, но у rerollWoundOn в движке условия на цель нет —
-  // переброс действует шире, чем в правилах. Это завышает юнита, поэтому
-  // помечено: правило записано целиком, а не приблизительно.
+  /*
+   * Allarus Custodians: Slayers of Tyrants — переброс ЛЮБОГО неудачного
+   * броска ранения при атаке по CHARACTER/MONSTER/VEHICLE.
+   *
+   * Раньше здесь стояло `rerollWoundOn: [1]`, и это была двойная поломка:
+   * перебрасывались только единицы (а правило даёт полный переброс) и работал
+   * он по любой цели (а правило ограничено тремя типами). Теперь переброс —
+   * кейворд с условием, который читает rules.ts по кейвордам защитника.
+   *
+   * Флаг в 1 балл остаётся: переброс смоделирован, а незакрытая половина
+   * правила — Devastating Wounds по всем целям (условие на цель у мортид в
+   * движке не выражено).
+   */
   'c8a6-a4c5-703e-b717': {
-    rerollWoundOn: [1],
+    weaponKeywordsAll: ['Reroll wounds: CHARACTER/MONSTER/VEHICLE'],
     utilityFlags: [
       {
         id: 'Custodes_Allarus',
-        points: 1,
-        reason: 'переброс ранения на 1 против техники, монстров и персонажей',
+        reason: 'Devastating Wounds по всем целям: условие на тип цели в мортидах не выражено',
       },
     ],
   },
@@ -790,7 +832,7 @@ export const MANUAL_ABILITIES: Record<string, ManualAbility> = {
     rerollWoundOn: [1],
     rerollPhase: 'ranged',
     utilityFlags: [
-      { id: 'Custodes_Aquilon', points: 1, reason: 'переброс ранения на 1 в дальнем бою' },
+      { id: 'Custodes_Aquilon', reason: 'переброс ранения на 1 в дальнем бою' },
     ],
   },
 
@@ -800,7 +842,6 @@ export const MANUAL_ABILITIES: Record<string, ManualAbility> = {
     utilityFlags: [
       {
         id: 'Custodes_Blade_Champion',
-        points: 3,
         reason: 'EPIC HERO с большим объёмом атак и ре-роллами',
       },
     ],
@@ -812,7 +853,6 @@ export const MANUAL_ABILITIES: Record<string, ManualAbility> = {
     utilityFlags: [
       {
         id: 'Custodes_Knight_Centura',
-        points: 3,
         reason:
           'EPIC HERO Anathema Psykana: FNP 3+ против психики и мортид, +2 к Move и к броскам Advance/Charge отряда',
       },
@@ -866,7 +906,6 @@ export const MANUAL_ABILITIES: Record<string, ManualAbility> = {
     utilityFlags: [
       {
         id: 'Custodes_Shield_Captain',
-        points: 1,
         reason: 'одноразовые Active и Sustained Hits 1 в рукопашной',
       },
     ],
@@ -880,7 +919,6 @@ export const MANUAL_ABILITIES: Record<string, ManualAbility> = {
     utilityFlags: [
       {
         id: 'Custodes_Shield_Captain_Allarus',
-        points: 1,
         reason: 'одноразовое ограничение урона до одного инстанса за раунд',
       },
     ],
@@ -891,7 +929,6 @@ export const MANUAL_ABILITIES: Record<string, ManualAbility> = {
     utilityFlags: [
       {
         id: 'Custodes_Shield_Captain_Dawneagle',
-        points: 2,
         reason: 'jetbike даёт FLY и быстрый ввод в бой',
       },
     ],
@@ -934,7 +971,6 @@ export const MANUAL_ABILITIES: Record<string, ManualAbility> = {
     utilityFlags: [
       {
         id: 'Custodes_Prosecutors',
-        points: 2,
         reason: 'Purity of Execution (Devastating по персонажам) и Daughters of the Abyss: FNP 3+ против псионики и мортид',
       },
     ],
@@ -951,7 +987,6 @@ export const MANUAL_ABILITIES: Record<string, ManualAbility> = {
     utilityFlags: [
       {
         id: 'Custodes_Vigilators',
-        points: 2,
         reason: 'Deft Parry: −1 к попаданию рукопашной по себе, и Daughters of the Abyss: FNP 3+ против псионики и мортид',
       },
     ],
@@ -963,7 +998,6 @@ export const MANUAL_ABILITIES: Record<string, ManualAbility> = {
     utilityFlags: [
       {
         id: 'Custodes_Witchseekers',
-        points: 1,
         reason: 'Daughters of the Abyss: FNP 3+ против псионики и мортид, плюс Sanctified Flames',
       },
     ],
@@ -979,7 +1013,6 @@ export const MANUAL_ABILITIES: Record<string, ManualAbility> = {
     utilityFlags: [
       {
         id: 'Custodes_Sagittarum',
-        points: 2,
         reason: 'одноразовые Devastating Wounds (Saturation Volleys) в ближнем бою',
       },
     ],
@@ -989,7 +1022,6 @@ export const MANUAL_ABILITIES: Record<string, ManualAbility> = {
     utilityFlags: [
       {
         id: 'Custodes_Venatari',
-        points: 3,
         reason: 'Strike from the Skies и Swooping Dive: вход в бой с воздуха и пикирование с усиленным уроном',
       },
     ],
@@ -999,7 +1031,6 @@ export const MANUAL_ABILITIES: Record<string, ManualAbility> = {
     utilityFlags: [
       {
         id: 'Custodes_Agamatus',
-        points: 2,
         reason: 'Implacable Vanguard (Deep Strike) и Turbo Boost: ввод в бой с воздуха и усиленный рывок',
       },
     ],
@@ -1009,7 +1040,6 @@ export const MANUAL_ABILITIES: Record<string, ManualAbility> = {
     utilityFlags: [
       {
         id: 'Custodes_Vertus_Praetors',
-        points: 2,
         reason: 'аэроциклы с Turbo Boost и Quicksilver Execution',
       },
     ],
@@ -1113,7 +1143,6 @@ export const MANUAL_ABILITIES: Record<string, ManualAbility> = {
     utilityFlags: [
       {
         id: 'Orks_Boss_Snikrot',
-        points: 2,
         reason:
           'Lone Operative (невидимость дальше 12", мимо непрямого огня) и уход в резерв с ingress move каждый раунд',
       },
@@ -1136,7 +1165,6 @@ export const MANUAL_ABILITIES: Record<string, ManualAbility> = {
     utilityFlags: [
       {
         id: 'Orks_Ghazghkull_Thraka',
-        points: 2,
         reason: 'Prophet of Da Great Waaagh!: +1 к попаданию и ранению рукопашной всем ORKS в 6"',
       },
     ],
@@ -1167,7 +1195,6 @@ export const MANUAL_ABILITIES: Record<string, ManualAbility> = {
     utilityFlags: [
       {
         id: 'Orks_Mozrog_Skragbad',
-        points: 1,
         reason:
           'Beast Snagga Following (Lone Operative рядом со своими) и One Last Kill: ещё одна драка в фазе боя после смерти',
       },
@@ -1190,7 +1217,6 @@ export const MANUAL_ABILITIES: Record<string, ManualAbility> = {
     utilityFlags: [
       {
         id: 'Orks_Nazdreg',
-        points: 2,
         reason:
           'Know-wotz присоединённым Meganobz (Deep Strike и IGNORES COVER) и Supreme Kunnin: D6 ход в фазе противника',
       },
@@ -1210,7 +1236,6 @@ export const MANUAL_ABILITIES: Record<string, ManualAbility> = {
     utilityFlags: [
       {
         id: 'Orks_Wazdakka_Gutsmek',
-        points: 2,
         reason: 'Deadly Demise 6: гибель модели в отряде — 6 мортид каждому отряду в 6"',
       },
     ],
@@ -1277,12 +1302,15 @@ export function rerollOptionsOf(
  * @param models модели, к которым применяется аура
  * @param aura ручная аура
  * @param ownKeywords кейворды отряда лидера; аура добавляет STEALTH в отряд
+ * @param forAttachedUnit true — модели ИМЕННО присоединённого юнита: тогда
+ *   дополнительно применяются `unitWeaponKeywords`, которые лидеру не полагаются
  * @returns новые модели и пополненный список кейвордов отряда
  */
 export function applyAuraToModels(
   models: CombatModel[],
   aura: LeaderAura,
-  ownKeywords: string[] = []
+  ownKeywords: string[] = [],
+  forAttachedUnit = false
 ): { models: CombatModel[]; keywords: string[] } {
   const keywords = aura.stealth === true && !ownKeywords.includes('STEALTH')
     ? [...ownKeywords, 'STEALTH']
@@ -1311,7 +1339,7 @@ export function applyAuraToModels(
 
     return {
       ...withKeywords,
-      weapons: withKeywords.weapons.map((weapon) => applyAuraToWeapon(weapon, aura)),
+      weapons: withKeywords.weapons.map((weapon) => applyAuraToWeapon(weapon, aura, forAttachedUnit)),
     };
   });
   return { models: next, keywords };
@@ -1341,7 +1369,11 @@ function pickBest(current: number | null, atLeast: number | undefined, lowerIsBe
  * Одноразовые эффекты (onceMelee*) здесь НЕ применяются намеренно: они
  * считаются отдельной дельтой в строке юнита и не влияют ни на бой, ни на тир.
  */
-function applyAuraToWeapon(weapon: CombatWeapon, aura: LeaderAura): CombatWeapon {
+function applyAuraToWeapon(
+  weapon: CombatWeapon,
+  aura: LeaderAura,
+  forAttachedUnit = false
+): CombatWeapon {
   const next: CombatWeapon = { ...weapon };
   if (aura.extraAttacks !== undefined && weapon.attacks !== null) {
     next.attacks = { ...weapon.attacks, count: weapon.attacks.count + aura.extraAttacks };
@@ -1349,12 +1381,14 @@ function applyAuraToWeapon(weapon: CombatWeapon, aura: LeaderAura): CombatWeapon
   if (aura.toHit !== undefined && weapon.skill !== null) {
     next.skill = Math.max(2, weapon.skill - aura.toHit);
   }
-  if ((aura.weaponKeywords ?? []).length > 0) {
-    const extra = parseKeywords(aura.weaponKeywords!).filter(
-      (keyword) => !weapon.keywords.some((existing) => existing.name === keyword.name)
-    );
-    if (extra.length > 0) next.keywords = [...weapon.keywords, ...extra];
-  }
+  const own = parseKeywords(aura.weaponKeywords ?? []);
+  // Кейворды отряда — только присоединённому юниту: они идут вместе с ним в бой,
+  // тогда как `weaponKeywords` (LANCE) остаётся на оружии самого лидера.
+  const unit = forAttachedUnit ? parseKeywords(aura.unitWeaponKeywords ?? []) : [];
+  const extra = [...own, ...unit].filter(
+    (keyword) => !weapon.keywords.some((existing) => existing.name === keyword.name)
+  );
+  if (extra.length > 0) next.keywords = [...weapon.keywords, ...extra];
   return next;
 }
 

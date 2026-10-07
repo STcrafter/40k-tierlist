@@ -622,6 +622,7 @@ function applyManualAbilities(unit: CombatUnit, datasheet: BsDatasheet): CombatU
       ability.meleeMortalPerWound !== undefined ||
       ability.extraAttacks !== undefined ||
       (ability.meleeWeaponKeywords ?? []).length > 0 ||
+      (ability.weaponKeywordsAll ?? []).length > 0 ||
       (ability.weaponKeywordsOn ?? []).length > 0 ||
       ability.antiBonus !== undefined;
     const weapons = !needsWeapons
@@ -650,6 +651,14 @@ function applyManualAbilities(unit: CombatUnit, datasheet: BsDatasheet): CombatU
             if (weapon.kind === 'melee' && (ability.meleeWeaponKeywords ?? []).length > 0) {
               // Zephyrim: кейворды только на рукопашном оружии.
               const extra = parseKeywords(ability.meleeWeaponKeywords!).filter(
+                (keyword) => !weapon.keywords.some((existing) => existing.name === keyword.name)
+              );
+              if (extra.length > 0) next.keywords = [...next.keywords, ...extra];
+            }
+            if ((ability.weaponKeywordsAll ?? []).length > 0) {
+              // Способность без ограничения фазой: кейворд достаётся и стволу, и
+              // клинку (Slayers of Tyrants у Allarus Custodians).
+              const extra = parseKeywords(ability.weaponKeywordsAll!).filter(
                 (keyword) => !weapon.keywords.some((existing) => existing.name === keyword.name)
               );
               if (extra.length > 0) next.keywords = [...next.keywords, ...extra];

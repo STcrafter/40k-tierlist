@@ -323,7 +323,9 @@ function applyLeaderConditional(
 function withLeaderAura(models: CombatUnit['models'], leader: LeaderDefinition): CombatUnit['models'] {
   const aura = manualAbilityOf(leader.id)?.aura;
   if (aura === undefined) return models;
-  return applyAuraToModels(models, aura).models;
+  // Последний аргумент — true: это модели присоединённого юнита, поэтому к его
+  // оружию применяются в том числе `unitWeaponKeywords` (перебросы Morvenn).
+  return applyAuraToModels(models, aura, [], true).models;
 }
 
 /** Опции симуляции для reroll-бонусов лидера. */

@@ -393,6 +393,56 @@ describe('ухудшение чужой атаки (Golden Laurels, Resolute Wil
   });
 });
 
+describe('мортиды от кубиков (Ares Gunship, Contemptor-Achillus)', () => {
+  /**
+   * Таблица-дублёр: мортида за ЛЮБОЙ бросок.
+   *
+   * Нужна, чтобы тест не зависел от ПОРЯДКА бросков. Порядок изменился вместе
+   * с починкой (кубики теперь раньше попаданий), и при обычной таблице
+   * «мортида на 6» промах и попадание потребовали бы разных наборов чисел —
+   * красным падала бы проверка попаданий, а не проверка мортид, то есть тест
+   * сообщал бы о симптоме, которого нет. С такой таблицей оба кода дают промах,
+   * и единственная разница — бросаются ли кубики.
+   */
+  const everyDieWounds: Record<number, { sides: number; min: number }> = Object.fromEntries(
+    [1, 2, 3, 4, 5, 6].map((die) => [die, { sides: 0, min: 1 }])
+  );
+
+  it('бросаются даже при полном промахе', () => {
+    // Регрессия: `rollMortalDice` стоял ПОСЛЕ `if (hits <= 0) return`, то есть
+    // залп без единого попадания отменял бросок. По правилам кубики не зависят
+    // от попаданий: Ares бросает d6 на модель цели в любом режиме боя.
+    // Симптом: промах → 0 мортид вместо 10 (по одной на каждую модель цели).
+    const gun = weapon({ skill: 3 });
+    const withDice: CombatUnit = {
+      ...unit([model({ id: 'gun', weapons: [gun] })]),
+      mortalDice: { phase: 'all', perDefenderModel: true, table: everyDieWounds },
+    };
+    const target = unit(
+      Array.from({ length: 10 }, (_, i) => model({ id: `t${i}`, toughness: 11, wounds: 20, save: 6 })),
+      ['VEHICLE']
+    );
+    // Все броски — 1: попадание 3+ не проходит ни разу.
+    const miss = simulateTrial(withDice, target, { rng: die(1) });
+    expect(miss.weapons[0].hits, 'залп должен промахнуться').toBe(0);
+    expect(miss.weapons[0].mortals, 'мортиды не зависят от попаданий').toBe(10);
+    expect(miss.damage, 'урон от мортид начисляется').toBe(10);
+
+    // Контроль: попадание есть (все броски — 6) — те же 10 мортид.
+    const hit = simulateTrial(withDice, target, { rng: die(6) });
+    expect(hit.weapons[0].hits, 'контрольный залп должен попасть').toBeGreaterThan(0);
+    expect(hit.weapons[0].mortals).toBe(10);
+  });
+
+  it('без mortalDice залп не добавляет мортид', () => {
+    // Контроль на «лишний радиус»: правка не должна научить движок бросать
+    // кубики у каждого, у кого их нет.
+    const target = unit([model({ toughness: 11, wounds: 20, save: 6 })], ['VEHICLE']);
+    const result = simulateTrial(gunner(weapon({ skill: 3 })), target, { rng: die(6) });
+    expect(result.weapons[0].mortals).toBe(0);
+  });
+});
+
 describe('кейворды 11-й редакции', () => {
   it('условный [LETHAL HITS: non-MONSTER/VEHICLE] не работает по технике', () => {
     // Регрессия: правило проверяло только имя кейворда и не смотрело на

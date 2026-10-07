@@ -20,6 +20,10 @@ const CANONICAL: Array<[RegExp, string]> = [
   [/^blast/, 'blast'],
   [/^cleave/, 'cleave'],
   [/^twin[- ]?linked/, 'twin-linked'],
+  // Переброс попаданий. Без условия — любого неудачного броска; с условием
+  // 'Reroll hits: CHARACTER' — только по указанным типам цели (Slayers of
+  // Tyrants у Allarus, Overseer of Redemption у Repentia).
+  [/^(re[- ]?roll|rerolls?)( (an?|any))? ?hits?/, 'hit-reroll'],
   // Переброс ранений с условием на цель: 'Reroll wounds: MONSTER/VEHICLE'
   // (Da Bigger Dey Iz! у Mozrog Skragbad). Без условия — переброс любого
   // неудачного броска ранения, как у [TWIN-LINKED].
@@ -53,6 +57,15 @@ const CANONICAL: Array<[RegExp, string]> = [
  * списком настоящих.
  */
 export const CANONICAL_KEYWORD_NAMES: readonly string[] = CANONICAL.map(([, name]) => name);
+
+/**
+ * Канонические имена перебросов, у которых бывает условие на цель.
+ *
+ * Вынесены отдельно, потому что разбор условия и защита от «переброса единиц»
+ * одинаковы для попаданий и ранений: `Reroll hits: CHARACTER` и
+ * `Reroll wounds: MONSTER/VEHICLE` разбираются по одному правилу.
+ */
+const REROLL_NAMES: ReadonlySet<string> = new Set(['hit-reroll', 'wound-reroll']);
 
 /** Разбор условия после двоеточия: 'non-MONSTER/VEHICLE' → { negate, keywords }. */
 function parseCondition(text: string): KeywordCondition | null {
@@ -110,8 +123,9 @@ export function parseKeyword(raw: string): ParsedKeyword | null {
     }
   }
 
-  /*
-   * REROLL WOUNDS: MONSTER/VEHICLE — цель в условии после двоеточия.
+/*
+   * REROLL HITS / REROLL WOUNDS: MONSTER/VEHICLE — цель в условии после
+   * двоеточия.
    *
    * Разбор условия уже сделан выше и лежит в `condition`; здесь из него
    * получается список целей, потому что проверять этот кейворд будут по
@@ -122,17 +136,17 @@ export function parseKeyword(raw: string): ParsedKeyword | null {
    * «не-монстров» — это условие на отсутствие кейворда, и выражать его списком
    * целей было бы молчаливой подменой.
    */
-  if (keyword.name === 'wound-reroll' && condition !== null && !condition.negate) {
+  if (REROLL_NAMES.has(keyword.name) && condition !== null && !condition.negate) {
     keyword.target = condition.keywords;
   }
 
   /*
    * «Re-roll a Wound roll OF 1» — это НЕ полный переброс, а переброс единиц,
    * и величина выражается через `rerollWoundOn`. Здесь такой текст намеренно
-   * остаётся неканоническим именем: иначе он молча стал бы полным рероллом и
+   * остаётся неканоническим именем: иначе он молча стал бы полным перебросом и
    * удвоил бы способность. Тест целостности ручного слоя такое имя не пропустит.
    */
-  if (keyword.name === 'wound-reroll' && /\bof\b/.test(body)) {
+  if (REROLL_NAMES.has(keyword.name) && /\bof\b/.test(body)) {
     keyword.name = 'wound-reroll-of';
   }
 
