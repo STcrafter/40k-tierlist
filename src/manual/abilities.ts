@@ -1398,6 +1398,7 @@ export const MANUAL_ABILITIES: Record<string, ManualAbility> = {
 
   // Big Mek Dakkarig: при Riled Up: sustains 1; Blitzkannon +6 атак vs non-MONSTER/VEHICLE
   '78a7-cf35-aa8d-c420': {
+    aura: { sustainedHits: 1 },
     weaponKeywordsOn: [{ weapon: 'blitzkannon', keywords: ['Sustained Hits 1', '+6 Atts vs non-MONSTER/VEHICLE'] }],
     utilityFlags: [{ id: 'Orks_Big_Mek_Dakkarig', reason: 'Sustained Hits 1 при Riled Up; Blitzkannon +6 атак vs не MONSTER/VEHICLE' }],
   },
