@@ -68,6 +68,59 @@ export const MANUAL_UTILITY_FLAG_IDS = [
 export type ManualUtilityFlagId = (typeof MANUAL_UTILITY_FLAG_IDS)[number];
 
 /**
+ * Имена полей `ManualAbility`, меняющих ОРУЖИЕ модели — единственный перечень.
+ *
+ * Список существует вместо двух. Раньше то же перечислялось дважды: предикатом
+ * «нужно ли пересобирать оружие» и самим разбором, и правило «новое поле
+ * обязано попасть в оба места» держалось только на комментарии. Класс поломки
+ * срабатывал дважды: с `meleeMortalPerWound` у Palatine (забыли в предикате) и
+ * с `weaponKeywordsOn` у Caladius (забыли в предикате, хотя разбор был на месте).
+ *
+ * Теперь перечисление одно, и таблица `WEAPON_EFFECTS` обязана быть по нему
+ * исчерпывающей — иначе ошибка компиляции. Остаток риска («новое поле объявили,
+ * но в список не занесли») закрыт тестом в abilities.test.ts: он требует, чтобы
+ * любое поле, встречающееся в записях слоя, было либо в одной из таблиц
+ * применения, либо в списке полей, сознательно не меняющих оружие.
+ *
+ * Тип-метка вместо перечисления пробовалась и была отвергнута: помечать поле
+ * брендом пришлось бы и в значениях записей (89 штук), то есть либо 89
+ * приведений типов, либо потеря проверки на самом деле полезной.
+ */
+export const WEAPON_EFFECT_FIELDS = [
+  'mortalDamageBonus',
+  'meleeMortalPerWound',
+  'extraAttacks',
+  'antiBonus',
+  'meleeWeaponKeywords',
+  'weaponKeywordsAll',
+  'weaponKeywordsOn',
+] as const satisfies ReadonlyArray<keyof ManualAbility>;
+
+/** Имена полей, действующих ОДИН РАЗ за бой: разбираются в `withOnceEffects`. */
+export const ONCE_EFFECT_FIELDS = [
+  'onceRangedKeywords',
+  'onceFnp',
+  'onceDamageCapPerRound',
+  'onceDevastating',
+  'onceExtraRangedVolley',
+] as const satisfies ReadonlyArray<keyof ManualAbility>;
+
+/** Одноразовые поля АУРЫ — применяются к оружию лидера при расчёте дельты. */
+export const ONCE_AURA_FIELDS = [
+  'onceMeleeAttacks',
+  'onceMeleeStrength',
+  'onceMeleeKeywords',
+] as const satisfies ReadonlyArray<keyof LeaderAura>;
+
+/** Имя поля способности, меняющего оружие. */
+export type WeaponEffectField = (typeof WEAPON_EFFECT_FIELDS)[number];
+/** Имя поля способности, действующего один раз за бой. */
+export type OnceEffectField = (typeof ONCE_EFFECT_FIELDS)[number];
+/** Имя одноразового поля ауры. */
+export type OnceAuraField = (typeof ONCE_AURA_FIELDS)[number];
+
+
+/**
  * Ручной флаг стратегической полезности.
  *
  * Баллов здесь НЕТ намеренно. Раньше у каждого флага было своё поле `points`,
@@ -1403,20 +1456,18 @@ function applyAuraToWeapon(
 export function withOnceEffects(unit: CombatUnit): CombatUnit {
   const ability = manualAbilityOf(unit.id);
   const aura = ability?.aura;
-  // Одноразовые эффекты живут на двух уровнях: в ауре (Trajann, Shield-Captain —
-  // они идут от способности персонажа) и прямо в способности (Allarus-щит,
-  // Custodian Guard). Уровень выбран по тому, откуда правило приходит в бой.
-  // Третий источник — сами стволы [ONE SHOT]: их флаг снимается здесь, и залп
-  // попадает в one-shot дельту (см. CombatWeapon.onceOnly).
+  // Одноразовые эффекты живут на трёх уровнях: в ауре (Trajann, Shield-Captain —
+  // они идут от способности персонажа), прямо в способности (Allarus-щит,
+  // Custodian Guard) и в самих стволах [ONE SHOT]: их флаг снимается здесь, и
+  // залп попадает в one-shot дельту (см. CombatWeapon.onceOnly).
+  //
+  // Перечисление берётся из ONCE_AURA_FIELDS/ONCE_EFFECT_FIELDS, а не пишется
+  // здесь руками: забытое поле означало бы, что способность не доедет до
+  // дельты вообще (вклад одноразовых эффектов станет нулём), и заметить это
+  // можно было бы только по сдвигу тиров через месяц.
   const hasOnce =
-    (aura?.onceMeleeAttacks ?? 0) > 0 ||
-    (aura?.onceMeleeStrength ?? 0) > 0 ||
-    (aura?.onceMeleeKeywords ?? []).length > 0 ||
-    (ability?.onceRangedKeywords ?? []).length > 0 ||
-    ability?.onceFnp !== undefined ||
-    ability?.onceDamageCapPerRound !== undefined ||
-    ability?.onceDevastating === true ||
-    ability?.onceExtraRangedVolley === true ||
+    ONCE_AURA_FIELDS.some((field) => aura?.[field] !== undefined) ||
+    ONCE_EFFECT_FIELDS.some((field) => ability?.[field] !== undefined) ||
     unit.models.some((model) => model.weapons.some((weapon) => weapon.onceOnly === true));
   if (!hasOnce) return unit;
   // Разовые кейворды дальнобойному оружию: список одинаков для всех моделей,

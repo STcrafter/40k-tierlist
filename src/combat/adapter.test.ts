@@ -14,11 +14,55 @@ import type { BsDatasheet } from '../bsdata/types.ts';
 import { sizeRangeOf } from '../bsdata/points.ts';
 import { adaptUnit, loadoutVariantsOf } from './adapter.ts';
 import { monteCarlo } from './simulate.ts';
-import { withOnceEffects, rerollOptionsOf, applyAuraToModels } from '../manual/abilities.ts';
+import {
+  withOnceEffects,
+  rerollOptionsOf,
+  applyAuraToModels,
+  MANUAL_ABILITIES,
+  ONCE_AURA_FIELDS,
+  ONCE_EFFECT_FIELDS,
+  WEAPON_EFFECT_FIELDS,
+  type ManualAbility,
+  type OnceAuraField,
+  type OnceEffectField,
+  type WeaponEffectField,
+} from '../manual/abilities.ts';
 import { detectUtilityFlags } from '../tier/utility.ts';
 import { attachLeaderToUnit, leaderDefinitionsOf, type LeaderDefinition } from '../tier/leaders.ts';
 import { createDefenderState, damageNextModel, upkeepBetweenRounds } from './simulate.ts';
 import type { CombatUnit } from './types.ts';
+
+/**
+ * Образцы значений для проверки «поле применяется»: минимальные, но достаточные,
+ * чтобы эффект был виден на оружии Gretchin.
+ *
+ * Ключ — имя поля, поэтому добавление нового поля в слой без образца падает
+ * здесь же, а не молча в 89 записях.
+ */
+const SAMPLES_WEAPON: Record<WeaponEffectField, unknown> = {
+  mortalDamageBonus: { amount: 1, phase: 'ranged' },
+  meleeMortalPerWound: 1,
+  extraAttacks: 1,
+  antiBonus: { hits: 1, wounds: 1 },
+  meleeWeaponKeywords: ['Lethal Hits'],
+  weaponKeywordsAll: ['Lethal Hits'],
+  weaponKeywordsOn: [{ weapon: 'shiv', keywords: ['Devastating Wounds'] }],
+};
+
+const SAMPLES_ONCE: Record<OnceEffectField, unknown> = {
+  onceRangedKeywords: ['Lethal Hits'],
+  onceFnp: 4,
+  onceDamageCapPerRound: 1,
+  onceDevastating: true,
+  onceExtraRangedVolley: true,
+};
+
+/** Одноразовые поля ауры проверяются на лидере: см. тест `ONCE_AURA_FIELDS`. */
+const SAMPLES_AURA: Record<OnceAuraField, unknown> = {
+  onceMeleeAttacks: 3,
+  onceMeleeStrength: 3,
+  onceMeleeKeywords: ['Devastating Wounds'],
+};
 
 const { datasheets } = parseBsDatabase(loadBsData(bsFilesFromDir('public/BSData/wh40k-11e')));
 const find = (name: string): BsDatasheet => {
@@ -1066,6 +1110,102 @@ describe('ручной слой орков', () => {
     expect(shiv?.attacks?.count).toBe(1);
     expect(shiv?.skill).toBe(5);
     expect(shiv?.strength).toBe(2);
+  });
+});
+
+describe('каждое поле ручного слоя применяется', () => {
+  /**
+   * Носитель для проверки — Gretchin: у него два оружия разных видов
+   * (Scavenged Shivs в рукопашной, Grot Blasta в стрельбе), поэтому видно,
+   * куда именно попал эффект, а не только «что-то изменилось».
+   */
+  const host = (): BsDatasheet => {
+    const found = datasheets.find((sheet) => sheet.name === 'Gretchin' && sheet.faction === 'Orks');
+    if (!found) throw new Error('Gretchin не найден среди орков');
+    return found;
+  };
+  const sheet = host();
+  const keywordsOf = (unit: CombatUnit, kind: 'melee' | 'ranged'): Set<string> =>
+    new Set(
+      unit.models
+        .flatMap((model) => model.weapons)
+        .filter((weapon) => weapon.kind === kind)
+        .flatMap((weapon) => weapon.keywords.map((keyword) => keyword.name))
+    );
+
+  /**
+   * Ставит временную запись слоя на Gretchin, выполняет действие и убирает её.
+   *
+   * Запись должна жить ВО ВРЕМЯ действия: `withOnceEffects` сам читает
+   * `manualAbilityOf(unit.id)`, поэтому отряд, собранный «на временной»
+   * способности и переживший её удаление, эффекта бы уже не нёс.
+   */
+  const duringTemporaryAbility = <T>(
+    ability: Record<string, unknown>,
+    action: (unit: CombatUnit) => T
+  ): T => {
+    const saved = MANUAL_ABILITIES[sheet.id];
+    MANUAL_ABILITIES[sheet.id] = ability as ManualAbility;
+    try {
+      return action(adaptUnit(sheet, { size: 'min' }).unit);
+    } finally {
+      if (saved === undefined) delete MANUAL_ABILITIES[sheet.id];
+      else MANUAL_ABILITIES[sheet.id] = saved;
+    }
+  };
+  /** Оружие отряда — строкой: сравнение целиком не зависит от порядка ключей. */
+  const armsOf = (unit: CombatUnit): string =>
+    JSON.stringify(unit.models.map((model) => model.weapons));
+  const modelsOf = (unit: CombatUnit): string => JSON.stringify(unit.models);
+  const baseline = adaptUnit(sheet, { size: 'min' }).unit;
+
+  it.each(WEAPON_EFFECT_FIELDS)('оружие-эффект %s доезжает до оружия', (field) => {
+    // Регрессия на класс «поле объявлено, но не попало в список применения».
+    // Именно так были потеряны meleeMortalPerWound (Palatine) и
+    // weaponKeywordsOn (Caladius): оба разбирались в коде, но предикат их не
+    // видел, и весь блок не выполнялся. Тест ставит в слой ТОЛЬКО это поле —
+    // поэтому любое поле, потерянное по дороге, даёт «эффекта нет».
+    duringTemporaryAbility({ [field]: SAMPLES_WEAPON[field] }, (unit) => {
+      expect(armsOf(unit), `«${field}» не изменил ни одного оружия`).not.toBe(armsOf(baseline));
+    });
+  });
+
+  it.each(ONCE_EFFECT_FIELDS)('одноразовый эффект %s попадает в дельту', (field) => {
+    // Второй ручной перечень того же класса: `hasOnce`. Забытое поле означало бы
+    // нулевую дельту способности — и заметить это можно только по сдвигу тиров.
+    duringTemporaryAbility({ [field]: SAMPLES_ONCE[field] }, (unit) => {
+      const once = withOnceEffects(unit);
+      // Сравниваем МОДЕЛИ, а не только оружие: часть одноразовых эффектов
+      // меняет модель (FNP, потолок урона за раунд), а не ствол.
+      expect(once, `«${field}»: копия не создана — эффект не применён`).not.toBe(unit);
+      expect(modelsOf(once), `«${field}» не изменил одноразовую копию`).not.toBe(modelsOf(unit));
+    });
+  });
+
+  it.each(ONCE_AURA_FIELDS)('одноразовое поле ауры %s попадает в дельту', (field) => {
+    // Одноразовые эффекты ауры (Trajann, Shield-Captain) живут на уровне лидера,
+    // поэтому и проверяются отдельно: способность лежит в `aura`, а применяется
+    // к оружию при расчёте дельты.
+    duringTemporaryAbility({ aura: { [field]: SAMPLES_AURA[field] } }, (unit) => {
+      const once = withOnceEffects(unit);
+      expect(armsOf(once), `аура «${field}» не дала эффекта в одноразовой копии`).not.toBe(armsOf(unit));
+    });
+  });
+
+  it('«только рукопашное» и «всему оружию» остаются разными', () => {
+    // Проверка не только «что-то изменилось», но и КУДА попал кейворд: иначе
+    // опечатка в условии фазы сделала бы способность шире правила молча.
+    const meleeOnly = duringTemporaryAbility(
+      { meleeWeaponKeywords: ['Lethal Hits'] },
+      (unit) => unit
+    );
+    const everywhere = duringTemporaryAbility(
+      { weaponKeywordsAll: ['Lethal Hits'] },
+      (unit) => unit
+    );
+    expect(keywordsOf(meleeOnly, 'ranged').has('lethal'), 'рукопашное поле не должно достаться стволу').toBe(false);
+    expect(keywordsOf(meleeOnly, 'melee').has('lethal'), 'рукопашное поле обязательно на клинке').toBe(true);
+    expect(keywordsOf(everywhere, 'ranged').has('lethal'), 'поле «всему оружию» обязано быть и на стволе').toBe(true);
   });
 });
 

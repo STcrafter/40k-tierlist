@@ -21,7 +21,13 @@ import { parseBsDatabase } from '../bsdata/units.ts';
 import { CANONICAL_KEYWORD_NAMES, parseKeywords } from '../combat/keywords.ts';
 import { leaderDefinitionsOf } from '../tier/leaders.ts';
 import { UTILITY_CATEGORY, UTILITY_POINTS } from '../tier/utility.ts';
-import { MANUAL_ABILITIES, MANUAL_UTILITY_FLAG_IDS, type ManualAbility } from './abilities.ts';
+import {
+  MANUAL_ABILITIES,
+  MANUAL_UTILITY_FLAG_IDS,
+  ONCE_EFFECT_FIELDS,
+  WEAPON_EFFECT_FIELDS,
+  type ManualAbility,
+} from './abilities.ts';
 
 const { datasheets } = parseBsDatabase(loadBsData(bsFilesFromDir('public/BSData/wh40k-11e')));
 const entries: Array<[string, ManualAbility]> = Object.entries(MANUAL_ABILITIES);
@@ -103,8 +109,56 @@ describe('целостность ручного слоя', () => {
     expect(missing, `нет таких лидеров: ${missing.join(', ')}`).toEqual([]);
   });
 
-  it('allProfilesOn указывает на оружие, которое реально есть', () => {
-    // Совпадение идёт по ПОДСТРОКЕ имени записи снаряжения, поэтому переименование
+it('поле способности не может пропасть из разбора молча', () => {
+  // Инвариант на границе слоя и кода: любое поле `ManualAbility`, которое
+  // реально встречается в записях, должно быть либо в одной из таблиц
+  // применения, либо в списке НЕ-ПРИМЕНЯЕМЫХ ниже — то есть либо работает,
+  // либо о нём явно сказано, что оно не про оружие и не про дельту.
+  //
+  // Забытое поле не даёт ошибки компиляции (тип у него обычный), и потеря
+  // способности обнаруживалась дважды: с `meleeMortalPerWound` у Palatine и
+  // `weaponKeywordsOn` у Caladius поле было объявлено и разбиралось в коде, но
+  // не попадало в предикат, и весь блок не выполнялся. Про то, что таблица
+  // исчерпывающая по списку, заботится компилятор; этот тест ловит вторую
+  // половину — «поле есть, а в списки не занесли».
+  const handled = new Set<string>([
+    ...WEAPON_EFFECT_FIELDS,
+    ...ONCE_EFFECT_FIELDS,
+    // Поля, меняющие модель или отряд, а не оружие: их разбирает
+    // `applyManualAbilities` поштучно (fnp/save/regeneration/…).
+    'fnp',
+    'saveAtLeast',
+    'regeneration',
+    'resurrectOnceModels',
+    'damageTakenPenalty',
+    'healOnDeath',
+    'mortalDice',
+    'modelKeywords',
+    'utilityFlags',
+    'withLeader',
+    'aura',
+    'reviveModelPerRound',
+    'rerollHitOn',
+    'rerollWoundOn',
+    'rerollPhase',
+    // Присоединение лидера: правило живёт в leaders.ts, а не в бою отряда.
+    'meleeMortalPerWoundOnly',
+    // Профили оружия отбираются до применения способностей (adaptUnit).
+    'allProfilesOn',
+  ]);
+  const used = new Set<string>();
+  for (const [, ability] of entries) {
+    for (const field of Object.keys(ability)) used.add(field);
+  }
+  const orphanFields = [...used].filter((field) => !handled.has(field));
+  expect(
+    orphanFields,
+    `эти поля встречаются в слое, но нигде не перечислены как применяемые: ${orphanFields.join(', ')}`
+  ).toEqual([]);
+});
+
+it('allProfilesOn указывает на оружие, которое реально есть', () => {
+  // Совпадение идёт по ПОДСТРОКЕ имени записи снаряжения, поэтому переименование
     // в BSData обрывает правило молча: способность просто исчезнет из отряда,
     // а адаптер вернётся к выбору одного профиля. Проверяем, что предмет найден.
     const missing: string[] = [];

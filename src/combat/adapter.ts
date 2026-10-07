@@ -24,7 +24,13 @@
 import { diceMean, parseDice } from './dice.ts';
 import { parseKeywords } from './keywords.ts';
 import { pointsFor } from '../bsdata/points.ts';
-import { manualAbilityOf, applyAuraToModels } from '../manual/abilities.ts';
+import {
+  manualAbilityOf,
+  applyAuraToModels,
+  WEAPON_EFFECT_FIELDS,
+  type ManualAbility,
+  type WeaponEffectField,
+} from '../manual/abilities.ts';
 import { applyKaTah, hasMartialKatah } from '../manual/katah.ts';
 import type {
   BsDatasheet,
@@ -580,6 +586,96 @@ export function adaptUnit(datasheet: BsDatasheet, options: AdaptOptions = {}): A
 }
 
 /**
+ * ТАБЛИЦА применения оружие-полей ручного слоя — единственный перечень.
+ *
+ * Тип таблицы исчерпывающий по `WEAPON_EFFECT_FIELDS`, то есть забытое поле —
+ * ошибка компиляции, а не молчание. Раньше то же перечисление жило дважды
+ * (предикат `needsWeapons` и разбор ниже по коду), и класс поломки срабатывал
+ * дважды: с `meleeMortalPerWound` у Palatine и с `weaponKeywordsOn` у Caladius —
+ * во втором случае поле было объявлено и обрабатывалось ниже, но в предикат не
+ * попало, и весь блок не выполнялся.
+ *
+ * Порядок значим: цепочка идёт в порядке `WEAPON_EFFECT_FIELDS`, и каждая
+ * следующая видит кейворды, добавленные предыдущей. Все эффекты на `keywords`
+ * снимают дубли по имени, поэтому результат не зависит от того, в каком порядке
+ * их объявили внутри одного списка.
+ *
+ * Эффект, который к оружию не относится, возвращает оружие без изменений:
+ * возврат по ссылке экономит аллокации на 1093 юнитах.
+ */
+const WEAPON_EFFECTS: {
+  [K in WeaponEffectField]: (weapon: CombatWeapon, ability: ManualAbility) => CombatWeapon;
+} = {
+  // Daemonifuge: +1 мортида, но только своей фазой — про стрельбу не должна
+  // висеть на клинке, который всё равно стрелять не может.
+  mortalDamageBonus: (weapon, ability) => {
+    const bonus = ability.mortalDamageBonus;
+    if (bonus === undefined || bonus.phase !== weapon.kind) return weapon;
+    return { ...weapon, mortalDamageBonus: { ...bonus } };
+  },
+  // Palatine: мортида за обычное ранение в рукопашной, а не за критическое —
+  // поэтому это отдельное поле от mortalDamageBonus.
+  meleeMortalPerWound: (weapon, ability) => {
+    if (ability.meleeMortalPerWound === undefined || weapon.kind !== 'melee') return weapon;
+    return { ...weapon, mortalPerWound: { amount: ability.meleeMortalPerWound, phase: 'melee' } };
+  },
+  // Arco-Flagellants: +2 атаки всему оружию.
+  extraAttacks: (weapon, ability) =>
+    ability.extraAttacks === undefined || weapon.attacks === null
+      ? weapon
+      : {
+          ...weapon,
+          attacks: { ...weapon.attacks, count: weapon.attacks.count + ability.extraAttacks },
+        },
+  // Paragon Warsuits: улучшение против монстров/техники. Переносится на оружие
+  // кейвордом: условие на цель проверяется в rules.ts по кейвордам защитника.
+  antiBonus: (weapon, ability) =>
+    ability.antiBonus === undefined
+      ? weapon
+      : { ...weapon, keywords: withAntiBonus(weapon.keywords, ability.antiBonus) },
+  // Zephyrim: кейворды только на рукопашном оружии.
+  meleeWeaponKeywords: (weapon, ability) =>
+    addKeywords(weapon, ability.meleeWeaponKeywords, weapon.kind === 'melee'),
+  // Slayers of Tyrants: способность без ограничения фазой, кейворд достаётся и
+  // стволу, и клинку.
+  weaponKeywordsAll: (weapon, ability) => addKeywords(weapon, ability.weaponKeywordsAll, true),
+  // Caladius: таргетинг по имени — у него три ствола, а Lethal Hits получают
+  // только два. Сравнение без учёта регистра: в BSData имена стволов пишутся с
+  // заглавной, а в правиле — со строчной.
+  weaponKeywordsOn: (weapon, ability) => {
+    for (const rule of ability.weaponKeywordsOn ?? []) {
+      if (!weapon.name.toLowerCase().includes(rule.weapon.toLowerCase())) continue;
+      const patched = addKeywords(weapon, rule.keywords, true);
+      if (patched !== weapon) return patched;
+    }
+    return weapon;
+  },
+};
+
+/** Есть ли у способности хоть одно оружие-эффект: дешёвый выход без map. */
+function needsWeapons(ability: ManualAbility): boolean {
+  return WEAPON_EFFECT_FIELDS.some((field) => ability[field] !== undefined);
+}
+
+/** Прогоняет оружие через всю цепочку эффектов способности. */
+function applyWeaponEffects(weapon: CombatWeapon, ability: ManualAbility): CombatWeapon {
+  let next = weapon;
+  for (const field of WEAPON_EFFECT_FIELDS) {
+    next = WEAPON_EFFECTS[field](next, ability);
+  }
+  return next;
+}
+
+/** Добавляет кейворды к оружию, если условие `when` и таких ещё не было. */
+function addKeywords(weapon: CombatWeapon, raw: string[] | undefined, when: boolean): CombatWeapon {
+  if (!when || raw === undefined || raw.length === 0) return weapon;
+  const extra = parseKeywords(raw).filter(
+    (keyword) => !weapon.keywords.some((existing) => existing.name === keyword.name)
+  );
+  return extra.length === 0 ? weapon : { ...weapon, keywords: [...weapon.keywords, ...extra] };
+}
+
+/**
  * Накладывает ручной слой способностей (src/manual/abilities.ts) на готовый
  * боевой отряд.
  *
@@ -608,74 +704,10 @@ function applyManualAbilities(unit: CombatUnit, datasheet: BsDatasheet): CombatU
     ability.aura === undefined
       ? { models: unit.models, keywords: unit.keywords }
       : applyAuraToModels(unit.models, ability.aura, unit.keywords);
-  const models = auraApplied.models.map((model) => {
-    const bonus = ability.mortalDamageBonus;
-    // FNP/атаки/сейв/кейворды в рукопашной — все причины пересобрать оружие
-    // и профиль. Полный список обязателен: проверка по неполному молча
-    // теряла эффекты. Это случилось дважды: с meleeMortalPerWound у Palatine и
-    // с weaponKeywordsOn у Caladius — во втором случае поле было объявлено,
-    // обрабатывалось ниже по коду, но сюда не попало, и весь блок не выполнялся.
-    //
-    // НОВОЕ ПОЛЕ, меняющее оружие, обязано быть добавлено и сюда, и в map ниже.
-    const needsWeapons =
-      bonus !== undefined ||
-      ability.meleeMortalPerWound !== undefined ||
-      ability.extraAttacks !== undefined ||
-      (ability.meleeWeaponKeywords ?? []).length > 0 ||
-      (ability.weaponKeywordsAll ?? []).length > 0 ||
-      (ability.weaponKeywordsOn ?? []).length > 0 ||
-      ability.antiBonus !== undefined;
-    const weapons = !needsWeapons
-      ? model.weapons
-      : model.weapons.map((weapon) => {
-            const next = { ...weapon };
-            if (bonus !== undefined) {
-              // Бонус вешается только на оружие своей фазы: способность
-              // Daemonifuge про стрельбу не должна висеть на клинке.
-              if (bonus.phase === weapon.kind) next.mortalDamageBonus = { ...bonus };
-            }
-            if (ability.meleeMortalPerWound !== undefined && weapon.kind === 'melee') {
-              // Palatine: мортида за обычное ранение в рукопашной, а не за
-              // критическое — поэтому это отдельное поле от mortalDamageBonus.
-              next.mortalPerWound = { amount: ability.meleeMortalPerWound, phase: 'melee' };
-            }
-            if (ability.extraAttacks !== undefined && weapon.attacks !== null) {
-              // Arco-Flagellants: +2 атаки всему оружию.
-              next.attacks = { ...weapon.attacks, count: weapon.attacks.count + ability.extraAttacks };
-            }
-            if (ability.antiBonus !== undefined) {
-              // Paragon Warsuits: улучшение против монстров/техники. Переносится
-              // на оружие кейвордом: условие на цель проверяется в rules.ts.
-              next.keywords = withAntiBonus(next.keywords, ability.antiBonus);
-            }
-            if (weapon.kind === 'melee' && (ability.meleeWeaponKeywords ?? []).length > 0) {
-              // Zephyrim: кейворды только на рукопашном оружии.
-              const extra = parseKeywords(ability.meleeWeaponKeywords!).filter(
-                (keyword) => !weapon.keywords.some((existing) => existing.name === keyword.name)
-              );
-              if (extra.length > 0) next.keywords = [...next.keywords, ...extra];
-            }
-            if ((ability.weaponKeywordsAll ?? []).length > 0) {
-              // Способность без ограничения фазой: кейворд достаётся и стволу, и
-              // клинку (Slayers of Tyrants у Allarus Custodians).
-              const extra = parseKeywords(ability.weaponKeywordsAll!).filter(
-                (keyword) => !weapon.keywords.some((existing) => existing.name === keyword.name)
-              );
-              if (extra.length > 0) next.keywords = [...next.keywords, ...extra];
-            }
-            for (const rule of ability.weaponKeywordsOn ?? []) {
-              // Таргетинг по имени: у Caladius три ствола, а Lethal Hits получают
-              // только два. Сравнение без учёта регистра — в BSData имена стволов
-              // пишутся с заглавной, а в правиле — со строчной.
-              const target = weapon.name.toLowerCase().includes(rule.weapon.toLowerCase());
-              if (!target) continue;
-              const extra = parseKeywords(rule.keywords).filter(
-                (keyword) => !weapon.keywords.some((existing) => existing.name === keyword.name)
-              );
-              if (extra.length > 0) next.keywords = [...next.keywords, ...extra];
-            }
-            return next;
-          });
+const models = auraApplied.models.map((model) => {
+    const weapons = needsWeapons(ability)
+      ? model.weapons.map((weapon) => applyWeaponEffects(weapon, ability))
+      : model.weapons;
     const next: CombatModel = { ...model, weapons };
     // FNP из ручного слоя (Arco-Flagellants, Penitent Engines): в BSData его
     // нет, он идёт от способности. Уже имеющийся FNP не ухудшается.
