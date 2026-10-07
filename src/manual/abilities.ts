@@ -1837,15 +1837,29 @@ function addKeywords(weapon: CombatWeapon, raw: string[] | undefined, when: bool
  * её применение — последний шаг, и решение о нём принимает вызывающий.
  */
 export function applyAbilityToUnit(unit: CombatUnit, ability: ManualAbility | null): CombatUnit {
-  if (ability === null) return unit;
+  // Сначала применяем бонусы по кейвордам даташита (TOWERING, SUPER_HEAVY_WALKER)
+  // ко ВСЕМ юнитам из BSData, независимо от наличия ручной способности.
+  const modelsWithKeywordBonuses = unit.models.map((model) => {
+    const next: CombatModel = { ...model };
+    // Towering: +1 к попаданию в дальнобойной фазе
+    if (model.keywords.includes('TOWERING')) {
+      next.rangedToHit = (next.rangedToHit ?? 0) + 1;
+    }
+    return next;
+  });
+
+  // Если ручной способности нет, возвращаем юнит с кейворд-бонусами.
+  if (ability === null) {
+    return { ...unit, models: modelsWithKeywordBonuses };
+  }
 
   // Аура накладывается на собственные модели лидера: способности Sororitas
   // действуют «себе и юниту», и половина (себе) достаётся тут, вторая — при
   // присоединении лидера (см. leaders.ts).
   const auraApplied =
     ability.aura === undefined
-      ? { models: unit.models, keywords: unit.keywords }
-      : applyAuraToModels(unit.models, ability.aura, unit.keywords);
+      ? { models: modelsWithKeywordBonuses, keywords: unit.keywords }
+      : applyAuraToModels(modelsWithKeywordBonuses, ability.aura, unit.keywords);
 const models = auraApplied.models.map((model) => {
     const weapons = needsWeapons(ability)
       ? model.weapons.map((weapon) => applyWeaponEffects(weapon, ability))

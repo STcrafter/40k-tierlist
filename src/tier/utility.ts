@@ -518,15 +518,19 @@ export function detectUtilityFlags(datasheet: BsDatasheet): UtilityFlag[] {
      add('Screening', 'не даёт врагу вступить в ближний бой рядом');
    }
 
-   // --- Super-Heavy Walker: +1 утилити для всех юнитов с кейвордом SUPER_HEAVY_WALKER ---
-   if (keywords.includes('super_heavy_walker')) {
-     add('Super_Heavy_Walker_Bonus', 'кейворд SUPER_HEAVY_WALKER: +1 утилити');
-   }
+// --- Super-Heavy Walker: +1 утилити для титанических/монструозных ходоков ---
+    // В BSData это кейворды Walker + (Titanic | Monster).
+    const isSuperHeavyWalker =
+      keywords.includes('walker') && (keywords.includes('titanic') || keywords.includes('monster'));
+    if (isSuperHeavyWalker) {
+      add('Super_Heavy_Walker_Bonus', 'Super-Heavy Walker (Walker + Titanic/Monster): +1 утилити');
+    }
 
-   // --- Towering: +1 к попаданию в дальнобойной фазе для всех моделей с кейвордом TOWERING ---
-   if (keywords.includes('towering')) {
-     add('Towering_Ranged_ToHit', 'кейворд TOWERING: +1 к попаданию в дальнобойной фазе');
-   }
+    // --- Towering: +1 утилити для всех юнитов с кейвордом TOWERING ---
+    // Боевой бонус (+1 к попаданию в стрельбе) применяется в applyAbilityToUnit.
+    if (keywords.includes('towering')) {
+      add('Towering_Ranged_ToHit', 'кейворд TOWERING: +1 утилити');
+    }
 
    // --- Транспорт. Перевозка отрядов: внебоевая ценность, влияющая на бой сильнее
   // OC и скорости, поэтому стратегическая, а не маркер архетипа. Кейворд структурный
