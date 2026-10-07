@@ -80,8 +80,16 @@ export interface CombatWeapon {
   mortalPerWound?: { amount: number; phase: 'ranged' | 'melee' };
 }
 
-/** Область действия Feel No Pain. */
-export type FnpScope = 'all' | 'mortals';
+/**
+ * Область действия Feel No Pain.
+ *
+ * Определена в модуле разбора FNP (src/bsdata/fnp.ts) и переэкспортирована
+ * здесь: разбирать правило и применять его должен один и тот же модуль, иначе
+ * тип и разбор разъезжаются. Переэкспорт нужен, чтобы симуляция не тянула
+ * реэкспорт из bsdata в каждой сигнатуре.
+ */
+export type { FnpScope } from '../bsdata/fnp.ts';
+import type { FnpScope } from '../bsdata/fnp.ts';
 
 /** Одна модель отряда (уже развёрнутая до экземпляра, без поля count). */
 export interface CombatModel {

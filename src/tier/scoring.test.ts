@@ -86,9 +86,46 @@ describe('utility-флаги', () => {
   });
 
   it('FNP 6+ не путается с 5+', () => {
-    const flags = detectUtilityFlags(find('Beastboss'));
+    // Порог лежит в ИМЕНИ правила («Feel No Pain 6+»), поэтому и проверяется на
+    // юните, у которого он в имени и стоит.
+    const flags = detectUtilityFlags(find('Krieg Command Squad'));
     expect(flags.some((flag) => flag.id === 'FNP_6+')).toBe(true);
     expect(flags.some((flag) => flag.id === 'FNP_5+')).toBe(false);
+  });
+
+  it('служебная запись BSData про FNP не даёт флага', () => {
+    // Регрессия на объединение разборов: у Beastboss единственное упоминание FNP —
+    // служебная запись «This ability always takes the form **Feel No Pain X+**», то
+    // есть расшифровка механики, а не способность отряда. Разбор в боевую модель
+    // такую запись отбрасывал, а разбор полезности — нет, и флаг FNP 6+ вставал в
+    // отчёт. Счётчик ниже (13 → 10) — это ровно эти три юнита.
+    expect(detectUtilityFlags(find('Beastboss')).some((flag) => flag.id.startsWith('FNP'))).toBe(false);
+  });
+
+  it('условный FNP попадает в отчёт, но не в боевую модель', () => {
+    // Различие между двумя чтениями осознанное: игрок видит в тексте «Feel No Pain
+    // 5+» (Ethereal: «While … within 6" of a friendly … model») и вправе рассчитывать
+    // на неё, а замер идёт по свежему отряду без карты, где условие не выполнено.
+    // Таких юнитов 32 — раньше они молча теряли флаг в боевой части отчёта.
+    const sheet = find('Ethereal');
+    expect(detectUtilityFlags(sheet).some((flag) => flag.id === 'FNP_5+')).toBe(true);
+    expect(adaptUnit(sheet).unit.models[0].fnp).toBeNull();
+  });
+
+  it('FNP из ручного слоя доходит до отчёта', () => {
+    // У Arco-Flagellants в BSData FNP нет вообще — он идёт от MANUAL_ABILITIES.
+    // Разбор отчёта берёт ручной слой, иначе флаг у юнита с настоящей защитой
+    // просто пропадал бы (до объединения он ставился случайно, по тексту BSData).
+    const sheet = find('Arco-Flagellants');
+    expect(detectUtilityFlags(sheet).some((flag) => flag.id === 'FNP_5+')).toBe(true);
+  });
+
+  it('FNP, которого нет ни в BSData, ни в ручном слое, не выдумывается', () => {
+    // У Mozrog в BSData есть только служебная «Feel No Pain X+ always takes the
+    // form …»: защиты у него нет, и старый разбор всё равно ставил FNP 5+.
+    const sheet = find('Mozrog Skragbad');
+    expect(adaptUnit(sheet).unit.models[0].fnp).toBeNull();
+    expect(detectUtilityFlags(sheet).some((flag) => flag.id.startsWith('FNP'))).toBe(false);
   });
 
   it('OC 3+ даёт 1 балл', () => {
@@ -202,12 +239,15 @@ describe('аура лидера в полезности пары', () => {
     // Регрессия: в BSData «Deep Strike», «Scouts», «Stealth», «Feel No Pain 5+» —
     // это `name` правила, а структурированные данные надёжнее regex по
     // description. Сверяем счётчики с замером по базе (11-й редакции):
-    // Deep Strike 336, Scouts 104, Stealth 104, FNP 5+ 35 / 6+ 13.
+    // Deep Strike 336, Scouts 104, Stealth 104, FNP 6+ 9.
+    // FNP 6+ было 13 до объединения разборов: Beastboss, Boss Zagstruk и
+    // Hearthkyn Warriors попадали туда по служебной записи «always takes the form»
+    // и на самом деле защиты не имеют.
     const count = (predicate: (datasheet: BsDatasheet) => boolean): number =>
       datasheets.filter(predicate).length;
     expect(count((d) => detectUtilityFlags(d).some((f) => f.id === 'Deep_Strike'))).toBe(336);
     expect(count((d) => detectUtilityFlags(d).some((f) => f.id === 'Stealth'))).toBe(104);
-    expect(count((d) => detectUtilityFlags(d).some((f) => f.id === 'FNP_6+'))).toBe(13);
+    expect(count((d) => detectUtilityFlags(d).some((f) => f.id === 'FNP_6+'))).toBe(9);
   });
 
   it('правила читаются и из rules, а не только из abilities', () => {

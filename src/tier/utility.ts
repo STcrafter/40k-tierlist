@@ -19,6 +19,7 @@
  */
 
 import type { BsDatasheet, BsModelVariant, BsWargear } from '../bsdata/types.ts';
+import { fnpOf, strongerFnp } from '../bsdata/fnp.ts';
 import { parseKeywords } from '../combat/keywords.ts';
 import { manualAbilityOf, type ManualUtilityFlagId } from '../manual/abilities.ts';
 
@@ -30,6 +31,8 @@ export type UtilityFlagId =
   | 'Infiltrator'
   | 'Fly'
   | 'High_Speed'
+  | 'FNP_3+'
+  | 'FNP_4+'
   | 'FNP_5+'
   | 'FNP_6+'
   | 'Stealth'
@@ -73,6 +76,10 @@ export type UtilityCategory = 'modeled' | 'archetype' | 'strategic';
  * платить за них нельзя. `archetype`: OC 3+, Move 10" и FLY — свойства типа.
  */
 export const UTILITY_CATEGORY: Record<UtilityFlagId, UtilityCategory> = {
+  // Пороги 3+ и 4+ закрывают дыру, из-за которой разбор молча терял 41 юнит:
+  // защита у них есть, а идентификатора для неё не было.
+  'FNP_3+': 'modeled',
+  'FNP_4+': 'modeled',
   'FNP_5+': 'modeled',
   'FNP_6+': 'modeled',
   Stealth: 'modeled',
@@ -174,6 +181,12 @@ export const UTILITY_POINTS: Record<UtilityFlagId, number> = {
   Infiltrator: 3,
   Fly: 1,
   High_Speed: 1,
+  // Пороги 3+ и 4+ добавлены вместе с общим разбором FNP: в базе есть 9 юнитов с
+  // FNP 3+ и 32 с 4+, и раньше они молча не попадали в отчёт — в таблице было
+  // только 5+ и 6+. Как и остальные FNP, это 'modeled': защита уже учтена боем,
+  // поэтому в скоре флаг не участвует и цена здесь только для отчёта.
+  'FNP_3+': 2,
+  'FNP_4+': 2,
   'FNP_5+': 2,
   'FNP_6+': 2,
   Stealth: 2,
@@ -263,12 +276,6 @@ function profilesOf(datasheet: BsDatasheet): Array<{ oc: number | null; move: nu
   }));
 }
 
-/** Сколько FNP встречается в текстах способностей и правил. */
-function hasFnpAtLeast(texts: string[], value: 5 | 6): boolean {
-  const pattern = new RegExp(`feel\\s*no\\s*pain\\s*${value}\\s*\\+`, 'i');
-  return texts.some((text) => pattern.test(text));
-}
-
 /**
  * Убирает из текста отрицания, прежде чем искать способность.
  *
@@ -348,17 +355,30 @@ export function detectUtilityFlags(datasheet: BsDatasheet): UtilityFlag[] {
   const maxMove = Math.max(...profilesOf(datasheet).map((p) => p.move ?? 0));
   if (maxMove >= 10) add('High_Speed', `Move ${maxMove}"`);
 
-  // --- Feel No Pain. В BSData это правило с именем «Feel No Pain 5+», то есть
-  // порог лежит в ИМЕНИ правила, а не в его описании. Поэтому сначала смотрим
-  // имена («Feel No Pain 6+» → 6), и только затем падаем на текст.
-  const fnpFromName = names
-    .map((name) => /feel\s*no\s*pain\s*(\d)/.exec(name)?.[1])
-    .filter((value): value is string => value !== undefined)
-    .map(Number);
-  const fnp6 = fnpFromName.some((n) => n >= 6) || hasFnpAtLeast(texts, 6);
-  const fnp5 = fnp6 || fnpFromName.some((n) => n === 5) || hasFnpAtLeast(texts, 5);
-  if (fnp6) add('FNP_6+', 'Feel No Pain 6+');
-  else if (fnp5) add('FNP_5+', 'Feel No Pain 5+');
+  // --- Feel No Pain. Разбор общий с боевой моделью (src/bsdata/fnp.ts), и берётся
+  // «как на даташите»: игрок видит в тексте «Feel No Pain 5+» и вправе рассчитывать
+  // на неё, даже если выдача условная. Прежний собственный разбор не умел
+  // отбрасывать служебную запись BSData «always takes the form», из-за чего флаг
+  // вставал юнитам без защиты (Beastboss и ещё десяток — все, у кого FNP в базе
+  // есть только как расшифровка механики).
+  //
+  // Ручной слой тоже учитывается: FNP 5+ у Mozrog и Arco-Flagellants приходит из
+  // MANUAL_ABILITIES, а не из BSData, и без него флаг молча пропадал бы у юнитов,
+  // у которых защита в бою есть.
+  const manualFnp = manualAbilityOf(datasheet.id)?.fnp;
+  const fnpReading = strongerFnp(
+    fnpOf(datasheet).reported,
+    manualFnp === undefined ? null : { threshold: manualFnp.value, scope: manualFnp.scope ?? 'all' }
+  );
+  if (fnpReading !== null && fnpReading.threshold >= 6) {
+    add('FNP_6+', 'Feel No Pain 6+');
+  } else if (fnpReading !== null && fnpReading.threshold >= 5) {
+    add('FNP_5+', 'Feel No Pain 5+');
+  } else if (fnpReading !== null && fnpReading.threshold >= 4) {
+    add('FNP_4+', 'Feel No Pain 4+');
+  } else if (fnpReading !== null) {
+    add('FNP_3+', 'Feel No Pain 3+');
+  }
 
   // --- Скрытность. ---
   if (names.includes('stealth') || names.includes('penumbral puppetry')) {

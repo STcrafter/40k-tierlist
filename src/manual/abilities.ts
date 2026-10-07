@@ -18,10 +18,12 @@
 
 import { parseKeywords } from '../combat/keywords.ts';
 import { parseDice } from '../combat/dice.ts';
+import { strongerFnp, type FnpReading } from '../bsdata/fnp.ts';
 import type {
   CombatModel,
   CombatUnit,
   CombatWeapon,
+  FnpScope,
   MortalDiceEffect,
   ParsedKeyword,
 } from '../combat/types.ts';
@@ -1495,12 +1497,17 @@ const models = auraApplied.models.map((model) => {
       : model.weapons;
     const next: CombatModel = { ...model, weapons };
     // FNP из ручного слоя (Arco-Flagellants, Penitent Engines): в BSData его
-    // нет, он идёт от способности. Уже имеющийся FNP не ухудшается.
+    // нет, он идёт от способности. Уже имеющийся FNP не ухудшается — сравнение
+    // идёт через strongerFnp, потому что FNP «больше значит лучше» работает
+    // наоборот: 3+ защищает больше ранений, чем 6+.
     if (ability.fnp !== undefined) {
-      const granted = ability.fnp.value;
-      next.fnp = model.fnp === null ? granted : Math.max(model.fnp, granted);
-      // Область из способности важнее: 'mortals' ограничивает и не защищает.
-      next.fnpScope = ability.fnp.scope ?? 'all';
+      const granted: FnpReading = { threshold: ability.fnp.value, scope: ability.fnp.scope ?? 'all' };
+      const best = strongerFnp(
+        model.fnp === null ? null : { threshold: model.fnp, scope: model.fnpScope ?? 'all' },
+        granted
+      );
+      next.fnp = best === null ? null : best.threshold;
+      next.fnpScope = best === null ? model.fnpScope : best.scope;
     }
     if (ability.saveAtLeast !== undefined) {
       // Mortifiers: save 4+ из BSData ухудшается до 3+ (меньше = лучше).
@@ -1572,9 +1579,10 @@ export function applyAuraToModels(
   const next = models.map((model) => {
     const withStats: CombatModel = {
       ...model,
-      // FNP: аура не понижает уже имеющийся (берётся лучший порог).
-      fnp: aura.fnp === undefined ? model.fnp : bestFnp(model.fnp, aura.fnp),
-      fnpScope: aura.fnp === undefined ? model.fnpScope : 'all',
+      // FNP: аура не понижает уже имеющийся. Направление сравнения — через
+      // strongerFnp, а не Math.max: аура FNP 5+ не должна ухудшать модель с FNP 3+.
+      fnp: aura.fnp === undefined ? model.fnp : auraFnpThreshold(model, aura.fnp),
+      fnpScope: aura.fnp === undefined ? model.fnpScope : auraFnpScope(model, aura.fnp),
       save: pickBest(model.save, aura.saveAtLeast, false),
       invuln: pickBest(model.invuln, aura.invulnAtLeast, false),
     };
@@ -1598,10 +1606,22 @@ export function applyAuraToModels(
   return { models: next, keywords };
 }
 
-/** Лучший из двух порогов FNP; большее число = более строгий (полезнее). */
-function bestFnp(current: number | null, granted: number): number | null {
-  if (current === null) return granted;
-  return Math.max(current, granted);
+/** Аура и её FNP как одно чтение — тем же сравнением, что и у способности. */
+function auraFnpReading(model: CombatModel, granted: number): FnpReading {
+  return strongerFnp(
+    model.fnp === null ? null : { threshold: model.fnp, scope: model.fnpScope ?? 'all' },
+    { threshold: granted, scope: 'all' }
+  ) ?? { threshold: granted, scope: 'all' };
+}
+
+/** Порог FNP после ауры: аура не ухудшает уже имеющийся. */
+function auraFnpThreshold(model: CombatModel, granted: number): number {
+  return auraFnpReading(model, granted).threshold;
+}
+
+/** Область FNP после ауры — та же, что и у выбранного порога. */
+function auraFnpScope(model: CombatModel, granted: number): FnpScope {
+  return auraFnpReading(model, granted).scope;
 }
 
 /**
@@ -1695,9 +1715,12 @@ export function withOnceEffects(unit: CombatUnit): CombatUnit {
       if (ability?.onceFnp !== undefined) {
         // Living Fortress: FNP один раз до конца фазы. Постоянным его делать
         // нельзя (см. поле onceFnp) — здесь он нужен только ради дельты.
-        next.fnp = model.fnp === null ? ability.onceFnp : Math.max(model.fnp, ability.onceFnp);
-        // Область из способности важнее: 'mortals' ограничивает и не защищает.
-        next.fnpScope = 'all';
+        const best = strongerFnp(
+          model.fnp === null ? null : { threshold: model.fnp, scope: model.fnpScope ?? 'all' },
+          { threshold: ability.onceFnp, scope: 'all' }
+        ) ?? { threshold: ability.onceFnp, scope: 'all' as const };
+        next.fnp = best.threshold;
+        next.fnpScope = best.scope;
       }
       if (ability?.onceDamageCapPerRound !== undefined) {
         next.damageCapPerRound = ability.onceDamageCapPerRound;

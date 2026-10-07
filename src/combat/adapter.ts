@@ -24,6 +24,7 @@
 import { diceMean, parseDice } from './dice.ts';
 import { parseKeywords } from './keywords.ts';
 import { pointsFor } from '../bsdata/points.ts';
+import { fnpOf } from '../bsdata/fnp.ts';
 import { manualAbilityOf, applyAbilityToUnit } from '../manual/abilities.ts';
 import { applyKaTah, hasMartialKatah } from '../manual/katah.ts';
 import type {
@@ -380,69 +381,6 @@ export function toCombatWeapon(profile: BsWeaponProfile, ownerId: string): Comba
   };
 }
 
-/**
- * Постоянный Feel No Pain модели по текстам BSData, либо null.
- *
- * В базе встречаются три вида способности:
- *   «Feel No Pain 5+»                              → { 5, 'all' }
- *   «… 4+ Feel No Pain ability against mortal wounds» → { 4, 'mortals' }
- *   «… against psychic attacks»                    → не моделируется
- *
- * Важно: «against mortal wounds» — это ОГРАНИЧЕНИЕ области действия, а не
- * усиление. Такой FNP защищает только от мортидов и пропускает обычный урон.
- *
- * Отбрасываются временные и условные гранты, иначе модель получила бы
- * постоянный FNP, которого у неё нет:
- *   «unless it's unit is within 12" of … chaplains»  (Death Companion)
- *   «and an Objective Control characteristic of 15»  (Singular Purpose)
- *   «… ability instead», «until the end of the turn/phase»,
- *   ауры и способности, адресные «this model» другому отряду.
- */
-function fnpOf(datasheet: BsDatasheet): { threshold: number; scope: FnpScope } | null {
-  let best: { threshold: number; scope: FnpScope } | null = null;
-  // При равном пороге 'all' сильнее ограниченного 'mortals'; более низкий
-  // порог (4+ лучше 5+) — тоже сильнее.
-  const consider = (threshold: number, scope: FnpScope): void => {
-    if (best === null || threshold > best.threshold) {
-      best = { threshold, scope };
-    } else if (threshold === best.threshold && best.scope === 'mortals' && scope === 'all') {
-      best = { threshold, scope };
-    }
-  };
-  for (const item of [...datasheet.abilities, ...datasheet.rules]) {
-    // Служебная пара BSData: «Feel No Pain 5+» + «Feel No Pain» с текстом
-    // «This ability always takes the form **Feel No Pain X+**». Это НЕ грант
-    // отряду, а расшифровка самой механики — её нельзя трактовать как
-    // постоянный FNP для всех моделей.
-    if (/always takes the form/i.test(item.description)) continue;
-    // Порог живёт в ИМЕНИ способности («Feel No Pain 6+»), а условие
-    // области — в описании, поэтому текст собираем из обоих полей.
-    const text = `${item.name} ${item.description}`;
-    if (!/feel\s*no\s*pain/i.test(text)) continue;
-    // Отбрасываем ВРЕМЕННЫЕ и УСЛОВНЫЕ гранты: модель не должна получать
-    // постоянный FNP, которого у неё нет по умолчанию.
-    if (
-      /\bunless\b|while |at the (start|end)|until the end|instead|this turn|each turn|for a turn|in your \w+ phase|objective control characteristic|spiritual backlash|\bbound\b|unbound|empowered|whilst |as long as |while this|each time an attack/i.test(
-        text
-      )
-    ) {
-      continue;
-    }
-    // «against mortal wounds» — это ОГРАНИЧЕНИЕ области (защита только от
-    // мортидов), а не усиление. Псионические атаки мимо FNP в любом случае,
-    // поэтому «against psychic and mortal wounds» сводится к 'mortals':
-    // из двух областей мы моделируем только мортиды.
-    const mentionsMortal = /\bmortal\s+wounds?\b/i.test(text);
-    const mentionsPsychic = /\bpsychic\s+attacks?\b/i.test(text);
-    if (mentionsPsychic && !mentionsMortal) continue;
-    const scope: FnpScope = mentionsMortal ? 'mortals' : 'all';
-    for (const match of text.matchAll(/feel\s*no\s*pain\s*(\d)\s*\*?\+/gi)) {
-      consider(Number(match[1]), scope);
-    }
-  }
-  return best;
-}
-
 /** Есть ли у отряда Stealth (в BSData это способность, а не кейворд даташита). */
 function hasStealth(datasheet: BsDatasheet): boolean {
   if (datasheet.keywords.some((keyword) => keyword.trim().toLowerCase() === 'stealth')) return true;
@@ -506,7 +444,7 @@ export function adaptUnit(datasheet: BsDatasheet, options: AdaptOptions = {}): A
   // Stealth в BSData — способность, а не кейворд, но бой считает её через
   // кейворды цели, поэтому добавляем как STEALTH в список отряда.
   if (hasStealth(datasheet) && !unitKeywords.includes('STEALTH')) unitKeywords.push('STEALTH');
-  const fnp = fnpOf(datasheet);
+  const fnp = fnpOf(datasheet).permanent;
   // Способность «стреляет всеми профилями» (Nazdreg) нужна ДО сборки оружия:
   // выбор одного профиля происходит в selectWeaponProfiles, и после сборки
   // отряда двух отброшенных стволов уже не вернуть.
