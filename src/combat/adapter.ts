@@ -160,6 +160,17 @@ function profileValue(profile: BsWeaponProfile): number {
 }
 
 /**
+ * Имя записи снаряжения, которое применяет ВСЕ свои профили за один ход.
+ *
+ * Совпадение по подстроке без учёта регистра — тем же приёмом, что и
+ * `weaponKeywordsOn`. Поле приходит из ручного слоя (см. `allProfilesOn`).
+ */
+function usesAllProfiles(itemName: string, allProfiles: readonly string[]): boolean {
+  const lower = itemName.toLowerCase();
+  return allProfiles.some((needle) => lower.includes(needle.toLowerCase()));
+}
+
+/**
  * Профили режима для одной записи снаряжения — по ОДНОМУ лучшему на каждый вид.
  *
  * Запись — одно оружие, но у неё бывает НЕСКОЛЬКО профилей, и они не всегда
@@ -173,13 +184,26 @@ function profileValue(profile: BsWeaponProfile): number {
  * Поэтому: внутри каждого вида берётся профиль с наибольшей ожидаемой
  * ценностью, а сами виды не схлопываются. При равенстве остаётся обычный
  * режим (Standard/uncharged), чтобы поведение не менялось без нужды.
+ *
+ * Исключение — записи из `allProfiles`: там способность разрешает применить
+ * каждый профиль, поэтому выбор одного из них был бы не приближением, а
+ * выбрасыванием стволов, которые в игре есть (Kustom Blasta X у Nazdreg).
  */
-function selectWeaponProfiles(item: BsWargear, profileIndex?: number): BsWeaponProfile[] {
+function selectWeaponProfiles(
+  item: BsWargear,
+  profileIndex?: number,
+  allProfiles: readonly string[] = []
+): BsWeaponProfile[] {
   if (item.profiles.length === 0) return [];
+  const every = usesAllProfiles(item.name, allProfiles);
   const selected: BsWeaponProfile[] = [];
   for (const kind of ['ranged', 'melee'] as const) {
     const ofKind = item.profiles.filter((profile) => profile.kind === kind);
     if (ofKind.length === 0) continue;
+    if (every) {
+      selected.push(...ofKind);
+      continue;
+    }
     const at =
       profileIndex !== undefined && ofKind.length > 1
         ? Math.min(profileIndex, ofKind.length - 1)
@@ -211,18 +235,19 @@ function weaponsOf(
   item: BsWargear,
   ownerId: string,
   choices: Record<string, number> = {},
-  profileChoices: Record<string, number> = {}
+  profileChoices: Record<string, number> = {},
+  allProfiles: readonly string[] = []
 ): CombatWeapon[] {
   if (item.kind === 'roster') return [];
   // Запись может нести профили ОБОИХ видов (ствол + клинок), поэтому берём
   // по одному лучшему на вид, а не один профиль на всю запись.
-  const weapons = selectWeaponProfiles(item, profileChoices[item.id]).map((profile) =>
+  const weapons = selectWeaponProfiles(item, profileChoices[item.id], allProfiles).map((profile) =>
     toCombatWeapon(profile, ownerId)
   );
 
   if (item.kind !== 'choice') {
     for (const child of item.nested) {
-      weapons.push(...weaponsOf(child, ownerId, choices, profileChoices));
+      weapons.push(...weaponsOf(child, ownerId, choices, profileChoices, allProfiles));
     }
     return weapons;
   }
@@ -233,7 +258,7 @@ function weaponsOf(
     ? defaultChoices(item, armed)
     : [armed[selectedIndex] ?? armed[0]].filter((value): value is BsWargear => value !== undefined);
   for (const choice of chosen) {
-    weapons.push(...weaponsOf(choice, ownerId, choices, profileChoices));
+    weapons.push(...weaponsOf(choice, ownerId, choices, profileChoices, allProfiles));
   }
   return weapons;
 }
@@ -249,21 +274,22 @@ function weaponsOfVariant(
   variant: BsModelVariant,
   includeOptional: boolean,
   choices: Record<string, number> = {},
-  profileChoices: Record<string, number> = {}
+  profileChoices: Record<string, number> = {},
+  allProfiles: readonly string[] = []
 ): CombatWeapon[] {
   const weapons: CombatWeapon[] = [];
   for (const item of variant.defaultWargear) {
-    weapons.push(...weaponsOf(item, variant.id, choices, profileChoices));
+    weapons.push(...weaponsOf(item, variant.id, choices, profileChoices, allProfiles));
   }
   if (includeOptional) {
     for (const group of variant.choiceGroups) {
       if (group.min > 0) continue;
       for (const choice of group.choices.slice(0, 1)) {
-        weapons.push(...weaponsOf(choice, variant.id, choices, profileChoices));
+        weapons.push(...weaponsOf(choice, variant.id, choices, profileChoices, allProfiles));
       }
     }
     for (const item of variant.optionalWargear) {
-      weapons.push(...weaponsOf(item, variant.id, choices, profileChoices));
+      weapons.push(...weaponsOf(item, variant.id, choices, profileChoices, allProfiles));
     }
   }
   return weapons;
@@ -463,7 +489,8 @@ function expandVariant(
   includeOptional: boolean,
   fnp: { threshold: number; scope: FnpScope } | null,
   choices: Record<string, number> = {},
-  profileChoices: Record<string, number> = {}
+  profileChoices: Record<string, number> = {},
+  allProfiles: readonly string[] = []
 ): CombatModel[] {
   const profile = variant.profile;
   // Без профиля модели (или без T/W) в бою участвовать нечем — пропускаем.
@@ -472,7 +499,7 @@ function expandVariant(
   const wounds = parseCharacteristic(profile.wounds);
   if (toughness === null || wounds === null) return [];
 
-  const weapons = weaponsOfVariant(variant, includeOptional, choices, profileChoices);
+  const weapons = weaponsOfVariant(variant, includeOptional, choices, profileChoices, allProfiles);
   const models: CombatModel[] = [];
   for (let i = 0; i < count; i += 1) {
     models.push({
@@ -509,6 +536,10 @@ export function adaptUnit(datasheet: BsDatasheet, options: AdaptOptions = {}): A
   // кейворды цели, поэтому добавляем как STEALTH в список отряда.
   if (hasStealth(datasheet) && !unitKeywords.includes('STEALTH')) unitKeywords.push('STEALTH');
   const fnp = fnpOf(datasheet);
+  // Способность «стреляет всеми профилями» (Nazdreg) нужна ДО сборки оружия:
+  // выбор одного профиля происходит в selectWeaponProfiles, и после сборки
+  // отряда двух отброшенных стволов уже не вернуть.
+  const allProfiles = manualAbilityOf(datasheet.id)?.allProfilesOn ?? [];
   const models: CombatModel[] = [];
   const counts = new Map<string, number>();
   for (const [index, group] of datasheet.modelGroups.entries()) {
@@ -527,7 +558,7 @@ export function adaptUnit(datasheet: BsDatasheet, options: AdaptOptions = {}): A
       );
       if (count <= 0) continue;
       counts.set(variant.id, (counts.get(variant.id) ?? 0) + count);
-      models.push(...expandVariant(variant, count, unitKeywords, includeOptional, fnp, choices, profileChoices));
+      models.push(...expandVariant(variant, count, unitKeywords, includeOptional, fnp, choices, profileChoices, allProfiles));
       continue;
     }
     const allocation = allocateVariants(group.variants, group, size);
@@ -535,7 +566,7 @@ export function adaptUnit(datasheet: BsDatasheet, options: AdaptOptions = {}): A
       const count = allocation.get(variant.id) ?? 0;
       if (count <= 0) continue;
       counts.set(variant.id, (counts.get(variant.id) ?? 0) + count);
-      models.push(...expandVariant(variant, count, unitKeywords, includeOptional, fnp, choices, profileChoices));
+      models.push(...expandVariant(variant, count, unitKeywords, includeOptional, fnp, choices, profileChoices, allProfiles));
     }
   }
   return {
@@ -924,11 +955,17 @@ export function loadoutVariantsOf(
    * Flash Gitz это Snazzgun (3 стрелковых профиля), тогда как записи вида
    * «ствол + клинок» имеют по одному профилю каждого вида и перебору не
    * подлежат — там и раньше правильно брался лучший профиль на вид.
+   *
+   * Записи из `allProfilesOn` исключены намеренно: там профили применяются
+   * ВСЕ сразу, поэтому «выбрать Skorcha вместо Gatler» не существует как
+   * сборка — перебор дал бы три одинаковых loadout'а с разными подписями.
    */
+  const allProfiles = manualAbilityOf(datasheet.id)?.allProfilesOn ?? [];
   const profileItems = datasheet.modelGroups
     .flatMap((group) => group.variants)
     .flatMap((variant) => variant.defaultWargear)
     .filter((item) => {
+      if (usesAllProfiles(item.name, allProfiles)) return false;
       if (item.profiles.length < 2) return false;
       const ranged = item.profiles.filter((profile) => profile.kind === 'ranged').length;
       const melee = item.profiles.filter((profile) => profile.kind === 'melee').length;

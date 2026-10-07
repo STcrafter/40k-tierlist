@@ -503,6 +503,34 @@ describe('кейворды 11-й редакции', () => {
     expect(result.weapons[0].wounds).toBe(0);
   });
 
+  it('[REROLL WOUNDS: MONSTER/VEHICLE] перебрасывает ранение только по своей цели', () => {
+    // Ключевая проверка условия на цель: переброс без проверки кейвордов
+    // защитника дал бы Mozrog (Da Bigger Dey Iz) бесплатный реролл по всей
+    // эталонной таблице целей, включая пехоту.
+    const clawed = weapon({
+      kind: 'melee',
+      skill: 2,
+      strength: 7,
+      damage: { count: 1, sides: 1, plus: 0 },
+      keywords: parseKeywords(['Reroll wounds: MONSTER/VEHICLE']),
+    });
+    // Порог ранения S7 против T8 = 5+. Порядок бросков: атака(1) → попадание(3)
+    // → ранение(1, провал) → переброс(5, попадание) → сейв(1, провал).
+    const rolls = [1, 3, 1, 5, 1];
+    const monster = unit([model({ toughness: 8, wounds: 5, save: 3, keywords: ['MONSTER'] })], [
+      'MONSTER',
+    ]);
+    const infantry = unit([model({ toughness: 8, wounds: 5, save: 3 })], ['INFANTRY']);
+    expect(simulateTrial(gunner(clawed), monster, { phase: 'melee', rng: sequence(rolls) }).weapons[0]).toMatchObject({
+      wounds: 1,
+      damage: 1,
+    });
+    // Тот же залп по пехоте: переброса нет, бросок 1 не ранит.
+    expect(
+      simulateTrial(gunner(clawed), infantry, { phase: 'melee', rng: sequence(rolls) }).weapons[0].wounds
+    ).toBe(0);
+  });
+
   it('[ANTI-VEHICLE 4+] с [DEVASTATING WOUNDS] наносит мортиды в обход сейва', () => {
     const attacker = gunner(
       weapon({

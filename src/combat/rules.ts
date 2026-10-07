@@ -178,6 +178,17 @@ export function standardRules(): CombatRules {
     rerollWounds: [
       // [TWIN-LINKED] (11-я редакция): переброс ранений, не попаданий.
       (ctx) => ctx.weapon.keywords.some((k) => k.name === 'twin-linked'),
+      /*
+       * [REROLL WOUNDS: MONSTER/VEHICLE] — переброс любого неудачного броска
+       * ранения против указанных типов цели (Da Bigger Dey Iz! у Mozrog
+       * Skragbad).
+       *
+       * Условие проверяется по кейвордам защитника, а не игнорируется: без
+       * `keywordOf` переброс работал бы по всей таблице целей и Mozrog получал
+       * бы даровой реролл по пехоте. Пустой `target` (кейворд без условия)
+       * означает «по любой цели».
+       */
+      (ctx) => keywordOf(ctx.weapon.keywords, 'wound-reroll', targetKeywordsOf(ctx)) !== null,
     ],
 
     devastatingCritWounds: [

@@ -135,6 +135,11 @@ export const UTILITY_CATEGORY: Record<UtilityFlagId, UtilityCategory> = {
   Custodes_Venatari: 'strategic',
   Custodes_Agamatus: 'strategic',
   Custodes_Vertus_Praetors: 'strategic',
+  Orks_Boss_Snikrot: 'strategic',
+  Orks_Ghazghkull_Thraka: 'strategic',
+  Orks_Mozrog_Skragbad: 'strategic',
+  Orks_Nazdreg: 'strategic',
+  Orks_Wazdakka_Gutsmek: 'strategic',
 };
 
 /** Флаги, которые реально входят в итоговый скор. */
@@ -222,6 +227,14 @@ export const UTILITY_POINTS: Record<UtilityFlagId, number> = {
   Custodes_Venatari: 3,
   Custodes_Agamatus: 2,
   Custodes_Vertus_Praetors: 2,
+  // Орки: цены заданы владельцем проекта вручную (см. MANUAL_ABILITIES).
+  // Общий разбор уже платит за Deep Strike, Infiltrators, Stealth, Da_Boss и
+  // SMOKE, поэтому в флаг попадает только неразобранная часть.
+  Orks_Boss_Snikrot: 2,
+  Orks_Ghazghkull_Thraka: 2,
+  Orks_Mozrog_Skragbad: 1,
+  Orks_Nazdreg: 2,
+  Orks_Wazdakka_Gutsmek: 2,
 };
 
 /** Потолок utility_score. */

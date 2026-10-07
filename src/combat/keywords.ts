@@ -20,6 +20,10 @@ const CANONICAL: Array<[RegExp, string]> = [
   [/^blast/, 'blast'],
   [/^cleave/, 'cleave'],
   [/^twin[- ]?linked/, 'twin-linked'],
+  // Переброс ранений с условием на цель: 'Reroll wounds: MONSTER/VEHICLE'
+  // (Da Bigger Dey Iz! у Mozrog Skragbad). Без условия — переброс любого
+  // неудачного броска ранения, как у [TWIN-LINKED].
+  [/^(re[- ]?roll|rerolls?)( (an?|any))? ?wounds?/, 'wound-reroll'],
   [/^pistol/, 'pistol'],
   [/^close[- ]?quarters/, 'close-quarters'],
   [/^heavy/, 'heavy'],
@@ -104,6 +108,32 @@ export function parseKeyword(raw: string): ParsedKeyword | null {
         .filter((part) => part !== '');
       keyword.value = parseDice(`${anti[2]}`);
     }
+  }
+
+  /*
+   * REROLL WOUNDS: MONSTER/VEHICLE — цель в условии после двоеточия.
+   *
+   * Разбор условия уже сделан выше и лежит в `condition`; здесь из него
+   * получается список целей, потому что проверять этот кейворд будут по
+   * кейвордам защитника (`keywordOf`). Форма записи совпадает с [ANTI-X Y+]:
+   * двоеточие и список через косую черту.
+   *
+   * Отрицание («non-MONSTER/VEHICLE») в цель не превращается: переброс против
+   * «не-монстров» — это условие на отсутствие кейворда, и выражать его списком
+   * целей было бы молчаливой подменой.
+   */
+  if (keyword.name === 'wound-reroll' && condition !== null && !condition.negate) {
+    keyword.target = condition.keywords;
+  }
+
+  /*
+   * «Re-roll a Wound roll OF 1» — это НЕ полный переброс, а переброс единиц,
+   * и величина выражается через `rerollWoundOn`. Здесь такой текст намеренно
+   * остаётся неканоническим именем: иначе он молча стал бы полным рероллом и
+   * удвоил бы способность. Тест целостности ручного слоя такое имя не пропустит.
+   */
+  if (keyword.name === 'wound-reroll' && /\bof\b/.test(body)) {
+    keyword.name = 'wound-reroll-of';
   }
 
   // Blast/Cleave без X = 1 доп. дайс за каждые 5 моделей.

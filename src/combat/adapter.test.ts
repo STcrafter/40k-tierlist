@@ -888,6 +888,117 @@ describe('способности кустодесов доходят до бое
   });
 });
 
+describe('ручной слой орков', () => {
+  const ork = (name: string): BsDatasheet => {
+    const found = datasheets.find((sheet) => sheet.name === name && sheet.faction === 'Orks');
+    if (!found) throw new Error(`юнит ${name} не найден среди орков`);
+    return found;
+  };
+  const of = (name: string) => adaptUnit(ork(name), { size: 'min' }).unit;
+  const flagPoints = (name: string, flagId: string): number | undefined =>
+    detectUtilityFlags(ork(name)).find((flag) => flag.id === flagId)?.points;
+
+  it('utility-флаги вожаков стоят назначенных баллов', () => {
+    // Каждый флаг платит только за то, чего нет в разборе: Deep Strike,
+    // Infiltrators, Stealth, Da Boss, SMOKE и Lone Operative разбираются из
+    // данных сами. Если какой-то из них начнёт разбираться автоматически,
+    // флаг задвоится — поэтому проверка именно на цифры, а не на наличие.
+    const expected: Array<[string, string, number]> = [
+      ['Boss Snikrot', 'Orks_Boss_Snikrot', 2],
+      ['Ghazghkull Thraka', 'Orks_Ghazghkull_Thraka', 2],
+      ['Mozrog Skragbad', 'Orks_Mozrog_Skragbad', 1],
+      ['Nazdreg', 'Orks_Nazdreg', 2],
+      ['Wazdakka Gutsmek', 'Orks_Wazdakka_Gutsmek', 2],
+    ];
+    for (const [name, flagId, points] of expected) {
+      expect(flagPoints(name, flagId), `${name}: ${flagId}`).toBe(points);
+    }
+    // Zodgrod получает только боевой бонус гретчинам,utility-флага у него нет.
+    expect(detectUtilityFlags(ork('Zodgrod Wortsnagga')).some((f) => f.id.startsWith('Orks_'))).toBe(false);
+  });
+
+  it('Mozrog: полный переброс ранения по MONSTER/VEHICLE, а не по единичкам', () => {
+    // Da Bigger Dey Iz: «this unit's melee attacks that target a MONSTER/VEHICLE
+    // unit can re-roll wounds rolls». Переброс ПОЛНЫЙ, поэтому списком
+    // rerollWoundOn его выразить нельзя — в бой уходит кейворд с условием на цель.
+    const sheet = ork('Mozrog Skragbad');
+    const weapons = of('Mozrog Skragbad').models.flatMap((model) => model.weapons);
+    const rerollable = weapons.filter((weapon) =>
+      weapon.keywords.some((k) => k.name === 'wound-reroll')
+    );
+    // Способность говорит о рукопашных атаках: Thump Gun её не касается.
+    expect(rerollable.map((weapon) => weapon.kind)).toEqual(['melee', 'melee']);
+    for (const weapon of rerollable) {
+      const keyword = weapon.keywords.find((k) => k.name === 'wound-reroll');
+      expect(keyword?.target, `«${weapon.name}»: условие по цели`).toEqual(['MONSTER', 'VEHICLE']);
+    }
+    // Списков перебросов больше нет: кейворд заменил «единички», а не дополнил их.
+    expect(rerollOptionsOf(sheet.id, 'combined')).toEqual({});
+  });
+
+  it('Nazdreg: Kustom Blasta X стреляет всеми тремя профилями', () => {
+    // Адаптер по умолчанию берёт ОДИН профиль на вид, поэтому способность
+    // «стреляет всеми тремя» без ручного поля оставила бы в отряде один Gatler.
+    const ranged = of('Nazdreg')
+      .models.flatMap((model) => model.weapons)
+      .filter((weapon) => weapon.name.startsWith('Kustom Blasta X -'))
+      .map((weapon) => weapon.name);
+    expect(ranged.sort()).toEqual([
+      'Kustom Blasta X - Gatler',
+      'Kustom Blasta X - Shoota',
+      'Kustom Blasta X - Skorcha',
+    ]);
+    // Рукопашный профиль той же записи остаётся один.
+    const melee = of('Nazdreg')
+      .models.flatMap((model) => model.weapons)
+      .filter((weapon) => weapon.kind === 'melee')
+      .map((weapon) => weapon.name);
+    expect(melee.filter((name) => name === 'Kustom Blasta X')).toHaveLength(1);
+  });
+
+  it('Nazdreg: профили Blasta не перебираются как сборки снаряжения', () => {
+    // Выбор профиля у этого оружия не существует: применяются все. Перебор
+    // дал бы три одинаковых loadout'а с разными подписями (Skorcha/Gatler/…),
+    // то есть три кандидата в расчёт вместо одного.
+    expect(loadoutVariantsOf(ork('Nazdreg')).map((loadout) => loadout.name)).toEqual(['Базовый']);
+  });
+
+  it('Zodgrod: гретчины с ним получают +1 A, +1 WS и +1 S', () => {
+    const gretchin = of('Gretchin');
+    const leader = leaderDefinitionsOf(datasheets).find((item) => item.name === 'Zodgrod Wortsnagga');
+    if (!leader) throw new Error('Zodgrod Wortsnagga не найден среди лидеров');
+    const attached = attachLeaderToUnit(gretchin, leader);
+    const bodyguard = attached.models.slice(0, gretchin.models.length);
+    expect(bodyguard.length, 'телохранители на месте').toBe(gretchin.models.length);
+
+    const shivBefore = gretchin.models[0].weapons.filter((w) => w.kind === 'melee');
+    const shivAfter = bodyguard[0].weapons.filter((w) => w.kind === 'melee');
+    expect(shivBefore.length, 'нужно рукопашное оружие').toBeGreaterThan(0);
+    for (const [before, after] of shivBefore.map((weapon, i) => [weapon, shivAfter[i]] as const)) {
+      // BSData: Scavenged Shivs A1 WS5+ S2 → A2 WS4+ S3.
+      expect(after.attacks?.count).toBe((before.attacks?.count ?? 0) + 1);
+      expect(after.skill).toBe(Math.max(2, (before.skill ?? 2) - 1));
+      expect(after.strength).toBe((before.strength ?? 0) + 1);
+    }
+    // Стрелковое оружие не затрагивается: правило говорит о рукопашном.
+    const rangedBefore = gretchin.models[0].weapons.filter((w) => w.kind === 'ranged');
+    const rangedAfter = bodyguard[0].weapons.filter((w) => w.kind === 'ranged');
+    const line = (weapon: (typeof rangedBefore)[number]): string =>
+      `${weapon.name} A${weapon.attacks?.count ?? '-'} WS${weapon.skill ?? '-'} S${weapon.strength ?? '-'}`;
+    expect(rangedBefore.length, 'нужно стрелковое оружие').toBeGreaterThan(0);
+    expect(rangedAfter.map(line)).toEqual(rangedBefore.map(line));
+  });
+
+  it('без Zodgrod гретчины остаются A1 WS5+ S2', () => {
+    // Проверка на «отрицательный» случай: бонус двусторонний, поэтому у
+    // отряда без этого лидера он появляться не должен.
+    const shiv = of('Gretchin').models[0].weapons.find((weapon) => weapon.kind === 'melee');
+    expect(shiv?.attacks?.count).toBe(1);
+    expect(shiv?.skill).toBe(5);
+    expect(shiv?.strength).toBe(2);
+  });
+});
+
 describe('транспортный флаг разбирается из кейворда', () => {
   it('ставится транспорту и не ставится остальным', () => {
     const has = (name: string): boolean =>

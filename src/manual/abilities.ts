@@ -58,6 +58,11 @@ export const MANUAL_UTILITY_FLAG_IDS = [
   'Custodes_Venatari',
   'Custodes_Agamatus',
   'Custodes_Vertus_Praetors',
+  'Orks_Boss_Snikrot',
+  'Orks_Ghazghkull_Thraka',
+  'Orks_Mozrog_Skragbad',
+  'Orks_Nazdreg',
+  'Orks_Wazdakka_Gutsmek',
 ] as const;
 
 export type ManualUtilityFlagId = (typeof MANUAL_UTILITY_FLAG_IDS)[number];
@@ -278,6 +283,20 @@ export interface ManualAbility {
    */
   weaponKeywordsOn?: Array<{ weapon: string; keywords: string[] }>;
   /**
+   * Оружие, которое за один ход применяет ВСЕ свои профили (Kustom Blasta X
+   * у Nazdreg: Skorcha, Gatler и Shoota одновременно).
+   *
+   * Обычно из записи снаряжения берётся ровно один профиль на вид — «лучший»
+   * (см. `selectWeaponProfiles` в адаптере), и остальные нигде не появляются.
+   * Для этого оружия правило обратное: сделать можно выстрел каждым профилем,
+   * то есть в отряде должно оказаться три дальнобойных ствола вместо одного.
+   *
+   * Каждая строка — часть имени записи снаряжения без учёта регистра, как и в
+   * `weaponKeywordsOn`. Хрупко ровно так же: переименование в BSData оборвёт
+   * правило молча, поэтому на это есть тест (см. abilities.test.ts).
+   */
+  allProfilesOn?: string[];
+  /**
    * Одноразовые Devastating Wounds всему оружию (Sagittarum).
    *
    * В бой не идёт: живёт в дельте одноразовых эффектов, как и остальные
@@ -305,6 +324,16 @@ export interface LeaderConditional {
   leaderIds: string[] | null;
   /** Кейворды рукопашному оружию отряда (Sanctifiers: Sustained Hits 1). */
   meleeWeaponKeywords?: string[];
+  /**
+   * +N атак, +N к WS и +N силы рукопашному оружию отряда (Zodgrod Wortsnagga:
+   * «Scavenged Shivs получают +1 A, +1 WS и +1 S»).
+   *
+   * `skill` — это УЛУЧШЕНИЕ WS, а не прибавка к порогу: 5+ → 4+ при skill: 1.
+   * Знак выбран по правилам движка (`applyWeaponBonuses` в leaders.ts делает
+   * `skill − weaponSkill`), чтобы «+1 к WS» и «+1 к попаданию» нельзя было
+   * перепутать местом.
+   */
+  meleeWeaponStats?: { attacks: number; skill: number; strength: number };
   /**
    * Кейворды на МОДЕЛИ отряда, а не на оружии (Custodian Wardens с героем:
    * RESOLUTE_WILL).
@@ -1059,6 +1088,150 @@ export const MANUAL_ABILITIES: Record<string, ManualAbility> = {
   'd7cb-7d30-715b-50d2': { regeneration: 1 },
 
   // Pallas Grav-attack: способностей, которые мы моделируем, нет.
+
+  // ── Орки ──────────────────────────────────────────────────────────────────
+  // ID — из `public/BSData/wh40k-11e/Orks.json`: Boss Snikrot e651-…,
+  // Ghazghkull Thraka 4ea0-…, Mozrog Skragbad b42b-…, Nazdreg 80c4-…,
+  // Wazdakka Gutsmek 2ab7-…, Zodgrod Wortsnagga ce45-…, Gretchin de8f-….
+  //
+  // Отдельные правила орков, которые разбираются из данных, платить не нужно:
+  // Deep Strike, Infiltrators, Stealth, Da Boss (+1CP вожаку), SMOKE и
+  // Lone Operative у Mozrog/Wazdakka — всё это уже в detectUtilityFlags либо
+  // в кейвордах. Здесь только то, что разбор не достаёт.
+
+  /*
+   * Boss Snikrot: Lone Operative и «в резерв, потом обратно» каждый раунд.
+   *
+   * Infiltrators и Stealth оплачены общим разбором (Infiltrator, Stealth),
+   * поэтому вручную они не дублируются. Остаётся неразобранное: невидимость
+   * дальше 12" и невозможность целиться непрямым огнём (Lone Operative) плюс
+   * Kunnin’ Infiltrator — отряд уходит в стратегические резервы в конце фазы
+   * боя и входит обратно ingress move (Deff from the Shadows). Это не разовый
+   * ввод, а полный выход из боя и возврат в него по желанию.
+   */
+  'e651-5901-35e5-dc35': {
+    utilityFlags: [
+      {
+        id: 'Orks_Boss_Snikrot',
+        points: 2,
+        reason:
+          'Lone Operative (невидимость дальше 12", мимо непрямого огня) и уход в резерв с ingress move каждый раунд',
+      },
+    ],
+  },
+
+  /*
+   * Ghazghkull Thraka: Prophet of Da Great Waaagh!
+   *
+   * Аура «+1 к попаданию и ранению рукопашной» действует на любую дружественную
+   * ORKS-UNIT в пределах 6", то есть на весь отряд в радиусе, а не на
+   * «лидера и присоединённый юнит», как умеет LeaderAura. Подставлять вместо
+   * неё более узкую ауру значило бы заплатить не за ту способность, поэтому
+   * аура оплачена флагом целиком.
+   *
+   * «Da Boss» (+1CP вожаку) в флаг не входит: он разбирается по имени правила
+   * и уже платит 2 балла сам (Da_Boss).
+   */
+  '4ea0-6b70-c17c-bc00': {
+    utilityFlags: [
+      {
+        id: 'Orks_Ghazghkull_Thraka',
+        points: 2,
+        reason: 'Prophet of Da Great Waaagh!: +1 к попаданию и ранению рукопашной всем ORKS в 6"',
+      },
+    ],
+  },
+
+  /*
+   * Mozrog Skragbad: Da Bigger Dey Iz… — рукопашные атаки по MONSTER/VEHICLE
+   * перебрасывают ранение.
+   *
+   * Переброс ПОЛНЫЙ («can re-roll wounds rolls»), а не «единички», и с условием
+   * на цель — оба конца выражены одним кейвордом [REROLL WOUNDS:
+   * MONSTER/VEHICLE], который читает rules.ts по кейвордам защитника. Раньше
+   * здесь стояло `rerollWoundOn: [1]`: это и перебрасывало не всё, и работало
+   * по любой цели — то есть двойное приближение в плюс.
+   *
+   * Кейворд висит на рукопашном оружии (у Mozrog это Big Chompa’s Jaws и
+   * оба профиля Gutrippa), потому что способность говорит именно о рукопашных
+   * атаках, а Thump Gun её не касается.
+   *
+   * Флаг платит за то, что осталось за пределами расчёта: Beast Snagga
+   * Following (Lone Operative, пока он рядом со своими) и One Last Kill — ещё
+   * одна драка в той же фазе боя после гибели модели. Второе структурно не
+   * смоделировать: симуляция не теряет модели атакующего (см. simulateBattle),
+   * а способность срабатывает ровно на этом.
+   */
+  'b42b-ea0-38f1-6300': {
+    meleeWeaponKeywords: ['Reroll wounds: MONSTER/VEHICLE'],
+    utilityFlags: [
+      {
+        id: 'Orks_Mozrog_Skragbad',
+        points: 1,
+        reason:
+          'Beast Snagga Following (Lone Operative рядом со своими) и One Last Kill: ещё одна драка в фазе боя после смерти',
+      },
+    ],
+  },
+
+  /*
+   * Nazdreg: Kustom Blasta X стреляет всеми тремя профилями сразу (Skorcha,
+   * Gatler и Shoota), поэтому в отряде три дальнобойных ствола, а не один —
+   * см. поле allProfilesOn. В BSData этого правила нет вовсе, оно приходит
+   * руками, поэтому и перебор loadout'ов по этим профилям выключен.
+   *
+   * Флаг платит за то, что в модели не осталось: Know-wotz выдаёт
+   * присоединённым Meganobz Deep Strike и [IGNORES COVER] (у присоединённого
+   * юнита в LeaderConditional нет места для дальнобойных кейвордов), а также за
+   * Supreme Kunnin' (D6 ход в фазе противника) и снятие battle-shock.
+   */
+  '80c4-14b2-d02d-d289': {
+    allProfilesOn: ['blasta x'],
+    utilityFlags: [
+      {
+        id: 'Orks_Nazdreg',
+        points: 2,
+        reason:
+          'Know-wotz присоединённым Meganobz (Deep Strike и IGNORES COVER) и Supreme Kunnin: D6 ход в фазе противника',
+      },
+    ],
+  },
+
+  /*
+   * Wazdakka Gutsmek: Deadly Demise 6 — при гибели ЛЮБОЙ модели его отряда
+   * каждый отряд в пределах 6" получает 6 мортид. Это доска, а не урон: такой
+   * отряд снимает модели с чужих отрядов, не вступая в бой.
+   *
+   * В расчёте смоделировать нечего: симуляция не теряет модели атакующего
+   * (см. simulateBattle), а способность срабатывает именно на этом. Поэтому
+   * вся ценность идёт флагом. Smoke и Deep Strike платят отдельно, разбором.
+   */
+  '2ab7-ab71-0af4-5d39': {
+    utilityFlags: [
+      {
+        id: 'Orks_Wazdakka_Gutsmek',
+        points: 2,
+        reason: 'Deadly Demise 6: гибель модели в отряде — 6 мортид каждому отряду в 6"',
+      },
+    ],
+  },
+
+  /*
+   * Zodgrod Wortsnagga → Gretchin: Super Runts даёт присоединённым гретчинам
+   * +1 A, +1 WS и +1 S на Scavenged Shivs (Super Runts же делает их отряд
+   * riled up — это визуальный переключатель, числовой эффект не считается).
+   *
+   * Запись висит на ГРЕТЧИНЕ, а не на Zodgrod: правило двустороннее — отряд
+   * получает бонус только пока ведёт именно этот лидер. Рукопашное оружие у
+   * гретчина одно (Scavenged Shivs), поэтому «всё рукопашное» здесь точно
+   * равно «шивы», и таргетить по имени ствола не нужно.
+   */
+  'de8f-24f9-c543-92b7': {
+    withLeader: {
+      leaderIds: ['ce45-db08-3795-18a9'],
+      meleeWeaponStats: { attacks: 1, skill: 1, strength: 1 },
+    },
+  },
 
 };
 

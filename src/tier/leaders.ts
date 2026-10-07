@@ -227,7 +227,9 @@ export function attachLeaderToUnit(unit: CombatUnit, leader: LeaderDefinition): 
  * Два противоположных случая в одном месте:
  *  - Celestian Sacresants ТЕРЯЮТ 1 рану от любого лидера;
  *  - Sanctifiers с Святым Министорумом получают Sustained Hits 1 на
- *    рукопашное, а сам Министорум начинает возвращать D3 моделей за раунд.
+ *    рукопашное, а сам Министорум начинает возвращать D3 моделей за раунд;
+ *  - Gretchin с Zodgrod Wortsnagga получают +1 A, +1 WS и +1 S на рукопашное
+ *    (Super Runts), и только пока он их ведёт.
  *
  * Последнее ставится на модели ЛИДЕРА, потому что способность держится на его
  * живости: погибший Министорум ничего не возвращает.
@@ -248,13 +250,42 @@ function applyLeaderConditional(
 
   const models = unit.models.map((model) => {
     const next = { ...model };
-    if ((rule.meleeWeaponKeywords ?? []).length > 0) {
+    if (
+      (rule.meleeWeaponKeywords ?? []).length > 0 ||
+      rule.meleeWeaponStats !== undefined
+    ) {
       next.weapons = model.weapons.map((weapon) => {
         if (weapon.kind !== 'melee') return weapon;
-        const extra = parseKeywords(rule.meleeWeaponKeywords!).filter(
-          (keyword) => !weapon.keywords.some((existing) => existing.name === keyword.name)
-        );
-        return extra.length === 0 ? weapon : { ...weapon, keywords: [...weapon.keywords, ...extra] };
+        const extra = (rule.meleeWeaponKeywords ?? []).length > 0
+          ? parseKeywords(rule.meleeWeaponKeywords!).filter(
+              (keyword) => !weapon.keywords.some((existing) => existing.name === keyword.name)
+            )
+          : [];
+        // Super Runts (Zodgrod): +1 A, +1 WS, +1 S рукопашному оружию отряда.
+        // Знак у skill отрицательный по той же причине, что в applyWeaponBonuses:
+        // там `weaponSkill` — это улучшение, то есть вычитание из порога.
+        const stats = rule.meleeWeaponStats;
+        const touched =
+          extra.length > 0 ||
+          (stats !== undefined &&
+            (weapon.attacks !== null || weapon.skill !== null || weapon.strength !== null));
+        if (!touched) return weapon;
+        return {
+          ...weapon,
+          attacks:
+            stats === undefined || weapon.attacks === null
+              ? weapon.attacks
+              : { ...weapon.attacks, count: weapon.attacks.count + stats.attacks },
+          skill:
+            stats === undefined || weapon.skill === null
+              ? weapon.skill
+              : Math.max(2, weapon.skill - stats.skill),
+          strength:
+            stats === undefined || weapon.strength === null
+              ? weapon.strength
+              : weapon.strength + stats.strength,
+          keywords: extra.length === 0 ? weapon.keywords : [...weapon.keywords, ...extra],
+        };
       });
     }
     const defensive = rule.defensiveKeywords ?? [];

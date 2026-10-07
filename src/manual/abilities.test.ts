@@ -102,6 +102,31 @@ describe('целостность ручного слоя', () => {
     expect(missing, `нет таких лидеров: ${missing.join(', ')}`).toEqual([]);
   });
 
+  it('allProfilesOn указывает на оружие, которое реально есть', () => {
+    // Совпадение идёт по ПОДСТРОКЕ имени записи снаряжения, поэтому переименование
+    // в BSData обрывает правило молча: способность просто исчезнет из отряда,
+    // а адаптер вернётся к выбору одного профиля. Проверяем, что предмет найден.
+    const missing: string[] = [];
+    for (const [id, ability] of entries) {
+      const sheet = datasheets.find((item) => item.id === id);
+      if (sheet === undefined) continue;
+      const names = sheet.modelGroups
+        .flatMap((group) => group.variants)
+        .flatMap((variant) => variant.defaultWargear)
+        .map((item) => item.name.toLowerCase());
+      for (const needle of ability.allProfilesOn ?? []) {
+        if (!names.some((name) => name.includes(needle.toLowerCase()))) {
+          missing.push(`${id} · «${needle}»`);
+        }
+      }
+    }
+    expect(
+      entries.some(([, ability]) => (ability.allProfilesOn ?? []).length > 0),
+      'allProfilesOn должен кем-то использоваться'
+    ).toBe(true);
+    expect(missing, `такого оружия в даташите нет: ${missing.join(', ')}`).toEqual([]);
+  });
+
   it('у каждого utility-флага есть причина и положительные баллы', () => {
     // Флаг попадает в отчёт и в интерфейс: без причины его нечем объяснить,
     // а нулевые баллы означают «стратегической ценности нет» — то есть флаг
