@@ -147,6 +147,55 @@ export const UTILITY_CATEGORY: Record<UtilityFlagId, UtilityCategory> = {
   Orks_Mozrog_Skragbad: 'strategic',
   Orks_Nazdreg: 'strategic',
   Orks_Wazdakka_Gutsmek: 'strategic',
+  Orks_Bannernob: 'strategic',
+  Orks_Beastboss: 'strategic',
+  Orks_Beastboss_on_Squigosaur: 'strategic',
+  Orks_Big_Mek: 'strategic',
+  Orks_Big_Mek_Dakkarig: 'strategic',
+  Orks_Big_Mek_in_Mega_Armour: 'strategic',
+  Orks_Big_Mek_Shokk_Attack_Gun: 'strategic',
+  Orks_Bigboss: 'strategic',
+  Orks_Deffkilla_Wartrike: 'strategic',
+  Orks_Mek: 'strategic',
+  Orks_Painboss: 'strategic',
+  Orks_Runtherd: 'strategic',
+  Orks_Warboss: 'strategic',
+  Orks_Warboss_in_Mega_Armour: 'strategic',
+  Orks_Weirdboy: 'strategic',
+  Orks_Beast_Snagga_Boyz: 'strategic',
+  Orks_Boyz: 'strategic',
+  Orks_Breaka_Boyz: 'strategic',
+  Orks_Flash_Gitz: 'strategic',
+  Orks_Gretchin: 'strategic',
+  Orks_Kommandos: 'strategic',
+  Orks_Meganobz: 'strategic',
+  Orks_Nobz: 'strategic',
+  Orks_Stormboyz: 'strategic',
+  Orks_Tankbustas: 'strategic',
+  Orks_Deffkoptas: 'strategic',
+  Orks_Squighog_Boyz: 'strategic',
+  Orks_Warbikers: 'strategic',
+  Orks_Wartrakks: 'strategic',
+  Orks_Gargantuan_Squiggoth: 'strategic',
+  Orks_Hunta_Rig: 'strategic',
+  Orks_Kill_Rig: 'strategic',
+  Orks_Battlewagon: 'strategic',
+  Orks_Blitza_bommer: 'strategic',
+  Orks_Burna_bommer: 'strategic',
+  Orks_Dakkajet: 'strategic',
+  Orks_Deff_Dread: 'strategic',
+  Orks_Gorkanaut: 'strategic',
+  Orks_Gunwagon: 'strategic',
+  Orks_Killa_Kans: 'strategic',
+  Orks_Mek_Gunz: 'strategic',
+  Orks_Morkanaut: 'strategic',
+  Orks_Rukkatrukk_Squigbuggies: 'strategic',
+  Orks_Stompa: 'strategic',
+  Orks_Warbuggies: 'strategic',
+  Orks_Wazbom_Blastajet: 'strategic',
+  Orks_Trukk: 'strategic',
+  Super_Heavy_Walker_Bonus: 'strategic',
+  Towering_Ranged_ToHit: 'strategic',
 };
 
 /** Флаги, которые реально входят в итоговый скор. */
@@ -243,11 +292,60 @@ export const UTILITY_POINTS: Record<UtilityFlagId, number> = {
   // Орки: цены заданы владельцем проекта вручную (см. MANUAL_ABILITIES).
   // Общий разбор уже платит за Deep Strike, Infiltrators, Stealth, Da_Boss и
   // SMOKE, поэтому в флаг попадает только неразобранная часть.
-  Orks_Boss_Snikrot: 2,
+   Orks_Boss_Snikrot: 2,
   Orks_Ghazghkull_Thraka: 2,
   Orks_Mozrog_Skragbad: 1,
   Orks_Nazdreg: 2,
   Orks_Wazdakka_Gutsmek: 2,
+  Orks_Bannernob: 1,
+  Orks_Beastboss: 1,
+  Orks_Beastboss_on_Squigosaur: 2,
+  Orks_Big_Mek: 2,
+  Orks_Big_Mek_Dakkarig: 2,
+  Orks_Big_Mek_in_Mega_Armour: 1,
+  Orks_Big_Mek_Shokk_Attack_Gun: 1,
+  Orks_Bigboss: 1,
+  Orks_Deffkilla_Wartrike: 1,
+  Orks_Mek: 1,
+  Orks_Painboss: 1,
+  Orks_Runtherd: 1,
+  Orks_Warboss: 3,
+  Orks_Warboss_in_Mega_Armour: 2,
+  Orks_Weirdboy: 1,
+  Orks_Beast_Snagga_Boyz: 1,
+  Orks_Boyz: 2,
+  Orks_Breaka_Boyz: 1,
+  Orks_Flash_Gitz: 1,
+  Orks_Gretchin: 1,
+  Orks_Kommandos: 2,
+  Orks_Meganobz: 1,
+  Orks_Nobz: 1,
+  Orks_Stormboyz: 2,
+  Orks_Tankbustas: 2,
+  Orks_Deffkoptas: 1,
+  Orks_Squighog_Boyz: 1,
+  Orks_Warbikers: 1,
+  Orks_Wartrakks: 2,
+  Orks_Gargantuan_Squiggoth: 1,
+  Orks_Hunta_Rig: 1,
+  Orks_Kill_Rig: 1,
+  Orks_Battlewagon: 1,
+  Orks_Blitza_bommer: 1,
+  Orks_Burna_bommer: 1,
+  Orks_Dakkajet: 1,
+  Orks_Deff_Dread: 1,
+  Orks_Gorkanaut: 1,
+  Orks_Gunwagon: 1,
+  Orks_Killa_Kans: 1,
+  Orks_Mek_Gunz: 1,
+  Orks_Morkanaut: 1,
+  Orks_Rukkatrukk_Squigbuggies: 1,
+  Orks_Stompa: 2,
+  Orks_Warbuggies: 1,
+  Orks_Wazbom_Blastajet: 1,
+  Orks_Trukk: 1,
+  Super_Heavy_Walker_Bonus: 1,
+  Towering_Ranged_ToHit: 1,
 };
 
 /** Потолок utility_score. */
@@ -412,15 +510,25 @@ export function detectUtilityFlags(datasheet: BsDatasheet): UtilityFlag[] {
     }
   }
 
-  // --- Связывание: мешают врагу вступить в ближний бой рядом. ---
-  // Раньше Tie_up выдавался любому отряду с meleePer100 ≥ 1.0, то есть
-  // срабатывал у 60.7% набора и просто дублировал ось ближнего боя. Теперь
-  // флаг означает только настоящее «нельзя вступить в бой».
-  if (texts.some((t) => t.includes('cannot be engaged') || t.includes('cannot engage'))) {
-    add('Screening', 'не даёт врагу вступить в ближний бой рядом');
-  }
+   // --- Связывание: мешают врагу вступить в ближний бой рядом. ---
+   // Раньше Tie_up выдавался любому отряду с meleePer100 ≥ 1.0, то есть
+   // срабатывал у 60.7% набора и просто дублировал ось ближнего боя. Теперь
+   // флаг означает только настоящее «нельзя вступить в бой».
+   if (texts.some((t) => t.includes('cannot be engaged') || t.includes('cannot engage'))) {
+     add('Screening', 'не даёт врагу вступить в ближний бой рядом');
+   }
 
-  // --- Транспорт. Перевозка отрядов: внебоевая ценность, влияющая на бой сильнее
+   // --- Super-Heavy Walker: +1 утилити для всех юнитов с кейвордом SUPER_HEAVY_WALKER ---
+   if (keywords.includes('super_heavy_walker')) {
+     add('Super_Heavy_Walker_Bonus', 'кейворд SUPER_HEAVY_WALKER: +1 утилити');
+   }
+
+   // --- Towering: +1 к попаданию в дальнобойной фазе для всех моделей с кейвордом TOWERING ---
+   if (keywords.includes('towering')) {
+     add('Towering_Ranged_ToHit', 'кейворд TOWERING: +1 к попаданию в дальнобойной фазе');
+   }
+
+   // --- Транспорт. Перевозка отрядов: внебоевая ценность, влияющая на бой сильнее
   // OC и скорости, поэтому стратегическая, а не маркер архетипа. Кейворд структурный
   // и одинаков для всех фракций — в отличие Deep Strike и Scouts, которые лежат в
   // правилах, и потому требуют разбора текста.

@@ -72,6 +72,53 @@ export const MANUAL_UTILITY_FLAG_IDS = [
   'Orks_Mozrog_Skragbad',
   'Orks_Nazdreg',
   'Orks_Wazdakka_Gutsmek',
+  'Orks_Bannernob',
+  'Orks_Beastboss',
+  'Orks_Beastboss_on_Squigosaur',
+  'Orks_Big_Mek',
+  'Orks_Big_Mek_Dakkarig',
+  'Orks_Big_Mek_in_Mega_Armour',
+  'Orks_Big_Mek_Shokk_Attack_Gun',
+  'Orks_Bigboss',
+  'Orks_Deffkilla_Wartrike',
+  'Orks_Mek',
+  'Orks_Painboss',
+  'Orks_Runtherd',
+  'Orks_Warboss',
+  'Orks_Warboss_in_Mega_Armour',
+  'Orks_Weirdboy',
+  'Orks_Beast_Snagga_Boyz',
+  'Orks_Boyz',
+  'Orks_Breaka_Boyz',
+  'Orks_Flash_Gitz',
+  'Orks_Gretchin',
+  'Orks_Kommandos',
+  'Orks_Meganobz',
+  'Orks_Nobz',
+  'Orks_Stormboyz',
+  'Orks_Tankbustas',
+  'Orks_Deffkoptas',
+  'Orks_Squighog_Boyz',
+  'Orks_Warbikers',
+  'Orks_Wartrakks',
+  'Orks_Gargantuan_Squiggoth',
+  'Orks_Hunta_Rig',
+  'Orks_Kill_Rig',
+  'Orks_Battlewagon',
+  'Orks_Blitza_bommer',
+  'Orks_Burna_bommer',
+  'Orks_Dakkajet',
+  'Orks_Deff_Dread',
+  'Orks_Gorkanaut',
+  'Orks_Gunwagon',
+  'Orks_Killa_Kans',
+  'Orks_Mek_Gunz',
+  'Orks_Morkanaut',
+  'Orks_Rukkatrukk_Squigbuggies',
+  'Orks_Stompa',
+  'Orks_Warbuggies',
+  'Orks_Wazbom_Blastajet',
+  'Orks_Trukk',
 ] as const;
 
 export type ManualUtilityFlagId = (typeof MANUAL_UTILITY_FLAG_IDS)[number];
@@ -103,6 +150,9 @@ export const WEAPON_EFFECT_FIELDS = [
   'meleeWeaponKeywords',
   'weaponKeywordsAll',
   'weaponKeywordsOn',
+  'sustainedHits',
+  'meleeWeaponStats',
+  'enemyApWorsening',
 ] as const satisfies ReadonlyArray<keyof ManualAbility>;
 
 /** Имена полей, действующих ОДИН РАЗ за бой: разбираются в `withOnceEffects`. */
@@ -229,6 +279,8 @@ export interface LeaderAura {
   onceMeleeStrength?: number;
   /** Кейворд оружию лидера, действующий разово: Devastating у Canoness с ранцом. */
   onceMeleeKeywords?: string[];
+  /** Sustained Hits X: добавляет X попаданий по каждому криту (только для ауры). */
+  sustainedHits?: number;
 }
 
 export interface ManualAbility {
@@ -402,6 +454,18 @@ export interface ManualAbility {
   healOnDeath?: { chance: number; sides: number };
   /** Мортиды от бросков кубиков (Ares Gunship, Contemptor-Achillus). */
   mortalDice?: MortalDiceEffect;
+  /** Штраф к броску ранения для атакующего (Painboss: −1 к wound roll, если S > T цели). */
+  woundPenalty?: { amount: number; condition: 'attackerStrengthGreaterThanT' };
+  /** Ухудшение AP оружия атакующего (Meganobz: −1 AP при атаке по ним). */
+  enemyApWorsening?: number;
+  /** +N к попаданию в дальнобойной фазе (Towering, Warboss). */
+  rangedToHit?: number;
+  /** +N к силе и атакам в рукопашной (Stormboyz, Warbikers). */
+  meleeWeaponStats?: { attacks: number; skill: number; strength: number };
+  /** Добавляет кейворд SUSTAINED HITS X ко всему оружию юнита (Riled Up). */
+  sustainedHits?: number;
+  /** Утилити-бонус за кейворд (Super-Heavy Walker, Towering). */
+  keywordUtility?: { keyword: string; utilityFlagId: string; points: number };
 }
 
 /** Что юнит получает или теряет при присоединении лидера. */
@@ -1320,9 +1384,281 @@ export const MANUAL_ABILITIES: Record<string, ManualAbility> = {
     },
   },
 
-};
+  // ── Орки (дополнение) ───────────────────────────────────────────────────────────────
+  // ID орков из `public/BSData/wh40k-11e/Orks.json` и tierlist.json.
+  // Утилити-бонус: +1 за боевые навыки, +2 за значительные способности.
+  // Кейворд Super-Heavy Walker и Towering добавляются вручную через keywordUtility.
 
-/** Ручные способности юнита; пустой объект, если юнита в слое нет. */
+  // Bannernob: +1 utility
+  '3b35-92f5-bd1a-af8d': {
+    utilityFlags: [{ id: 'Orks_Bannernob', reason: '+1 утилити' }],
+  },
+
+  // beastboss: +1 to hit себе и присоединённому юниту
+  '5a5d-c5a4-39b8-4a3f': {
+    aura: { toHit: 1 },
+    utilityFlags: [{ id: 'Orks_Beastboss', reason: '+1 к попаданию' }],
+  },
+
+  // Beastboss on Squigosaur: +2 утилити
+  'a8b7-351-d911-a4d6': {
+    utilityFlags: [{ id: 'Orks_Beastboss_on_Squigosaur', reason: '+2 утилити' }],
+  },
+
+  // Big Mek: +2 утилити, при Riled Up: sustains 1 (сам + bodyguard)
+  'fbee-427a-1c46-f621': {
+    aura: { sustainedHits: 1 },
+    utilityFlags: [{ id: 'Orks_Big_Mek', reason: '+2 утилити, Sustained Hits 1 при Riled Up' }],
+  },
+
+  // Big Mek Dakkarig: при Riled Up: sustains 1; Blitzkannon +6 атак vs non-MONSTER/VEHICLE
+  '78a7-cf35-aa8d-c420': {
+    weaponKeywordsOn: [{ weapon: 'blitzkannon', keywords: ['Sustained Hits 1', '+6 Atts vs non-MONSTER/VEHICLE'] }],
+    utilityFlags: [{ id: 'Orks_Big_Mek_Dakkarig', reason: 'Sustained Hits 1 при Riled Up; Blitzkannon +6 атак vs не MONSTER/VEHICLE' }],
+  },
+
+  // Big Mek in Mega Armour: +1 утилити, при Riled Up sustains 1 (сам + bodyguard), разово лечит 3 раны
+  '95e9-6da3-5e75-2566': {
+    aura: { sustainedHits: 1 },
+    utilityFlags: [{ id: 'Orks_Big_Mek_in_Mega_Armour', reason: '+1 утилити, Sustained Hits 1 при Riled Up, разово лечит 3 раны' }],
+  },
+
+  // Big Mek with Shokk Attack Gun: +1 утилити, при Riled Up sustains 1
+  'dde2-ca42-e3bc-2ef6': {
+    aura: { sustainedHits: 1 },
+    utilityFlags: [{ id: 'Orks_Big_Mek_Shokk_Attack_Gun', reason: '+1 утилити, Sustained Hits 1 при Riled Up' }],
+  },
+
+  // Bigboss: +1 to hit в мили себе и bodyguard
+  '181e-be55-d9c6-2b69': {
+    aura: { toHit: 1 },
+    utilityFlags: [{ id: 'Orks_Bigboss', reason: '+1 к попаданию в мили' }],
+  },
+
+  // Deffkilla Wartrike: +1 утилити
+  'ca85-1d18-dc30-d64e': {
+    utilityFlags: [{ id: 'Orks_Deffkilla_Wartrike', reason: '+1 утилити' }],
+  },
+
+  // Mek: +1 утилити
+  '3b2-8c11-616a-1005': {
+    utilityFlags: [{ id: 'Orks_Mek', reason: '+1 утилити' }],
+  },
+
+  // Painboss: Attacks that target this unit with S > T have -1 to wound rolls
+  'a74a-107a-e2ac-7e4c': {
+    woundPenalty: { amount: 1, condition: 'attackerStrengthGreaterThanT' },
+    utilityFlags: [{ id: 'Orks_Painboss', reason: '−1 к wound roll при S атакующего > T этого юнита' }],
+  },
+
+  // Runtherd: Ничего
+  'f401-c74a-cca8-5de3': {
+    utilityFlags: [{ id: 'Orks_Runtherd', reason: 'без особенных способностей' }],
+  },
+
+  // Warboss: +3 A, +2 S на мили, разово +1 to hit в рейндже
+  '2efc-c4b3-2ecc-5a37': {
+    aura: { extraAttacks: 3, toHit: 1, onceMeleeStrength: 2 },
+    utilityFlags: [{ id: 'Orks_Warboss', reason: '+3 A, +2 S на мили, разово +1 к попаданию в рейндже' }],
+  },
+
+  // Warboss in Mega Armour: d6 мили на каждую модель, на 3+ 1 мортида
+  '494b-11ce-5af-5b50': {
+    aura: { onceMeleeAttacks: 6, onceMeleeKeywords: ['Devastating Wounds'] },
+    utilityFlags: [{ id: 'Orks_Warboss_in_Mega_Armour', reason: 'd6 мили на каждую модель, на 3+ 1 мортида' }],
+  },
+
+  // Weirdboy: ре‑ролл ту вунд 1 на мили себе и bodyguard
+  '260d-9ce4-ea1f-a957': {
+    rerollWoundOn: [1],
+    utilityFlags: [{ id: 'Orks_Weirdboy', reason: 're‑ролл 1 на wound в мили' }],
+  },
+
+  // Beast Snagga Boyz: +1 утилити
+  'b7c3-d00e-daf2-76fb': {
+    utilityFlags: [{ id: 'Orks_Beast_Snagga_Boyz', reason: '+1 утилити' }],
+  },
+
+  // Boyz: lethal hits на мили, разово +1 to hit в рейндже
+  'e3b1-1240-2476-cd86': {
+    meleeWeaponKeywords: ['Lethal Hits'],
+    utilityFlags: [{ id: 'Orks_Boyz', reason: 'Lethal Hits на мили, разово +1 к попаданию' }],
+  },
+
+  // Breaka Boyz: +3 морталки в любую фазу (раз в обе), +1 утилити
+  'a596-3d99-257e-0ea1': {
+    utilityFlags: [{ id: 'Orks_Breaka_Boyz', reason: '+3 морталки (раз в обе фазы), +1 утилити' }],
+  },
+
+  // Flash Gitz: +1 AP на рейндже атаки
+  '1de9-b138-28a1-9c4b': {
+    enemyApWorsening: 1,
+    utilityFlags: [{ id: 'Orks_Flash_Gitz', reason: '+1 AP на дальнобойные атаки' }],
+  },
+
+  // Gretchin: +1 утилити (standalone, not with Zodgrod)
+  'de8f-24f9-c543-92b7': {
+    withLeader: {
+      leaderIds: ['ce45-db08-3795-18a9'],
+      meleeWeaponStats: { attacks: 1, skill: 1, strength: 1 },
+    },
+    utilityFlags: [{ id: 'Orks_Gretchin', reason: '+1 утилити' }],
+  },
+
+  // Kommandos: +2 утилити, +1,5 морталки как у Breaka Boyz
+  '303-267f-e45c-6aa9': {
+    utilityFlags: [{ id: 'Orks_Kommandos', reason: '+2 утилити, +1.5 морталки' }],
+  },
+
+  // Meganobz: атаки по нему -1 AP, при Riled Up +1 to hit в мили
+  '7067-34f4-5272-e05f': {
+    enemyApWorsening: 1,
+    aura: { toHit: 1 },
+    utilityFlags: [{ id: 'Orks_Meganobz', reason: '-1 AP к атакам, +1 к попаданию при Riled Up' }],
+  },
+
+  // Nobz: разово +1 to hit в рейндже
+  'b16a-7132-3f8a-abe5': {
+    aura: { toHit: 1 },
+    utilityFlags: [{ id: 'Orks_Nobz', reason: 'разово +1 к попаданию в рейндже' }],
+  },
+
+  // Stormboyz: +1 A и S на мили
+  '4adf-8249-c6b2-dd4f': {
+    meleeWeaponStats: { attacks: 1, skill: 0, strength: 1 },
+    utilityFlags: [{ id: 'Orks_Stormboyz', reason: '+1 A и S на рукопашное' }],
+  },
+
+  // Tankbustas: +1 утилити, +3 морталки, +1 AP и Lethal Hits на рейндже
+  'dadc-d370-ef10-853c': {
+    meleeWeaponKeywords: ['Lethal Hits'],
+    enemyApWorsening: 1,
+    utilityFlags: [{ id: 'Orks_Tankbustas', reason: '+1 утилити, +3 морталки, +1 AP, Lethal Hits на рейндже' }],
+  },
+
+  // Deffkoptas: +1 to hit в рейндже, +1 утилити
+  '2d6e-aa3b-c28c-5ef0': {
+    aura: { toHit: 1 },
+    utilityFlags: [{ id: 'Orks_Deffkoptas', reason: '+1 к попаданию в рейндже, +1 утилити' }],
+  },
+
+  // Squighog Boyz: +1 D на мили, +1,5 морталки
+  '6a83-8e1f-63ef-50c3': {
+    meleeWeaponStats: { attacks: 0, skill: 0, strength: 1 },
+    utilityFlags: [{ id: 'Orks_Squighog_Boyz', reason: '+1 D на мили, +1.5 морталки' }],
+  },
+
+  // Warbikers: +1 S и D на мили
+  '83a7-ea20-ed9-d14a': {
+    meleeWeaponStats: { attacks: 0, skill: 0, strength: 1 },
+    utilityFlags: [{ id: 'Orks_Warbikers', reason: '+1 S и D на рукопашное' }],
+  },
+
+  // Wartrakks: +2 утилити
+  '9e51-a749-18ba-2ea4': {
+    utilityFlags: [{ id: 'Orks_Wartrakks', reason: '+2 утилити' }],
+  },
+
+  // Gargantuan Squiggoth: +1 утилити
+  'aeed-c6d9-4b90-376a': {
+    utilityFlags: [{ id: 'Orks_Gargantuan_Squiggoth', reason: '+1 утилити' }],
+  },
+
+  // Hunta Rig: +1 утилити
+  '70de-d621-8465-f7b8': {
+    utilityFlags: [{ id: 'Orks_Hunta_Rig', reason: '+1 утилити' }],
+  },
+
+  // Kill Rig: +1 утилити, Lethal Hits на мили
+  'eb21-c97f-2d9a-b363': {
+    aura: { onceMeleeKeywords: ['Lethal Hits'] },
+    utilityFlags: [{ id: 'Orks_Kill_Rig', reason: '+1 утилити, Lethal Hits на рукопашное' }],
+  },
+
+  // Battlewagon: -1 D на рейндже атаки против него
+  '306a-b2ac-aaf1-9a7c': {
+    damageTakenPenalty: -1,
+    utilityFlags: [{ id: 'Orks_Battlewagon', reason: '-1 урона к атакам против него' }],
+  },
+
+  // Blitza-bommer: +3 морталки (раз в обе)
+  'a20-d3af-2c3e-3267': {
+    utilityFlags: [{ id: 'Orks_Blitza_bommer', reason: '+3 морталки (раз в обе фазы)' }],
+  },
+
+  // Burna-bommer: +2 морталки против non-MONSTER/VEHICLE (раз в обе)
+  '93a1-386a-e40f-472f': {
+    utilityFlags: [{ id: 'Orks_Burna_bommer', reason: '+2 морталки против не-MONSTER/VEHICLE' }],
+  },
+
+  // Dakkajet: +1 to hit в рейндже
+  '3b42-b41f-d11e-bdca': {
+    aura: { toHit: 1 },
+    utilityFlags: [{ id: 'Orks_Dakkajet', reason: '+1 к попаданию в рейндже' }],
+  },
+
+  // Deff Dread: -1 урона себе
+  '1594-b986-e77e-d89d': {
+    damageTakenPenalty: 1,
+    utilityFlags: [{ id: 'Orks_Deff_Dread', reason: '-1 урона получаемого моделью' }],
+  },
+
+  // Gorkanaut: ре‑ролл 1 на попадание в мили, +1 утилити
+  '56d6-a7fc-fa08-4345': {
+    rerollHitOn: [1],
+    utilityFlags: [{ id: 'Orks_Gorkanaut', reason: 're‑ролл 1 на попадание в мили, +1 утилити' }],
+  },
+
+  // Gunwagon: ре‑ролл 1 на попадание в рейндже
+  '8bfa-c22a-ae4e-52e8': {
+    rerollHitOn: [1],
+    utilityFlags: [{ id: 'Orks_Gunwagon', reason: 're‑ролл 1 на попадание в рейндже' }],
+  },
+
+  // Killa Kans: если T цели < 7, +1 to hit
+  '8c36-c946-2e0f-f648': {
+    aura: { toHit: 1 },
+    utilityFlags: [{ id: 'Orks_Killa_Kans', reason: '+1 к попаданию если T цели < 7' }],
+  },
+
+  // Mek Gunz: +1 утилити
+  'b37a-8686-db2c-8cbd': {
+    utilityFlags: [{ id: 'Orks_Mek_Gunz', reason: '+1 утилити' }],
+  },
+
+  // Morkanaut: ре‑ролл 1 на попадание в рейндже, +1 утилити
+  '9ee5-2b39-de06-dda6': {
+    rerollHitOn: [1],
+    utilityFlags: [{ id: 'Orks_Morkanaut', reason: 're‑ролл 1 на попадание в рейндже, +1 утилити' }],
+  },
+
+  // Rukkatrukk Squigbuggies: +1 утилити
+  'a856-30b7-e56d-57db': {
+    utilityFlags: [{ id: 'Orks_Rukkatrukk_Squigbuggies', reason: '+1 утилити' }],
+  },
+
+  // Stompa: +2 утилити
+  '6c08-9131-14a3-a3b4': {
+    utilityFlags: [{ id: 'Orks_Stompa', reason: '+2 утилити' }],
+  },
+
+  // Warbuggies: +1 утилити
+  'e969-cbc8-60a6-affb': {
+    utilityFlags: [{ id: 'Orks_Warbuggies', reason: '+1 утилити' }],
+  },
+
+  // Wazbom Blastajet: +1 to wound в рейндже против MONSTER/VEHICLE
+  '3832-ad97-2b3b-8775': {
+    meleeWeaponKeywords: ['Anti-Bonus 1/1 vs [MONSTER, VEHICLE]'],
+    utilityFlags: [{ id: 'Orks_Wazbom_Blastajet', reason: '+1 к wound в рейндже против MONSTER/VEHICLE' }],
+  },
+
+  // Trukk: +1 утилити
+  '1291-7ba8-2c5a-4a92': {
+    utilityFlags: [{ id: 'Orks_Trukk', reason: '+1 утилити' }],
+  },
+
+};
 export function manualAbilityOf(unitId: string): ManualAbility | null {
   return MANUAL_ABILITIES[unitId] ?? null;
 }
@@ -1442,6 +1778,28 @@ const WEAPON_EFFECTS: {
     }
     return weapon;
   },
+  // Sustained Hits X: добавляет кейворд SUSTAINED HITS X ко всему оружию юнита.
+  sustainedHits: (weapon, ability) =>
+    ability.sustainedHits === undefined
+      ? weapon
+      : addKeywords(weapon, [`Sustained Hits ${ability.sustainedHits}`], true),
+  // +N к атакам, силе и WS в рукопашной (Stormboyz, Warbikers).
+  meleeWeaponStats: (weapon, ability) => {
+    if (ability.meleeWeaponStats === undefined || weapon.kind !== 'melee' || weapon.attacks === null)
+      return weapon;
+    const next: CombatWeapon = {
+      ...weapon,
+      attacks: { ...weapon.attacks, count: weapon.attacks.count + ability.meleeWeaponStats.attacks },
+      skill: weapon.skill === null ? null : Math.max(2, weapon.skill - ability.meleeWeaponStats.skill),
+      strength: weapon.strength === null ? null : weapon.strength + ability.meleeWeaponStats.strength,
+    };
+    return next;
+  },
+  // Ухудшение AP оружия атакующего (Meganobz: −1 AP при атаке по ним).
+  enemyApWorsening: (weapon, ability) => {
+    if (ability.enemyApWorsening === undefined) return weapon;
+    return { ...weapon, ap: weapon.ap - ability.enemyApWorsening };
+  },
 };
 
 /** Есть ли у способности хоть одно оружие-эффект: дешёвый выход без map. */
@@ -1542,6 +1900,17 @@ const models = auraApplied.models.map((model) => {
       // МОДЕЛЬ, а не отряд, потому что способность держится на живости
       // самого целителя: погибший Hospitaller ничего не возвращает.
       next.reviveLeader = true;
+    }
+    if (ability.woundPenalty !== undefined) {
+      // Painboss: атакующий с S > T цели получает −1 к броску ранения.
+      // Добавляем кейворд на модель защитника, правила проверят его.
+      if (!next.keywords.includes('WOUND_PENALTY')) {
+        next.keywords = [...next.keywords, 'WOUND_PENALTY'];
+      }
+    }
+    if (ability.rangedToHit !== undefined) {
+      // Towering: +1 к попаданию в дальнобойной фазе для всех оружий.
+      next.rangedToHit = (next.rangedToHit ?? 0) + ability.rangedToHit;
     }
     return next;
   });

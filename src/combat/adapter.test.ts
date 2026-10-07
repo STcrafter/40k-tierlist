@@ -47,6 +47,9 @@ const SAMPLES_WEAPON: Record<WeaponEffectField, unknown> = {
   meleeWeaponKeywords: ['Lethal Hits'],
   weaponKeywordsAll: ['Lethal Hits'],
   weaponKeywordsOn: [{ weapon: 'shiv', keywords: ['Devastating Wounds'] }],
+  sustainedHits: 1,
+  meleeWeaponStats: { attacks: 1, skill: 0, strength: 1 },
+  enemyApWorsening: 1,
 };
 
 const SAMPLES_ONCE: Record<OnceEffectField, unknown> = {

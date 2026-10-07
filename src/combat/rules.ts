@@ -64,6 +64,14 @@ export function standardRules(): CombatRules {
     ],
 
     hitTarget: [
+      // Towering: +1 к попаданию в дальнобойной фазе для всех оружий (ручной
+      // слой: src/manual/abilities.ts). Проверяется только в ranged-фазе.
+      (ctx, base) => {
+        if (ctx.phase !== 'ranged' || base === null) return base;
+        const hasTowering =
+          ctx.target.keywords.includes('TOWERING') || ctx.defender.keywords.includes('TOWERING');
+        return hasTowering ? base - 1 : base;
+      },
       // [TORRENT]: автопопадание.
       (ctx, base) => {
         const torrent = ctx.weapon.keywords.some((k) => k.name === 'torrent');
@@ -172,6 +180,16 @@ export function standardRules(): CombatRules {
           ctx.target.keywords.includes('MELEE_WOUND_PENALTY') ||
           ctx.defender.keywords.includes('MELEE_WOUND_PENALTY');
         return penalised ? 1 : 0;
+      },
+      // WOUND_PENALTY: штраф −1 к броску ранения, если сила атакующего > прочности
+      // цели (Painboss). Проверяется в любой фазе, по условию на силу.
+      (ctx) => {
+        if (ctx.phase !== 'melee' && ctx.phase !== 'ranged') return 0;
+        const penalised =
+          ctx.target.keywords.includes('WOUND_PENALTY') ||
+          ctx.defender.keywords.includes('WOUND_PENALTY');
+        if (!penalised || ctx.weapon.strength === null) return 0;
+        return ctx.weapon.strength > ctx.target.toughness ? 1 : 0;
       },
     ],
 

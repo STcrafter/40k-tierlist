@@ -145,6 +145,13 @@ it('поле способности не может пропасть из раз
     'meleeMortalPerWoundOnly',
     // Профили оружия отбираются до применения способностей (adaptUnit).
     'allProfilesOn',
+    // Новые поля ручного слоя для орков (Painboss, Towering, Sustained Hits и т.д.).
+    'woundPenalty',
+    'rangedToHit',
+    'meleeWeaponStats',
+    'sustainedHits',
+    'enemyApWorsening',
+    'keywordUtility',
   ]);
   const used = new Set<string>();
   for (const [, ability] of entries) {
