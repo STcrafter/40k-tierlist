@@ -100,6 +100,10 @@ export interface CombatModel {
   /** '3+' → 3; null — сейва нет. */
   save: number | null;
   invuln: number | null;
+  /** Кейворды модели. */
+  keywords: string[];
+  /** Оружие модели. */
+  weapons: CombatWeapon[];
   /**
    * Feel No Pain: порог, начиная с которого урон невелируется (5 → '5+').
    * null — способности нет. За каждый урон бросается один кубик, каждый

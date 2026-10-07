@@ -72,6 +72,8 @@ export const MANUAL_UTILITY_FLAG_IDS = [
   'Orks_Mozrog_Skragbad',
   'Orks_Nazdreg',
   'Orks_Wazdakka_Gutsmek',
+  'Super_Heavy_Walker_Bonus',
+  'Towering_Ranged_ToHit',
   'Orks_Bannernob',
   'Orks_Beastboss',
   'Orks_Beastboss_on_Squigosaur',
@@ -1367,23 +1369,6 @@ export const MANUAL_ABILITIES: Record<string, ManualAbility> = {
     ],
   },
 
-  /*
-   * Zodgrod Wortsnagga → Gretchin: Super Runts даёт присоединённым гретчинам
-   * +1 A, +1 WS и +1 S на Scavenged Shivs (Super Runts же делает их отряд
-   * riled up — это визуальный переключатель, числовой эффект не считается).
-   *
-   * Запись висит на ГРЕТЧИНЕ, а не на Zodgrod: правило двустороннее — отряд
-   * получает бонус только пока ведёт именно этот лидер. Рукопашное оружие у
-   * гретчина одно (Scavenged Shivs), поэтому «всё рукопашное» здесь точно
-   * равно «шивы», и таргетить по имени ствола не нужно.
-   */
-  'de8f-24f9-c543-92b7': {
-    withLeader: {
-      leaderIds: ['ce45-db08-3795-18a9'],
-      meleeWeaponStats: { attacks: 1, skill: 1, strength: 1 },
-    },
-  },
-
   // ── Орки (дополнение) ───────────────────────────────────────────────────────────────
   // ID орков из `public/BSData/wh40k-11e/Orks.json` и tierlist.json.
   // Утилити-бонус: +1 за боевые навыки, +2 за значительные способности.
@@ -1606,7 +1591,11 @@ export const MANUAL_ABILITIES: Record<string, ManualAbility> = {
   // Gorkanaut: ре‑ролл 1 на попадание в мили, +1 утилити
   '56d6-a7fc-fa08-4345': {
     rerollHitOn: [1],
-    utilityFlags: [{ id: 'Orks_Gorkanaut', reason: 're‑ролл 1 на попадание в мили, +1 утилити' }],
+    utilityFlags: [
+      { id: 'Orks_Gorkanaut', reason: 're‑ролл 1 на попадание в мили, +1 утилити' },
+      { id: 'Towering_Ranged_ToHit', reason: 'Towering: +1 к попаданию в рейндже' },
+    ],
+    keywordUtility: { keyword: 'TOWERING', utilityFlagId: 'Towering_Ranged_ToHit', points: 1 },
   },
 
   // Gunwagon: ре‑ролл 1 на попадание в рейндже
@@ -1629,7 +1618,11 @@ export const MANUAL_ABILITIES: Record<string, ManualAbility> = {
   // Morkanaut: ре‑ролл 1 на попадание в рейндже, +1 утилити
   '9ee5-2b39-de06-dda6': {
     rerollHitOn: [1],
-    utilityFlags: [{ id: 'Orks_Morkanaut', reason: 're‑ролл 1 на попадание в рейндже, +1 утилити' }],
+    utilityFlags: [
+      { id: 'Orks_Morkanaut', reason: 're‑ролл 1 на попадание в рейндже, +1 утилити' },
+      { id: 'Towering_Ranged_ToHit', reason: 'Towering: +1 к попаданию в рейндже' },
+    ],
+    keywordUtility: { keyword: 'TOWERING', utilityFlagId: 'Towering_Ranged_ToHit', points: 1 },
   },
 
   // Rukkatrukk Squigbuggies: +1 утилити
@@ -1639,7 +1632,11 @@ export const MANUAL_ABILITIES: Record<string, ManualAbility> = {
 
   // Stompa: +2 утилити
   '6c08-9131-14a3-a3b4': {
-    utilityFlags: [{ id: 'Orks_Stompa', reason: '+2 утилити' }],
+    utilityFlags: [
+      { id: 'Orks_Stompa', reason: '+2 утилити' },
+      { id: 'Super_Heavy_Walker_Bonus', reason: 'Super-Heavy Walker: +1 утилити' },
+      { id: 'Towering_Ranged_ToHit', reason: 'Towering: +1 к попаданию в рейндже' },
+    ],
   },
 
   // Warbuggies: +1 утилити
