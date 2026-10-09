@@ -24,6 +24,9 @@ import { UTILITY_CATEGORY, UTILITY_POINTS } from '../tier/utility.ts';
 import {
   MANUAL_ABILITIES,
   MANUAL_UTILITY_FLAG_IDS,
+  AURA_NON_WEAPON_FIELDS,
+  AURA_WEAPON_EFFECT_FIELDS,
+  ONCE_AURA_FIELDS,
   ONCE_EFFECT_FIELDS,
   WEAPON_EFFECT_FIELDS,
   type ManualAbility,
@@ -37,6 +40,13 @@ const entries: Array<[string, ManualAbility]> = Object.entries(MANUAL_ABILITIES)
  *
  * `defensiveKeywords` здесь НЕ участвуют: это кейворды МОДЕЛЕЙ, leaders.ts
  * добавляет их как есть, минуя разбор (см. отдельную проверку ниже).
+ *
+ * Список обязан быть ИСЧЕРПЫВАЮЩИМ по полям со списками кейвордов. Раньше он
+ * перечислял четыре поля и молча пропускал `weaponKeywordsOn`, поэтому строка
+ * '+6 Atts vs non-MONSTER/VEHICLE' у Big Mek Dakkarig разбиралась в несуществующее
+ * имя и ничего не давала, а проверка «каждый кейворд ручного слоя — из известных
+ * движку» рапортовала зелёной. Пропуск поля здесь стоит так же дорого, как
+ * забытый обработчик.
  */
 function keywordStrings(ability: ManualAbility): Array<[field: string, raw: string]> {
   const out: Array<[string, string]> = [];
@@ -45,14 +55,61 @@ function keywordStrings(ability: ManualAbility): Array<[field: string, raw: stri
   };
   push('aura.weaponKeywords', ability.aura?.weaponKeywords);
   push('aura.onceMeleeKeywords', ability.aura?.onceMeleeKeywords);
+  push('aura.unitWeaponKeywords', ability.aura?.unitWeaponKeywords);
   push('meleeWeaponKeywords', ability.meleeWeaponKeywords);
+  push('weaponKeywordsAll', ability.weaponKeywordsAll);
   push('onceRangedKeywords', ability.onceRangedKeywords);
+  push('withLeader.meleeWeaponKeywords', ability.withLeader?.meleeWeaponKeywords);
+  for (const rule of ability.weaponKeywordsOn ?? []) {
+    push(`weaponKeywordsOn(${rule.weapon})`, rule.keywords);
+  }
   return out;
 }
 
 describe('целостность ручного слоя', () => {
   it('слой не пуст — иначе проверки ниже ничего не проверяют', () => {
     expect(entries.length, 'записей в слое').toBeGreaterThan(20);
+  });
+
+  it('поле ауры не может пропасть из применения молча', () => {
+    // Регрессия на `aura.sustainedHits`: поле было объявлено с комментарием
+    // «Riled Up» и заполнено в четырёх записях (Big Mek и варианты), а
+    // `applyAuraToWeapon` собирал кейворды только из `weaponKeywords` и
+    // `unitWeaponKeywords`. Поле не читалось НИГДЕ, и Riled Up не давал в бою
+    // ничего — при полностью верном отображении способности.
+    //
+    // Проверка выше ловит только поля верхнего уровня `ManualAbility`, а `aura`
+    // проходит целиком, то есть насквозь просматривать его было некому. Теперь
+    // каждое поле ауры обязано быть либо в таблице применения к оружию, либо в
+    // таблице одноразовых, либо в списке «про модели» ниже.
+    const handled = new Set<string>([
+      ...AURA_WEAPON_EFFECT_FIELDS,
+      ...ONCE_AURA_FIELDS,
+      ...AURA_NON_WEAPON_FIELDS,
+    ]);
+    const used = new Set<string>();
+    for (const [, ability] of entries) {
+      for (const field of Object.keys(ability.aura ?? {})) used.add(field);
+    }
+    const orphanFields = [...used].filter((field) => !handled.has(field));
+    expect(
+      orphanFields,
+      `эти поля ауры встречаются в слое, но нигде не перечислены как применяемые: ${orphanFields.join(', ')}`
+    ).toEqual([]);
+    expect(used.size, 'проверка ниже ничего не проверяет').toBeGreaterThan(0);
+  });
+
+  it('все поля LeaderAura разобраны — включая те, что слоем ещё не используются', () => {
+    // Предыдущая проверка смотрит на реально заполненные поля, поэтому поле,
+    // объявленное в интерфейсе, но не встретившееся ни в одной записи, прошло бы
+    // незамеченным — и ровно так же потерялось бы, когда его начнут заполнять.
+    // Полноту разбора проверяет сам компилятор (см. `_AuraFieldsAccountedFor` в
+    // abilities.ts); здесь ловится вторая половина — поле, занесённое сразу в две
+    // таблицы, из-за чего проверка выше считала бы его обработанным по ошибке.
+    const weaponTable = new Set<string>([...AURA_WEAPON_EFFECT_FIELDS, ...ONCE_AURA_FIELDS]);
+    const doubled = AURA_NON_WEAPON_FIELDS.filter((field) => weaponTable.has(field));
+    expect(doubled, `поле ауры в двух таблицах сразу: ${doubled.join(', ')}`).toEqual([]);
+    expect(AURA_NON_WEAPON_FIELDS.length, 'список полей ауры пуст').toBeGreaterThan(0);
   });
 
   it('каждый ключ слоя — существующий id даташита', () => {

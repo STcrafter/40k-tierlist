@@ -173,12 +173,86 @@ export const ONCE_AURA_FIELDS = [
   'onceMeleeKeywords',
 ] as const satisfies ReadonlyArray<keyof LeaderAura>;
 
+/**
+ * Поля АУРЫ, меняющие ОРУЖИЕ, — исчерпывающий перечень для `AURA_WEAPON_EFFECTS`.
+ *
+ * Таблица нужна по той же причине, что и `WEAPON_EFFECTS`, и с тем же классом
+ * поломки: поле ауры можно объявить, заполнить в записях и забыть прочитать.
+ * Именно так потерялся `aura.sustainedHits`: он был объявлен с комментарием
+ * «Riled Up» и заполнен в четырёх записях (Big Mek и варианты), а
+ * `applyAuraToWeapon` собирал кейворды только из `weaponKeywords` и
+ * `unitWeaponKeywords`. Способность отображалась верно и при этом не давала в бою
+ * ничего.
+ *
+ * Отдельный перечень, а не проверка «прочитал ли кто поле»: у ауры половина полей
+ * вообще не про оружие (см. `AURA_NON_WEAPON_FIELDS` в тесте целостности), и
+ * перечислять их тут же было бы вперемешку с реально применяемыми.
+ *
+ * Что НЕ попадает в список:
+ *   - `onceMelee*` — одноразовые, в бой не идут, см. `ONCE_AURA_FIELDS`;
+ *   - поля моделей (`fnp`, `saveAtLeast`, `invulnAtLeast`, `stealth`,
+ *     `meleeApWorsening`) и метка `wardAura` — их читает `applyAuraToModels`.
+ */
+export const AURA_WEAPON_EFFECT_FIELDS = [
+  'extraAttacks',
+  'toHit',
+  'weaponKeywords',
+  'unitWeaponKeywords',
+  'sustainedHits',
+] as const satisfies ReadonlyArray<keyof LeaderAura>;
+
 /** Имя поля способности, меняющего оружие. */
 export type WeaponEffectField = (typeof WEAPON_EFFECT_FIELDS)[number];
 /** Имя поля способности, действующего один раз за бой. */
 export type OnceEffectField = (typeof ONCE_EFFECT_FIELDS)[number];
 /** Имя одноразового поля ауры. */
 export type OnceAuraField = (typeof ONCE_AURA_FIELDS)[number];
+/** Имя поля ауры, меняющего оружие. */
+export type AuraWeaponEffectField = (typeof AURA_WEAPON_EFFECT_FIELDS)[number];
+
+/**
+ * Поля ауры, НЕ меняющие оружие: защита моделей и utility-метки.
+ *
+ * Существуют, чтобы три таблицы вместе давали полный разбор `LeaderAura` и
+ * новое поле ауры нельзя было добавить «просто так».
+ */
+export const AURA_NON_WEAPON_FIELDS = [
+  'stealth',
+  'fnp',
+  'saveAtLeast',
+  'invulnAtLeast',
+  'meleeApWorsening',
+  'wardAura',
+] as const satisfies ReadonlyArray<keyof LeaderAura>;
+
+/**
+ * Компиляционная проверка «список исчерпывающий»: остаток обязан быть `never`.
+ */
+type AssertNever<T extends never> = T;
+
+/**
+ * ПРОВЕРКА КОМПИЛЯЦИЕМ: `LeaderAura` разобран целиком.
+ *
+ * Если в интерфейс добавят поле, не занесённое ни в `AURA_WEAPON_EFFECT_FIELDS`,
+ * ни в `ONCE_AURA_FIELDS`, ни в `AURA_NON_WEAPON_FIELDS`, этот тип перестанет
+ * сводиться к `never` — и сборка упадёт.
+ *
+ * Именно этим ловится `aura.sustainedHits`: пока разбор был ручным, поле можно
+ * было объявить, заполнить в записях и забыть прочитать, и оба уровня проверок
+ * оставались зелёными — а способность не давала в бою ничего.
+ *
+ * Тип экспортируется только потому, что включён `noUnusedLocals`: иначе объявление
+ * «никем не используемое» само станет ошибкой сборки. Смысла в нём никакого —
+ * значение у него нет, важен лишь факт, что оно компилируется.
+ */
+export type _AuraFieldsAccountedFor = AssertNever<
+  Exclude<
+    keyof LeaderAura,
+    | (typeof AURA_WEAPON_EFFECT_FIELDS)[number]
+    | (typeof ONCE_AURA_FIELDS)[number]
+    | (typeof AURA_NON_WEAPON_FIELDS)[number]
+  >
+>;
 
 
 /**
@@ -1397,9 +1471,17 @@ export const MANUAL_ABILITIES: Record<string, ManualAbility> = {
   },
 
   // Big Mek Dakkarig: при Riled Up: sustains 1; Blitzkannon +6 атак vs non-MONSTER/VEHICLE
+  //
+  // «+6 атак» — кейворд с условием, а не строка в разборе: условие «у цели НЕТ
+  // MONSTER/VEHICLE» известно только в момент броска, поэтому его читает rules.ts
+  // по кейвордам защитника. Раньше здесь была строка '+6 Atts vs
+  // non-MONSTER/VEHICLE', которую parseKeyword склеил в несуществующее имя — и
+  // бонус молча не давал ничего.
   '78a7-cf35-aa8d-c420': {
     aura: { sustainedHits: 1 },
-    weaponKeywordsOn: [{ weapon: 'blitzkannon', keywords: ['Sustained Hits 1', '+6 Atts vs non-MONSTER/VEHICLE'] }],
+    weaponKeywordsOn: [
+      { weapon: 'blitzkannon', keywords: ['Sustained Hits 1', 'Conditional Attacks 6: non-MONSTER/VEHICLE'] },
+    ],
     utilityFlags: [{ id: 'Orks_Big_Mek_Dakkarig', reason: 'Sustained Hits 1 при Riled Up; Blitzkannon +6 атак vs не MONSTER/VEHICLE' }],
   },
 
@@ -2018,6 +2100,53 @@ function pickBest(current: number | null, atLeast: number | undefined, lowerIsBe
 }
 
 /**
+ * ТАБЛИЦА применения оружие-полей АУРЫ — исчерпывающая по `AURA_WEAPON_EFFECT_FIELDS`.
+ *
+ * Ровно та же схема, что у `WEAPON_EFFECTS`, и по той же причине: забытое поле
+ * должно быть ошибкой компиляции, а не тихим отсутствием эффекта в отчёте.
+ *
+ * Эффект, который к оружию не относится, возвращает оружие по ССЫЛКЕ, без
+ * копии: аура накладывается на оружие каждой модели каждого отряда, и лишняя
+ * аллокация на каждое оружие тут заметна.
+ */
+const AURA_WEAPON_EFFECTS: {
+  [K in AuraWeaponEffectField]: (
+    weapon: CombatWeapon,
+    aura: LeaderAura,
+    forAttachedUnit: boolean
+  ) => CombatWeapon;
+} = {
+  // +N атак всему оружию (Intranzia Fraye, Palatine).
+  extraAttacks: (weapon, aura) =>
+    aura.extraAttacks === undefined || weapon.attacks === null
+      ? weapon
+      : { ...weapon, attacks: { ...weapon.attacks, count: weapon.attacks.count + aura.extraAttacks } },
+  // +N к попаданию (Canoness, Junith). Порог зажимается единицей: лучше 2+ в
+  // движке не выразить, и «+3» не должен превращаться в «+1 до автоматического
+  // попадания».
+  toHit: (weapon, aura) =>
+    aura.toHit === undefined || weapon.skill === null
+      ? weapon
+      : { ...weapon, skill: Math.max(2, weapon.skill - aura.toHit) },
+  // Кейворды оружию самого лидера (Morvenn Vahl — LANCE).
+  weaponKeywords: (weapon, aura) => addKeywords(weapon, aura.weaponKeywords, true),
+  // Кейворды оружию ПРИСОЕДИНЁННОГО юнита: идут вместе с ним в бой, тогда как
+  // `weaponKeywords` остаётся на оружии лидера. Отсюда и флаг — это не
+  // украшение, а разница между «себе» и «отряду».
+  unitWeaponKeywords: (weapon, aura, forAttachedUnit) =>
+    addKeywords(weapon, aura.unitWeaponKeywords, forAttachedUnit),
+  // Sustained Hits X (Riled Up). Отдельное поле, а не строка в
+  // `weaponKeywords`: его задаёт правило, и держать его в общем списке значило бы
+  // забивать кейвордодержателем единицы там, где он сам — просто число.
+  sustainedHits: (weapon, aura) =>
+    addKeywords(
+      weapon,
+      aura.sustainedHits === undefined ? undefined : [`Sustained Hits ${aura.sustainedHits}`],
+      true
+    ),
+};
+
+/**
  * Аура на одном оружии.
  *
  * Одноразовые эффекты (onceMelee*) здесь НЕ применяются намеренно: они
@@ -2028,21 +2157,10 @@ function applyAuraToWeapon(
   aura: LeaderAura,
   forAttachedUnit = false
 ): CombatWeapon {
-  const next: CombatWeapon = { ...weapon };
-  if (aura.extraAttacks !== undefined && weapon.attacks !== null) {
-    next.attacks = { ...weapon.attacks, count: weapon.attacks.count + aura.extraAttacks };
+  let next = weapon;
+  for (const field of AURA_WEAPON_EFFECT_FIELDS) {
+    next = AURA_WEAPON_EFFECTS[field](next, aura, forAttachedUnit);
   }
-  if (aura.toHit !== undefined && weapon.skill !== null) {
-    next.skill = Math.max(2, weapon.skill - aura.toHit);
-  }
-  const own = parseKeywords(aura.weaponKeywords ?? []);
-  // Кейворды отряда — только присоединённому юниту: они идут вместе с ним в бой,
-  // тогда как `weaponKeywords` (LANCE) остаётся на оружии самого лидера.
-  const unit = forAttachedUnit ? parseKeywords(aura.unitWeaponKeywords ?? []) : [];
-  const extra = [...own, ...unit].filter(
-    (keyword) => !weapon.keywords.some((existing) => existing.name === keyword.name)
-  );
-  if (extra.length > 0) next.keywords = [...weapon.keywords, ...extra];
   return next;
 }
 

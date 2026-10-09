@@ -61,6 +61,34 @@ export function standardRules(): CombatRules {
         if (!cleave?.value) return 0;
         return Math.floor(ctx.defenderModelCount / 5) * cleave.value.count;
       },
+      /*
+       * [CONDITIONAL ATTACKS X: TARGET-KEYWORDS]: +X атак, если цель подходит
+       * под условие (Blitzkannon у Big Mek Dakkarig: «+6 Attacks when you
+       * target a unit that does not have MONSTER or VEHICLE»).
+       *
+       * Условие проверяется по кейвордам защитника, а отрицание «non-…» — по
+       * ОТСУТСТВИЮ нужных кейвордов; этим занимается `keywordApplies`.
+       *
+       * Именно хук, а не правка `weapon.attacks`: цель известна только в момент
+       * броска. Правка профиля раздала бы +6 атак по любой цели, а способность
+       * при этом отображалась бы верно — то есть тир уехал бы молча.
+       *
+       * Перебираются ВСЕ такие кейворды, а не первый подходящий: на стволе их
+       * может быть несколько с разными условиями, и они складываются. Ровно
+       * поэтому здесь не `keywordOf` — тот вернул бы только первое совпадение,
+       * и второе условие пропадало бы (та же ошибка, что с Anti-кейвордами в
+       * `criticalWoundTarget`).
+       */
+      (ctx) => {
+        const targetKeywords = targetKeywordsOf(ctx);
+        let bonus = 0;
+        for (const keyword of ctx.weapon.keywords) {
+          if (keyword.name !== 'conditional-attacks') continue;
+          if (!keywordApplies(keyword, targetKeywords)) continue;
+          bonus += keyword.value?.count ?? 0;
+        }
+        return bonus;
+      },
     ],
 
     hitTarget: [

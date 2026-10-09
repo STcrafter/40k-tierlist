@@ -33,6 +33,16 @@ const CANONICAL: Array<[RegExp, string]> = [
   [/^heavy/, 'heavy'],
   [/^lance/, 'lance'],
   [/^extra attacks/, 'extra-attacks'],
+  // Условные бонусы атак: 'Conditional Attacks 6: non-MONSTER/VEHICLE'
+  // (Blitzkannon у Big Mek Dakkarig: «+6 Attacks when you target a unit that
+  // does not have MONSTER or VEHICLE»).
+  //
+  // Отдельное имя, а не продолжение 'extra-attacks': то кейворд в 40k означает
+  // другую вещь — «ещё одна атака этим рукопашным оружием», и `simulate.ts`
+  // по нему делит рукопашное оружие на основное и дополнительное
+  // (`distinctMeleeWeapons`). Переиспользовать его значило бы либо сломать
+  // разбиение, либо различать оружие по имени правила.
+  [/^conditional attacks/, 'conditional-attacks'],
   [/^torrent/, 'torrent'],
   [/^anti[- ]/, 'anti'],
   [/^ignores cover/, 'ignores-cover'],
@@ -160,17 +170,26 @@ export function parseKeyword(raw: string): ParsedKeyword | null {
 
 /**
  * Ключ дедупликации: два кейворда считаются одним и тем же, если совпадают
- * каноническое имя И цель.
+ * каноническое имя, цель И условие.
  *
  * Одного имени мало для [ANTI-X Y+]: у одного ствола бывает сразу
  * «Anti-MONSTER 4+» и «Anti-VEHICLE 3+», и это РАЗНЫЕ правила — второе
  * срабатывает против техники. Схлопывание по имени теряло Anti-VEHICLE
  * целиком, оставляя только Anti-MONSTER.
+ *
+ * Условие тоже часть ключа: 'Conditional Attacks 2: MONSTER' и
+ * 'Conditional Attacks 2: non-FLYER' — два разных правила на одном стволе, и
+ * без него осталось бы только первое.
  */
 function dedupeKey(keyword: ParsedKeyword): string {
-  return keyword.target === null
-    ? keyword.name
-    : `${keyword.name}:${[...keyword.target].sort().join('/')}`;
+  const parts = [
+    keyword.target === null ? '' : [...keyword.target].sort().join('/'),
+    keyword.condition === null
+      ? ''
+      : `${keyword.condition.negate ? 'non-' : ''}${[...keyword.condition.keywords].sort().join('/')}`,
+  ];
+  const suffix = parts.filter((part) => part !== '').join('|');
+  return suffix === '' ? keyword.name : `${keyword.name}|${suffix}`;
 }
 
 /** Массовый разбор списка кейвордов. */

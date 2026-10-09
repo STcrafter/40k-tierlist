@@ -1114,6 +1114,47 @@ describe('ручной слой орков', () => {
     expect(shiv?.skill).toBe(5);
     expect(shiv?.strength).toBe(2);
   });
+
+  it('Big Mek Dakkarig: Riled Up даёт Sustained Hits 1 всему оружию', () => {
+    // Регрессия: `LeaderAura.sustainedHits` было объявлено и заполнено в
+    // четырёх записях, но `applyAuraToWeapon` собирал кейворды только из
+    // `weaponKeywords`/`unitWeaponKeywords`. Поле не читалось НИГДЕ, и способность
+    // выглядела описанной, а в бой не давала ничего.
+    const all = of('Big Mek Dakkarig').models.flatMap((model) => model.weapons);
+    expect(all.length, 'нужно оружие в отряде').toBeGreaterThan(0);
+    const withoutSustained = all.filter(
+      (weapon) => !weapon.keywords.some((keyword) => keyword.name === 'sustained')
+    );
+    expect(
+      withoutSustained.map((weapon) => weapon.name),
+      'это оружие должно было получить SUSTAINED HITS'
+    ).toEqual([]);
+    expect(all.map((weapon) => weapon.keywords.find((k) => k.name === 'sustained')?.value?.count)).toContain(1);
+  });
+
+  it('Big Mek Dakkarig: только Blitzkannon получает +6 атак по не-монстрам', () => {
+    // Регрессия: бонус был записан строкой '+6 Atts vs non-MONSTER/VEHICLE',
+    // которую parseKeyword склеил в несуществующее имя '+6-atts-vs-non-monster/vehicle'.
+    // Ни одно правило это имя не читало — способность отображалась, но не считалась.
+    const ranged = of('Big Mek Dakkarig')
+      .models.flatMap((model) => model.weapons)
+      .filter((weapon) => weapon.kind === 'ranged');
+    const conditional = ranged.map((weapon) => [
+      weapon.name,
+      weapon.keywords.find((k) => k.name === 'conditional-attacks') ?? null,
+    ] as const);
+    const blitz = conditional.filter(([name]) => name.toLowerCase().includes('blitzkannon'));
+    expect(blitz.length, 'нужен Blitzkannon в отряде').toBe(1);
+    const keyword = blitz[0][1];
+    expect(keyword?.value?.count, 'величина бонуса').toBe(6);
+    // Условие хранится как «нет этих кейвордов у цели», а не списком целей:
+    // проверка отрицания живёт в keywordApplies, а не в target.
+    expect(keyword?.condition).toEqual({ negate: true, keywords: ['MONSTER', 'VEHICLE'] });
+    // Остальное оружие условие не получает: правило говорит про конкретный ствол.
+    expect(conditional.filter(([, kw]) => kw !== null).map(([name]) => name)).toEqual(
+      blitz.map(([name]) => name)
+    );
+  });
 });
 
 describe('каждое поле ручного слоя применяется', () => {

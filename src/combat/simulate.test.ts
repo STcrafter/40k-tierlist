@@ -473,6 +473,41 @@ describe('кейворды 11-й редакции', () => {
     expect(vsVehicle.weapons[0].mortals).toBe(0);
   });
 
+  it('[CONDITIONAL ATTACKS X: TARGET] даёт атаки только подходящим целям', () => {
+    // Big Mek Dakkarig: Blitzkannon «+6 Attacks when you target a unit that does
+    // not have MONSTER or VEHICLE». Проверяются обе стороны условия: у пехоты
+    // бонус есть, у техники — нет. Раньше он не срабатывал нигде (строка
+    // '+6 Atts vs non-MONSTER/VEHICLE' разбиралась в несуществующее имя).
+    const gun = weapon({
+      attacks: { count: 2, sides: 1, plus: 0 },
+      skill: 2,
+      strength: 2,
+      keywords: parseKeywords(['Conditional Attacks 6: non-MONSTER/VEHICLE']),
+    });
+    const infantry = unit([model({ toughness: 11, wounds: 20, save: 6, keywords: ['INFANTRY'] })], ['INFANTRY']);
+    expect(simulateTrial(gunner(gun), infantry, { rng: die(3) }).weapons[0].attacks).toBe(8);
+
+    const vehicle = unit([model({ toughness: 11, wounds: 20, save: 6, keywords: ['VEHICLE'] })], ['VEHICLE']);
+    expect(simulateTrial(gunner(gun), vehicle, { rng: die(3) }).weapons[0].attacks).toBe(2);
+  });
+
+  it('два [CONDITIONAL ATTACKS] с разными условиями не схлопываются', () => {
+    // Дедупликация кейвордов шла по имени, и два бонуса на одном стволе с
+    // разными условиями остался бы только первый.
+    const gun = weapon({
+      attacks: { count: 1, sides: 1, plus: 0 },
+      skill: 2,
+      strength: 2,
+      keywords: parseKeywords([
+        'Conditional Attacks 3: VEHICLE',
+        'Conditional Attacks 4: non-FLYER',
+      ]),
+    });
+    const vehicle = unit([model({ toughness: 11, wounds: 20, save: 6, keywords: ['VEHICLE'] })], ['VEHICLE']);
+    // Цель — техника и не FLYER: срабатывают оба условия.
+    expect(simulateTrial(gunner(gun), vehicle, { rng: die(3) }).weapons[0].attacks).toBe(8);
+  });
+
   it('[IGNORES COVER] снимает укрытие, а обычный болтер — нет', () => {
     // Цель в укрытии: без [IGNORES COVER] болтер получает +1 к сейву.
     const cover = true;
